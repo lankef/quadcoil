@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quadcoil"
+version = "0.0.1"
+authors = [
+  { name="lanke_fu", email="ffu@pppl.gov" },
+]
+description = "QUADCOIL, a global stellarator coil optimizer and coil complexity proxy"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = ["numpy", "jax", "optax", "lineax"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+license = { text = "MIT" }
+
+[project.urls]
+Homepage = "https://github.com/lankef/quadcoil"
+Issues = "https://github.com/lankef/quadcoil/issues"
