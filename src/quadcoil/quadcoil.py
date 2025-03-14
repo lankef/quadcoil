@@ -304,7 +304,7 @@ def quadcoil(
     out_dict = {}
     for metric_name_i in metric_name:
         f_metric_with_unit = get_objective(metric_name_i)
-        f_metric = lambda x, y: f_metric_with_unit(y_to_qp(y_dict_current), x * cp_mn_unit)
+        f_metric = lambda x, y: f_metric_with_unit(y_to_qp(y), x * cp_mn_unit)
         nabla_x_f = jacrev(f_metric, argnums=0)(x_k, y_dict_current)
         nabla_y_f = jacrev(f_metric, argnums=1)(x_k, y_dict_current)
         vihp = jnp.linalg.solve(hess_l_k, nabla_x_f)
