@@ -3,6 +3,7 @@ import jax.numpy as jnp
 from jax import jit, lax, vmap
 from jax.lax import scan
 from functools import partial
+from .surfacerzfourier_jax import dof_to_rz_op, SurfaceRZFourierJAX
 import lineax as lx
 
 @partial(jit, static_argnames=['nfp', 'stellsym', 'mpol', 'ntor', 'lam_tikhnov', 'lam_gaussian',])
@@ -64,15 +65,15 @@ gen_rot_matrix = lambda theta: jnp.array([
 
 
 # default values
-tol_expand_default = 0.9
-lam_tikhnov_default = 0.2
+# tol_expand_default = 0.9
+# lam_tikhnov_default = 0.2
 
 @partial(jit, static_argnames=[
     'nfp', 'stellsym', 
     'mpol', 'ntor', 
 ])
 def gen_winding_surface_offset(
-        gamma_plasma, d_expand, 
+        plasma_gamma, d_expand, 
         nfp, stellsym,
         unitnormal=None,
         mpol=10, ntor=10,
@@ -88,31 +89,31 @@ def gen_winding_surface_offset(
     # Approximately calculating the normal vector. Alternatively, the normal
     # can be provided, but this will make the Jacobian matrix larger and lead to longer compile time.
     if unitnormal is None:
-        xyz_rotated = gamma_plasma[0, :, :] @ rotation_matrix.T
-        gamma_plasma_phi_rolled = jnp.append(gamma_plasma[1:, :, :], xyz_rotated[None, :, :], axis=0)
-        delta_phi = gamma_plasma_phi_rolled - gamma_plasma
-        delta_theta = jnp.roll(gamma_plasma, 1, axis=1) - gamma_plasma
+        xyz_rotated = plasma_gamma[0, :, :] @ rotation_matrix.T
+        plasma_gamma_phi_rolled = jnp.append(plasma_gamma[1:, :, :], xyz_rotated[None, :, :], axis=0)
+        delta_phi = plasma_gamma_phi_rolled - plasma_gamma
+        delta_theta = jnp.roll(plasma_gamma, 1, axis=1) - plasma_gamma
         normal_approx = jnp.cross(delta_theta, delta_phi)
         unitnormal = normal_approx / jnp.linalg.norm(normal_approx, axis=-1)[:,:,None]
     
     # Copy the next field period 
     if stellsym:
         # If stellsym, then only use half of the field period for surface fitting
-        len_phi = gamma_plasma.shape[0]//2
-        gamma_plasma_expand = (
-            gamma_plasma[:len_phi] 
+        len_phi = plasma_gamma.shape[0]//2
+        plasma_gamma_expand = (
+            plasma_gamma[:len_phi] 
             + unitnormal[:len_phi] * d_expand)
     else:
-        gamma_plasma_expand = gamma_plasma + unitnormal * d_expand
+        plasma_gamma_expand = plasma_gamma + unitnormal * d_expand
 
     # The original uniform offset. Has self-intersections.
     # Tested to be differentiable.
-    r_expand = jnp.sqrt(gamma_plasma_expand[:, :, 1]**2 + gamma_plasma_expand[:, :, 0]**2)
-    phi_expand = jnp.arctan2(gamma_plasma_expand[:, :, 1], gamma_plasma_expand[:, :, 0]) / jnp.pi / 2 
-    theta_expand = jnp.linspace(0, 1, gamma_plasma.shape[1], endpoint=False)[None, :] + jnp.ones_like(phi_expand)
-    z_expand = gamma_plasma_expand[:, :, 2]
+    r_expand = jnp.sqrt(plasma_gamma_expand[:, :, 1]**2 + plasma_gamma_expand[:, :, 0]**2)
+    phi_expand = jnp.arctan2(plasma_gamma_expand[:, :, 1], plasma_gamma_expand[:, :, 0]) / jnp.pi / 2 
+    theta_expand = jnp.linspace(0, 1, plasma_gamma.shape[1], endpoint=False)[None, :] + jnp.ones_like(phi_expand)
+    z_expand = plasma_gamma_expand[:, :, 2]
 
-    # gamma_and_scalar_field_to_vtk(weight_remove_invalid[:, :, None] * gamma_plasma_expand, theta_atan, 'ws_new_to_fit.vts')
+    # gamma_and_scalar_field_to_vtk(weight_remove_invalid[:, :, None] * plasma_gamma_expand, theta_atan, 'ws_new_to_fit.vts')
     dofs_expand = fit_surfacerzfourier(
         mpol=mpol,
         ntor=ntor,
@@ -203,29 +204,31 @@ def polygon_self_intersection(r_pol, z_pol):
     'mpol',
     'ntor',
     'pol_interp',
+    'lam_tikhnov'
 ])
 def gen_winding_surface_atan(
-        gamma_plasma, d_expand, 
+        plasma_gamma, d_expand, 
         nfp, stellsym,
         unitnormal=None,
         mpol=5, ntor=5,
         pol_interp=2,
-        lam_tikhnov=0.,
+        tor_interp=2,
+        lam_tikhnov=0.0,
     ):
     ''' Create uniform offset '''
     uniform_offset_dofs = gen_winding_surface_offset(
-        gamma_plasma, d_expand, 
+        plasma_gamma, d_expand, 
         nfp, stellsym,
         unitnormal=unitnormal,
         mpol=mpol, ntor=ntor,
     )
     ''' Interpolate to generate smooth poloidal cross sections '''
-    phi_expand = jnp.linspace(0, 1/nfp, gamma_plasma.shape[0])
+    phi_expand = jnp.linspace(0, 1/nfp, plasma_gamma.shape[0] * tor_interp)
     uniform_offset_surface_jax = SurfaceRZFourierJAX(
         nfp=nfp, stellsym=stellsym, 
         mpol=mpol, ntor=ntor, 
         quadpoints_phi=phi_expand, 
-        quadpoints_theta=jnp.linspace(0, 1, gamma_plasma.shape[1] * pol_interp, endpoint=False), 
+        quadpoints_theta=jnp.linspace(0, 1, plasma_gamma.shape[1] * pol_interp, endpoint=False), 
         dofs=uniform_offset_dofs
     )
     gamma_uniform = uniform_offset_surface_jax.gamma()
@@ -233,18 +236,18 @@ def gen_winding_surface_atan(
     # Fit only half a field period when stellsym.
     if stellsym:
         # If stellsym, then only use half of the field period for surface fitting
-        len_phi = gamma_plasma.shape[0]//2
+        len_phi = len(phi_expand)//2
         gamma_uniform = gamma_uniform[:len_phi]
         phi_expand = phi_expand[:len_phi]
         # finding center to generate poloidal parameterization
-        r_plasma = jnp.sqrt(gamma_plasma[:len_phi, :, 1]**2 + gamma_plasma[:len_phi, :, 0]**2)
-        z_plasma = gamma_plasma[:len_phi, :, 2]
+        r_plasma = jnp.sqrt(plasma_gamma[:len_phi, :, 1]**2 + plasma_gamma[:len_phi, :, 0]**2)
+        z_plasma = plasma_gamma[:len_phi, :, 2]
     else:
         gamma_uniform = gamma_uniform
         # Copy the gamma from the next and last fp.
         # finding center to generate poloidal parameterization
-        r_plasma = jnp.sqrt(gamma_plasma[:, :, 1]**2 + gamma_plasma[:, :, 0]**2)
-        z_plasma = gamma_plasma[:, :, 2]
+        r_plasma = jnp.sqrt(plasma_gamma[:, :, 1]**2 + plasma_gamma[:, :, 0]**2)
+        z_plasma = plasma_gamma[:, :, 2]
     r_center = jnp.average(r_plasma, axis=-1)
     z_center = jnp.average(z_plasma, axis=-1)
     # The original uniform offset. Has self-intersections.

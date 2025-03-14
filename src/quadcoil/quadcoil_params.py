@@ -24,10 +24,12 @@ class QuadcoilParams:
         Bnormal_plasma=None,
         mpol=4, 
         ntor=4, 
-        quadpoints_phi = None,
-        quadpoints_theta = None, 
+        quadpoints_phi=None,
+        quadpoints_theta=None, 
         ):
+        
         ''' Writing peroperties '''
+        
         self.plasma_surface = plasma_surface
         self.winding_surface = winding_surface
         self.net_poloidal_current_amperes = net_poloidal_current_amperes
@@ -37,13 +39,7 @@ class QuadcoilParams:
         self.stellsym = winding_surface.stellsym
         self.mpol = mpol
         self.ntor = ntor
-        ndof = 2 * mpol * ntor + mpol + ntor
-        if self.stellsym:
-            self.ndof = ndof
-            self.ndofs_half = ndof
-        else:
-            self.ndof = 2 * ndof
-            self.ndofs_half = ndof//2
+        self.ndofs, self.ndofs_half = cp_ndofs(self.stellsym, self.mpol, self.ntor)
 
         ''' Generating evaluation surface '''
         if quadpoints_phi is None:
@@ -287,7 +283,7 @@ class QuadcoilParams:
             'stellsym': self.stellsym,
             'mpol': self.mpol,
             'ntor': self.ntor,
-            'ndof': self.ndof,
+            'ndofs': self.ndofs,
             'ndofs_half': self.ndofs_half,
         }
         return children, aux_data
@@ -305,3 +301,12 @@ class QuadcoilParams:
             quadpoints_phi=children[6],
             quadpoints_theta=children[7],
         )
+def cp_ndofs(stellsym, mpol, ntor):
+    ndofs = 2 * mpol * ntor + mpol + ntor
+    if stellsym:
+        ndofs = ndofs
+        ndofs_half = ndofs
+    else:
+        ndofs = 2 * ndofs
+        ndofs_half = ndofs//2
+    return(ndofs, ndofs_half)

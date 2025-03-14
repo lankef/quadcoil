@@ -42,9 +42,7 @@ def load_data():
     return(winding_surface, plasma_surface, cp, cpst, qp)
 
 
-def compare(a, b):
-    # print('Normalized error threhold: 1e-5')
-    # print('Max error:', jnp.max(jnp.abs(a-b)), '; max |data|:', jnp.max(jnp.abs(a)))
+def compare(a, b, err=1e-5):
     print('Absolute error:  ', jnp.max(jnp.abs(a-b)))
     print('Normalized error:', jnp.max(jnp.abs(a-b))/jnp.max(jnp.abs(a)))
-    return(jnp.max(jnp.abs(a-b)) < jnp.max(jnp.abs(a))*1e-5)
+    return(jnp.max(jnp.abs(a-b)) < jnp.max(jnp.abs(a))*err)

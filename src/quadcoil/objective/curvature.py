@@ -1,5 +1,7 @@
 from quadcoil import norm_helper, project_arr_cylindrical
+from jax import jit
 
+@jit
 def K_dot_grad_K(qp, cp_mn):
     normal = qp.eval_surface.normal()
     gammadash1 = qp.eval_surface.gammadash1()
@@ -43,6 +45,11 @@ def K_dot_grad_K(qp, cp_mn):
     K_dot_grad_K = (term_a-term_b) * inv_normN_prime_2d[:, :, None]
     return(K_dot_grad_K)
 
+@jit
 def K_dot_grad_K_cyl(qp, cp_mn):
     KK_ans = K_dot_grad_K(qp, cp_mn)
     return project_arr_cylindrical(qp.eval_surface.gamma(), KK_ans)
+
+@jit
+def f_max_K_dot_grad_K_cyl(qp, cp_mn):
+    return jnp.max(jnp.abs(K_dot_grad_K_cyl(qp, cp_mn)))

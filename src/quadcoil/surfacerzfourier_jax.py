@@ -33,6 +33,19 @@ class SurfaceRZFourierJAX:
             dofs=simsopt_surf.get_dofs(),
         )
 
+    def to_simsopt(self):
+        from simsopt.geo import SurfaceRZFourier
+        surf = SurfaceRZFourier(
+            nfp=self.nfp,
+            stellsym=self.stellsym,
+            mpol=self.mpol,
+            ntor=self.ntor,
+            quadpoints_phi=self.quadpoints_phi,
+            quadpoints_theta=self.quadpoints_theta,
+        )
+        surf.set_dofs(self.dofs)
+        return surf
+
     def get_dofs(self):
         return(self.dofs.copy())
 

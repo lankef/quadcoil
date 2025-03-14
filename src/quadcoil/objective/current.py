@@ -82,11 +82,11 @@ def K_theta(qp, cp_mn):
         _, # partial_phi_phi,
         _, # partial_phi_theta,
         _, # partial_theta_theta,
-    ) = qp.diff_helper(winding_surface_mode=winding_surface_mode)
+    ) = qp.diff_helper()
     K_theta_shaped = (trig_diff_m_i_n_i@partial_phi)
     K_theta = K_theta_shaped
     A_K_theta = K_theta
-    b_K_theta = net_poloidal_current*jnp.ones((K_theta.shape[0], K_theta.shape[1]))
+    b_K_theta = qp.net_toroidal_current_amperes*jnp.ones((K_theta.shape[0], K_theta.shape[1]))
     return(A_K_theta @ cp_mn + b_K_theta)
 
 
