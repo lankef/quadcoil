@@ -20,11 +20,11 @@ import jax.numpy as jnp
     # 'quadpoints_phi',
     # 'quadpoints_theta',
     # 'cp_mn_unit',
-    # Plasma options
+    # - Plasma options
     # 'plasma_quadpoints_phi',
     # 'plasma_quadpoints_theta',
     # 'Bnormal_plasma',
-    # WS options
+    # - WS options
     # 'plasma_coil_distance',
     'winding_surface_generator',
     'winding_surface_generator_args',
@@ -33,15 +33,15 @@ import jax.numpy as jnp
     'winding_ntor',
     # 'winding_quadpoints_phi',
     # 'winding_quadpoints_theta',
-    # Objectives
+    # - Objectives
     'objective_name',
     # 'objective_weight',
-    # Constraints 
+    # - Constraints 
     'constraint_name',
     'constraint_type',
     # 'constraint_unit',
     # 'constraint_value',
-    # Solver options
+    # - Solver options
     'metric_name',
     'solver_args',
 ])
@@ -58,7 +58,7 @@ def quadcoil(
     
     # -- Defaults --
     
-    # Quadcoil parameters
+    # - Quadcoil parameters
     # Quadpoints to evaluate objectives at
     quadpoints_phi=None,
     quadpoints_theta=None,
@@ -66,36 +66,36 @@ def quadcoil(
     # By default will be generated from net total current.
     cp_mn_unit=None ,
     
-    # Plasma parameters
+    # - Plasma parameters
     plasma_quadpoints_phi=None,
     plasma_quadpoints_theta=None,
     Bnormal_plasma=None,
 
-    # Winding parameters (offset)
+    # - Winding parameters (offset)
     plasma_coil_distance=None,
     winding_surface_generator=gen_winding_surface_atan,
-    winding_surface_generator_args={'pol_interp': 1, 'lam_tikhnov': 0.05},
+    winding_surface_generator_args={'pol_interp': 1, 'lam_tikhonov': 0.05},
 
-    # Winding parameters (Providing surface)
+    # - Winding parameters (Providing surface)
     winding_dofs=None,
     winding_mpol=5,
     winding_ntor=5,
     winding_quadpoints_phi=None,
     winding_quadpoints_theta=None,
 
-    # Problem setup
+    # - Problem setup
     # Quadcoil objective terms and weights
     objective_name='f_B',
     objective_weight=None,
-    # Quadcoil constraints
+    # - Quadcoil constraints
     constraint_name=(),
     constraint_type=(),
     constraint_unit=(),
     constraint_value=(),
-    # Metrics to study
+    # - Metrics to study
     metric_name=('f_B', 'f_K'),
 
-    # Solver options
+    # - Solver options
     solver_args={
         'maxiter_inner':1500, 
         'maxiter_outer':50,

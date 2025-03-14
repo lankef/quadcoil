@@ -6,13 +6,13 @@ from functools import partial
 from .surfacerzfourier_jax import dof_to_rz_op, SurfaceRZFourierJAX
 import lineax as lx
 
-@partial(jit, static_argnames=['nfp', 'stellsym', 'mpol', 'ntor', 'lam_tikhnov', 'lam_gaussian',])
+@partial(jit, static_argnames=['nfp', 'stellsym', 'mpol', 'ntor', 'lam_tikhonov', 'lam_gaussian',])
 def fit_surfacerzfourier(
         phi_grid, theta_grid, 
         r_fit, z_fit, 
         nfp:int, stellsym:bool, 
         mpol:int=5, ntor:int=5, 
-        lam_tikhnov=0., lam_gaussian=0.,
+        lam_tikhonov=0., lam_gaussian=0.,
         custom_weight=1,):
     # Fits r and z with a surface
 
@@ -42,8 +42,8 @@ def fit_surfacerzfourier(
     A_lstsq = A_lstsq.reshape(-1, A_lstsq.shape[-1])
     b_lstsq = b_lstsq.flatten()
 
-    # Tikhnov regularization for higher harmonics
-    lam = lam_tikhnov * jnp.average(A_lstsq.T.dot(b_lstsq)) * jnp.diag(m_2_n_2)
+    # tikhonov regularization for higher harmonics
+    lam = lam_tikhonov * jnp.average(A_lstsq.T.dot(b_lstsq)) * jnp.diag(m_2_n_2)
     
     # The lineax call fulfills the same purpose as the following:
     # dofs_expand, resid, rank, s = jnp.linalg.lstsq(A_lstsq.T.dot(A_lstsq) + lam, A_lstsq.T.dot(b_lstsq))
@@ -53,8 +53,6 @@ def fit_surfacerzfourier(
     solution = lx.linear_solve(operator, A_lstsq.T.dot(b_lstsq), solver)
     return(solution.value)
 
-
-
 # An approximation for unit normal.
 # and include the endpoints
 gen_rot_matrix = lambda theta: jnp.array([
@@ -62,11 +60,6 @@ gen_rot_matrix = lambda theta: jnp.array([
     [jnp.sin(theta),  jnp.cos(theta), 0],
     [0,              0,             1]
 ])
-
-
-# default values
-# tol_expand_default = 0.9
-# lam_tikhnov_default = 0.2
 
 @partial(jit, static_argnames=[
     'nfp', 'stellsym', 
@@ -122,7 +115,7 @@ def gen_winding_surface_offset(
         r_fit=r_expand,
         z_fit=z_expand,
         nfp=nfp, stellsym=stellsym,
-        lam_tikhnov=0., lam_gaussian=0.,
+        lam_tikhonov=0., lam_gaussian=0.,
     )
 
     return(dofs_expand)
@@ -204,7 +197,7 @@ def polygon_self_intersection(r_pol, z_pol):
     'mpol',
     'ntor',
     'pol_interp',
-    'lam_tikhnov'
+    'lam_tikhonov'
 ])
 def gen_winding_surface_atan(
         plasma_gamma, d_expand, 
@@ -213,7 +206,7 @@ def gen_winding_surface_atan(
         mpol=5, ntor=5,
         pol_interp=2,
         tor_interp=2,
-        lam_tikhnov=0.0,
+        lam_tikhonov=0.0,
     ):
     ''' Create uniform offset '''
     uniform_offset_dofs = gen_winding_surface_offset(
@@ -268,7 +261,7 @@ def gen_winding_surface_atan(
         r_fit=r_expand,
         z_fit=z_expand,
         nfp=nfp, stellsym=stellsym,
-        lam_tikhnov=lam_tikhnov, lam_gaussian=0.,
+        lam_tikhonov=lam_tikhonov, lam_gaussian=0.,
         custom_weight=weight_remove_invalid,
     )
     return(dofs_expand)
