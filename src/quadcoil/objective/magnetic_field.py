@@ -41,8 +41,19 @@ def Bnormal(qp, cp_mn):
 
 @jit 
 def f_B(qp, cp_mn):
+    # The nescoil objective.
     Bnormal_val = Bnormal(qp, cp_mn)
     return qp.plasma_surface.integrate(Bnormal_val**2/2) * qp.nfp
+
+@jit
+def f_B_normalized_by_Bnormal_IG(qp, cp_mn):
+    # f_B normalized by f_B produced by B_normal_IG.
+    # This normalization method does not change the functional
+    # form of f_B's dependence on the current potential cp_mn,
+    # and the optimum to this objective is the same as f_B.
+    f_B_with_unit = f_B(qp, cp_mn)
+    f_B_IG = f_B(qp, jnp.zeros_like(cp_mn))
+    return(f_B_with_unit / f_B_IG)
 
 @jit 
 def f_max_Bnormal_abs(qp, cp_mn):

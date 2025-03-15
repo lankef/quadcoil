@@ -35,7 +35,8 @@ import jax.numpy as jnp
     # 'winding_quadpoints_theta',
     # - Objectives
     'objective_name',
-    # 'objective_weight',
+    # 'objective_weight_eff',
+    'objective_unit',
     # - Constraints 
     'constraint_name',
     'constraint_type',
@@ -84,9 +85,12 @@ def quadcoil(
     winding_quadpoints_theta=None,
 
     # - Problem setup
-    # Quadcoil objective terms and weights
-    objective_name='f_B',
+    # Quadcoil objective terms, weights, and units
+    # objective_unit differ in that they are not differentiated wrt.
+    # They also exist to aid readability.
+    objective_name='f_B_normalized_by_Bnormal_IG',
     objective_weight=None,
+    objective_unit=None,
     # - Quadcoil constraints
     constraint_name=(),
     constraint_type=(),
@@ -120,7 +124,6 @@ def quadcoil(
          raise ValueError('At least one of plasma_coil_distance and winding_dofs must be provided.')
     if plasma_coil_distance is not None and winding_dofs is not None:
          raise ValueError('Only one of plasma_coil_distance and winding_dofs can be provided.')
-            
     # cp_mn need to be normalized to ~1 for the optimizer to behave well.
     # by default we do this using the net poloidal/toroidal current.
     if cp_mn_unit is None:
@@ -140,11 +143,36 @@ def quadcoil(
             # Here, the first component of plasma_dofs
             # is close to the major radius. 
             # This is useful when the net currents are zero. 
-            Bnormal_factor = jnp.abs(Bnormal_plasma * 1e7 * plasma_dofs[0])
+            Bnormal_factor = jnp.abs(Bnormal_plasma * 1e7 * plasma_coil_distance)
             # Always select total_current unless it is zero.
             cp_mn_unit = jnp.where(total_current > 0, total_current, Bnormal_factor)
+    if not isinstance(objective_name, str):
+        if not isinstance(objective_name, tuple):
+            raise TypeError('objective_name must be a tuple or string') 
+        if not isinstance(objective_weight, tuple):
+            raise TypeError('objective_weight must be a tuple') 
+        if not isinstance(objective_unit, tuple):
+            raise TypeError('objective_unit must be a tuple') 
+        if len(objective_name) != len(objective_weight) or len(objective_name) != len(objective_unit):
+            raise ValueError('objective_name, objective_weight, and objective_unit must have the same len')
     
-    
+    if not isinstance(constraint_name, tuple):
+        raise TypeError('constraint_name must be a tuple') 
+    if not isinstance(constraint_type, tuple):
+        raise TypeError('constraint_type must be a tuple') 
+    if not isinstance(constraint_unit, tuple):
+        raise TypeError('constraint_unit must be a tuple') 
+    if (
+        len(constraint_name) != len(constraint_type) 
+        or len(constraint_name) != len(constraint_unit)
+        or len(constraint_name) != len(constraint_value)
+    ):
+        raise ValueError('constraint_name, constraint_type, constraint_unit,'\
+                         ' and constraint_value must have the same len')
+        
+        
+        
+            
     # A dictionary containing all parameters that the problem depends on.
     # These elements will always be in y.
     y_dict_current = {
@@ -156,7 +184,9 @@ def quadcoil(
     # Only differentiate wrt the weights when 
     # it's not zero.
     if objective_weight is not None:
-        y_dict_current['objective_weight'] = objective_weight
+        y_dict_current['objective_weight_eff'] = jnp.array(objective_weight)/jnp.array(objective_unit)
+    else:
+        y_dict_current['objective_weight_eff'] = None
     # Only differentiate wrt normal field when 
     # it's not zero.
     if Bnormal_plasma is not None:
@@ -166,7 +196,6 @@ def quadcoil(
         y_dict_current['winding_dofs'] = winding_dofs
     else:
         y_dict_current['plasma_coil_distance'] = plasma_coil_distance
-    
     def y_to_qp(y_dict):
         plasma_surface = SurfaceRZFourierJAX(
             nfp=nfp, stellsym=stellsym, 
@@ -230,7 +259,7 @@ def quadcoil(
     # Maps parameters (dict) -> f, g, h, (callables, x -> scalar, arr, arr)
     def f_g_ineq_h_eq_from_y(y_dict):  
         qp_temp = y_to_qp(y_dict)
-        f_obj = parse_objectives(objective_name, objective_weight)
+        f_obj = parse_objectives(objective_name, y_dict['objective_weight_eff'])
         g_ineq, h_eq = parse_constraints(
             constraint_name=constraint_name,
             constraint_type=constraint_type,

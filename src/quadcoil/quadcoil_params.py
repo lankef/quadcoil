@@ -65,7 +65,8 @@ class QuadcoilParams:
             dofs=self.winding_surface.dofs
         )
     
-    ''' Cached quantites '''
+    ''' -- Cached quantites -- '''
+    ''' == Helpers == '''
     @lru_cache()
     @jit
     def make_mn(self):
@@ -266,7 +267,7 @@ class QuadcoilParams:
             partial_theta_theta,
         )
         
-    ''' JAX prereqs '''
+    ''' -- JAX prereqs -- '''
     def tree_flatten(self):
         children = (
             self.plasma_surface,

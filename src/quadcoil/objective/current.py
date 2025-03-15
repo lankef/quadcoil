@@ -86,7 +86,7 @@ def K_theta(qp, cp_mn):
     K_theta_shaped = (trig_diff_m_i_n_i@partial_phi)
     K_theta = K_theta_shaped
     A_K_theta = K_theta
-    b_K_theta = qp.net_toroidal_current_amperes*jnp.ones((K_theta.shape[0], K_theta.shape[1]))
+    b_K_theta = qp.net_poloidal_current_amperes*jnp.ones((K_theta.shape[0], K_theta.shape[1]))
     return(A_K_theta @ cp_mn + b_K_theta)
 
 

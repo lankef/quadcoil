@@ -17,6 +17,13 @@ def Phi(qp, cp_mn):
     ) = qp.diff_helper()
     return trig_m_i_n_i@cp_mn
 
+def Phi_with_net_current(qp, cp_mn):
+    theta2d, phi2d = qp.eval_surface.theta_mesh, qp.eval_surface.phi_mesh
+    Phi_val = Phi(qp, cp_mn) \
+        + phi2d * qp.net_poloidal_current_amperes \
+        + theta2d * qp.net_toroidal_current_amperes
+    return(Phi_val)
+
 @jit
 def f_max_Phi(qp, cp_mn):
     return jnp.max(jnp.abs(Phi(qp, cp_mn)))

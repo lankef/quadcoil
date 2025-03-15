@@ -11,6 +11,37 @@ winding_surface, plasma_surface, cp, cpst, qp = load_data()
 
 class QuadcoilKTest(unittest.TestCase):
     def test_regcoil(self):
+        # First, test with the NESCOIL problem, auto-generating WS
+        print('Testing NESCOIL, with auto-generated winding surface')
+        nescoil_phi_mn, nescoil_out_dict, nescoil_qp = quadcoil(
+            nfp=cp.nfp,
+            stellsym=cp.stellsym,
+            mpol=cp.mpol,
+            ntor=cp.ntor,
+            plasma_dofs=cpst.plasma_surface.get_dofs(),
+            plasma_mpol=cpst.plasma_surface.mpol,
+            plasma_ntor=cpst.plasma_surface.ntor,
+            net_poloidal_current_amperes=cp.net_poloidal_current_amperes,
+            net_toroidal_current_amperes=cp.net_toroidal_current_amperes,
+            plasma_coil_distance=plasma_surface.minor_radius(),
+            metric_name=('f_B', 'f_K')
+        )
+        ws0 = nescoil_qp.winding_surface.to_simsopt()
+        cp0 = CurrentPotentialFourier(
+            ws0, mpol=cp.mpol, ntor=cp.ntor,
+            net_poloidal_current_amperes=cp.net_poloidal_current_amperes,
+            net_toroidal_current_amperes=cp.net_toroidal_current_amperes,
+            stellsym=True)
+        cpst0 = CurrentPotentialSolve(cp0, plasma_surface, 0)
+        nescoil_phi_mn_ans, nescoil_f_B_ans, nescoil_f_K_ans = cpst1.solve_tikhonov()
+        print('Phi:')
+        compare(nescoil_phi_mn_ans, nescoil_phi_mn, 1e-3)
+        print('f_B:')
+        compare(nescoil_out_dict['f_B']['value'], nescoil_f_B_ans, 1e-3)
+        print('f_K:')
+        compare(nescoil_out_dict['f_K']['value'], nescoil_f_K_ans, 1e-3)
+
+        
         # First, test with the REGCOIL problem, auto-generating WS
         print('Testing REGCOIL, with auto-generated winding surface')
         regcoil1_phi_mn, regcoil1_out_dict, regcoil1_qp = quadcoil(
@@ -26,6 +57,10 @@ class QuadcoilKTest(unittest.TestCase):
             plasma_coil_distance=plasma_surface.minor_radius(),
             objective_name=('f_B', 'f_K'),
             objective_weight=(1., 0.01),
+            # Usually we recommend normalizing f_B and f_K to 
+            # ~1, but in this case, for testing prupose, not normalizing 
+            # is also okay
+            objective_unit=(1., 1.), 
             metric_name=('f_B', 'f_K')
         )
         ws1 = regcoil1_qp.winding_surface.to_simsopt()
@@ -62,6 +97,10 @@ class QuadcoilKTest(unittest.TestCase):
             winding_quadpoints_theta=cpst.winding_surface.quadpoints_theta,
             objective_name=('f_B', 'f_K'),
             objective_weight=(1., 1e-14),
+            # Usually we recommend normalizing f_B and f_K to 
+            # ~1, but in this case, for testing prupose, not normalizing 
+            # is also okay
+            objective_unit=(1., 1.), 
             metric_name=('f_B', 'f_K')
         )
         regcoil2_phi_mn_ans, regcoil2_f_B_ans, regcoil2_f_K_ans = cpst.solve_tikhonov(lam=1e-14)
@@ -104,6 +143,10 @@ class QuadcoilKTest(unittest.TestCase):
                 plasma_coil_distance=plasma_surface.minor_radius(),
                 objective_name=('f_B', 'f_K'),
                 objective_weight=(1., 0.01),
+                # Usually we recommend normalizing f_B and f_K to 
+                # ~1, but in this case, for testing prupose, not normalizing 
+                # is also okay
+                objective_unit=(1., 1.), 
                 metric_name=('f_B', 'f_K')
             )
             block_until_ready(regcoili_phi_mn)

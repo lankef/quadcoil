@@ -32,19 +32,19 @@ def merge_callables(callables):
     
     return merged_fn
     
-def parse_objectives(objective_name, objective_weight=None):
+def parse_objectives(objective_name, objective_weight=None): # , objective_unit=None):
     # Converts a tuple of strings (or a single string for one objective only) 
     # and an array of weights into a callable f_tot(a, b) that outputs the weighted 
     # sum of f(a, b). 
     if isinstance(objective_name, str):
         return get_objective(objective_name)
     else:
-        if len(objective_name) != len(objective_weight):
-            raise ValueError('objective and objective_weight must have the same length.')
+        if len(objective_name) != len(objective_weight): # or len(objective_name) != len(objective_unit):
+            raise ValueError('objective, objective_weight and objective_unit must have the same length.')
         def f_tot(a, b):
             out = 0
             for i in range(len(objective_name)):
-                out = out + get_objective(objective_name[i])(a, b) * objective_weight[i]
+                out = out + get_objective(objective_name[i])(a, b) * objective_weight[i] # / objective_unit[i]
             return out
         return f_tot
 
