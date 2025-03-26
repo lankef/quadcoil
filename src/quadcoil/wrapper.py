@@ -27,7 +27,7 @@ def merge_callables(callables):
         outputs = [out.ravel() for out in outputs]
         # Concatenate into a single 1D array
         if len(outputs) == 0:
-            return jnp.array([0])
+            return jnp.zeros(1)
         return jnp.concatenate(outputs, axis=0)
     
     return merged_fn
@@ -44,7 +44,7 @@ def parse_objectives(objective_name, objective_weight=None): # , objective_unit=
         def f_tot(a, b):
             out = 0
             for i in range(len(objective_name)):
-                out = out + get_objective(objective_name[i])(a, b) * objective_weight[i] # / objective_unit[i]
+                out = out + get_objective(objective_name[i])(a, b) * objective_weight[i]
             return out
         return f_tot
 
@@ -94,6 +94,11 @@ def parse_constraints(
             cons_val_i=cons_val_i,
             sign=sign_i
         ): 
+            # # When the unit of a quantity is left blank,
+            # # automatically scale that quantity by its value
+            # # with only net poloidal/toroidal currents.
+            # if cons_unit_i is None:
+            #     cons_unit_i = cons_func_i(a, jnp.zeros_like(b))
             # Scaling and centering constraints
             return sign * (cons_func_i(a, b) - cons_val_i) / cons_unit_i
         # Creating a list of function in h and g.

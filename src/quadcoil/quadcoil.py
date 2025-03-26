@@ -44,12 +44,15 @@ import jax.numpy as jnp
     # 'constraint_value',
     # - Solver options
     'metric_name',
-    'c_init',
-    'c_growth_rate',
-    'tol_outer',
-    'ftol_inner',
-    'xtol_inner',
-    'gtol_inner',
+    # 'c_init',
+    # 'c_growth_rate',
+    # 'ftol_outer',
+    # 'ctol_outer',
+    # 'xtol_outer',
+    # 'gtol_outer',
+    # 'ftol_inner',
+    # 'xtol_inner',
+    # 'gtol_inner',
     'maxiter_inner',
     'maxiter_outer',
 ])
@@ -109,9 +112,12 @@ def quadcoil(
     # - Solver options
     c_init=0.1,
     c_growth_rate=1.1,
-    tol_outer=1e-7,
-    ftol_inner=0,
-    xtol_inner=0,
+    ftol_outer=1e-7, # constraint tolerance
+    ctol_outer=1e-7, # constraint tolerance
+    xtol_outer=1e-7, # convergence rate tolerance
+    gtol_outer=1e-7, # gradient tolerance
+    ftol_inner=1e-7,
+    xtol_inner=1e-7,
     gtol_inner=1e-7,
     maxiter_inner=1500,
     maxiter_outer=50,
@@ -189,7 +195,7 @@ def quadcoil(
         'constraint_value': constraint_value, 
     }
     # Only differentiate wrt the weights when 
-    # it's not zero.
+    # it's not None.
     if objective_weight is not None:
         y_dict_current['objective_weight_eff'] = jnp.array(objective_weight)/jnp.array(objective_unit)
     else:
@@ -283,10 +289,9 @@ def quadcoil(
     ''' Initializing solver and values '''
     qp = y_to_qp(y_dict_current)
     x_init_scaled = jnp.zeros(qp.ndofs)
-    f_obj, h_eq, g_ineq = f_g_ineq_h_eq_from_y(y_dict_current)
+    f_obj, g_ineq, h_eq = f_g_ineq_h_eq_from_y(y_dict_current)
     mu_init = jnp.zeros_like(g_ineq(x_init_scaled))
     lam_init = jnp.zeros_like(h_eq(x_init_scaled))
-    
     ''' Solving QUADCOIL '''
     
     # A dictionary containing augmented lagrangian info
@@ -301,7 +306,10 @@ def quadcoil(
         g_ineq=g_ineq,
         c_init=c_init,
         c_growth_rate=c_growth_rate,
-        tol_outer=tol_outer,
+        ftol_outer=ftol_outer,
+        ctol_outer=ctol_outer,
+        xtol_outer=xtol_outer,
+        gtol_outer=gtol_outer,
         ftol_inner=ftol_inner,
         xtol_inner=xtol_inner,
         gtol_inner=gtol_inner,
@@ -321,7 +329,7 @@ def quadcoil(
     mu_k = solve_results['mu_k']
     # @jit
     def l_k(x, y): 
-        f_obj, h_eq, g_ineq = f_g_ineq_h_eq_from_y(y)
+        f_obj, g_ineq, h_eq = f_g_ineq_h_eq_from_y(y)
         gplus = lambda x, mu, c: jnp.max(jnp.array([g_ineq(x), -mu/c]), axis=0)
         # l_k = lambda x: (
         #     f_obj(x) 
