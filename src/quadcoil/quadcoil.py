@@ -44,7 +44,14 @@ import jax.numpy as jnp
     # 'constraint_value',
     # - Solver options
     'metric_name',
-    'solver_args',
+    'c_init',
+    'c_growth_rate',
+    'tol_outer',
+    'ftol_inner',
+    'xtol_inner',
+    'gtol_inner',
+    'maxiter_inner',
+    'maxiter_outer',
 ])
 def quadcoil(
     nfp,
@@ -100,14 +107,14 @@ def quadcoil(
     metric_name=('f_B', 'f_K'),
 
     # - Solver options
-    solver_args={
-        'maxiter_inner':1500, 
-        'maxiter_outer':50,
-        'tol_outer':1e-7,
-        'ftol_inner':1e-7,
-        'xtol_inner':1e-7,
-        'gtol_inner':1e-7,
-    }
+    c_init=0.1,
+    c_growth_rate=1.1,
+    tol_outer=1e-7,
+    ftol_inner=0,
+    xtol_inner=0,
+    gtol_inner=1e-7,
+    maxiter_inner=1500,
+    maxiter_outer=50,
 ):
 
     ''' Default parameters '''
@@ -292,7 +299,14 @@ def quadcoil(
         mu_init=mu_init,
         h_eq=h_eq,
         g_ineq=g_ineq,
-        **solver_args
+        c_init=c_init,
+        c_growth_rate=c_growth_rate,
+        tol_outer=tol_outer,
+        ftol_inner=ftol_inner,
+        xtol_inner=xtol_inner,
+        gtol_inner=gtol_inner,
+        maxiter_inner=maxiter_inner,
+        maxiter_outer=maxiter_outer,
     )
     
     # The optimum, unit-less.
@@ -353,4 +367,4 @@ def quadcoil(
             'value': f_metric(x_k, y_dict_current), 
             'grad': dfdy
         }
-    return(cp_mn, out_dict, qp)
+    return(cp_mn, out_dict, qp, solve_results)

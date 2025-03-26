@@ -64,7 +64,13 @@ def run_opt_optax(init_params, fun, maxiter, ftol, xtol, gtol, opt):
     final_params, final_updates, final_value, final_dx, final_du, final_df, final_state = while_loop(
         continuing_criterion, step, init_carry
     )
-    return(otu.tree_get(final_state, 'params'))
+    return(
+        otu.tree_get(final_state, 'params'), 
+        otu.tree_get(final_state, 'count'),
+        final_dx,
+        final_du,
+        final_df,
+    )
 
 ''' Constrained optimization '''
 
@@ -155,7 +161,9 @@ def solve_constrained(
         ) 
         # Eq (10) on p160 of Constrained Optimization and Multiplier Method
         # Solving a stage of the problem
-        x_k = run_opt(x_km1, l_k, maxiter_inner, ftol_inner, xtol_inner, gtol_inner)
+        
+        # x, count, dx, du, df,
+        x_k, count_k, dx_k, du_k, df_k = run_opt(x_km1, l_k, maxiter_inner, ftol_inner, xtol_inner, gtol_inner)
 
         lam_k_first_order = lam_k + c_k * h_eq(x_k)
         mu_k_first_order = mu_k + c_k * gplus(x_k, mu_k, c_k)
@@ -167,6 +175,10 @@ def solve_constrained(
             'lam_k': lam_k_first_order,
             'mu_k': mu_k_first_order,
             'current_niter': dict_in['current_niter']+1,
+            'count_k': count_k,
+            'dx_k': dx_k,
+            'du_k': du_k,
+            'df_k': df_k,
         }
         # When using jax.lax.scan for outer iteration, 
         # the body fun also records history.
@@ -185,6 +197,10 @@ def solve_constrained(
         'lam_k': lam_init,
         'mu_k': mu_init,
         'current_niter': 1,
+        'count_k': 0,
+        'dx_k': 0.,
+        'du_k': 0.,
+        'df_k': 0.,
     })
     if scan_mode:
         result, history = scan(
