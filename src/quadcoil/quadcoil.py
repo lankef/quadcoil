@@ -110,15 +110,15 @@ def quadcoil(
     metric_name=('f_B', 'f_K'),
 
     # - Solver options
-    c_init=0.1,
+    c_init=1.,
     c_growth_rate=1.1,
-    ftol_outer=1e-7, # constraint tolerance
-    ctol_outer=1e-7, # constraint tolerance
-    xtol_outer=1e-7, # convergence rate tolerance
-    gtol_outer=1e-7, # gradient tolerance
-    ftol_inner=1e-7,
-    xtol_inner=1e-7,
-    gtol_inner=1e-7,
+    ftol_outer=1e-5, # constraint tolerance
+    ctol_outer=1e-5, # constraint tolerance
+    xtol_outer=1e-5, # convergence rate tolerance
+    gtol_outer=1e-5, # gradient tolerance
+    ftol_inner=1e-5,
+    xtol_inner=1e-5,
+    gtol_inner=1e-5,
     maxiter_inner=1500,
     maxiter_outer=50,
 ):
@@ -168,7 +168,6 @@ def quadcoil(
             raise TypeError('objective_unit must be a tuple') 
         if len(objective_name) != len(objective_weight) or len(objective_name) != len(objective_unit):
             raise ValueError('objective_name, objective_weight, and objective_unit must have the same len')
-    
     if not isinstance(constraint_name, tuple):
         raise TypeError('constraint_name must be a tuple') 
     if not isinstance(constraint_type, tuple):
@@ -181,11 +180,7 @@ def quadcoil(
         or len(constraint_name) != len(constraint_value)
     ):
         raise ValueError('constraint_name, constraint_type, constraint_unit,'\
-                         ' and constraint_value must have the same len')
-        
-        
-        
-            
+                         ' and constraint_value must have the same len')     
     # A dictionary containing all parameters that the problem depends on.
     # These elements will always be in y.
     y_dict_current = {
@@ -209,6 +204,7 @@ def quadcoil(
         y_dict_current['winding_dofs'] = winding_dofs
     else:
         y_dict_current['plasma_coil_distance'] = plasma_coil_distance
+    ''' Helper functions '''
     def y_to_qp(y_dict):
         plasma_surface = SurfaceRZFourierJAX(
             nfp=nfp, stellsym=stellsym, 
@@ -287,11 +283,13 @@ def quadcoil(
         return scaled_f_obj, scaled_g_ineq, scaled_h_eq
     
     ''' Initializing solver and values '''
+
     qp = y_to_qp(y_dict_current)
     x_init_scaled = jnp.zeros(qp.ndofs)
     f_obj, g_ineq, h_eq = f_g_ineq_h_eq_from_y(y_dict_current)
     mu_init = jnp.zeros_like(g_ineq(x_init_scaled))
     lam_init = jnp.zeros_like(h_eq(x_init_scaled))
+
     ''' Solving QUADCOIL '''
     
     # A dictionary containing augmented lagrangian info
@@ -316,12 +314,12 @@ def quadcoil(
         maxiter_inner=maxiter_inner,
         maxiter_outer=maxiter_outer,
     )
-    
     # The optimum, unit-less.
     x_k = solve_results['x_k']
     cp_mn = x_k * cp_mn_unit
     
     ''' Recover the l_k in the last iteration for dx_k/dy '''
+
     # First, we reproduce the augmented lagrangian objective l_k that 
     # led to the optimum.
     c_k = solve_results['c_k']
@@ -347,7 +345,6 @@ def quadcoil(
                 + jnp.sum(gplus(x, mu_k, c_k)**2)
             )
         )
-    
     nabla_x_l_k = jacrev(l_k, argnums=0)
     nabla_y_l_k = jacrev(l_k, argnums=1)
     nabla_y_l_k_for_hess = lambda x: nabla_y_l_k(x, y_dict_current)

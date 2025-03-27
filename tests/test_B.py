@@ -1,10 +1,7 @@
 import unittest
-from quadcoil import QuadcoilParams, SurfaceRZFourierJAX
 from quadcoil.objective import winding_surface_B, Bnormal, f_B, f_K
 import jax.numpy as jnp
-from simsopt import load
 from simsopt.field.magneticfieldclasses import WindingSurfaceField
-from simsopt.field import CurrentPotentialFourier, CurrentPotentialSolve
 from load_test_data import load_data, compare
 
 winding_surface, plasma_surface, cp, cpst, qp = load_data()
