@@ -4,6 +4,10 @@
 # Required
 version: 2
 
+# Sphinx config
+sphinx:
+  configuration: docs/conf.py  # Adjust path if needed
+
 # Set the OS, Python version, and other tools you might need
 build:
   os: ubuntu-24.04
