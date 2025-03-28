@@ -1,15 +1,42 @@
 import jax.numpy as jnp
 from jax import jit
 
-sin_or_cos = lambda x, mode: jnp.where(mode==1, jnp.sin(x), jnp.cos(x))
+
+def sin_or_cos(x, mode):
+    '''
+    Scans a pair of arrays, ``x`` and ``mode``. Where ``mode==1``, return ``jnp.sin(x)``. 
+    Otherwise return ``jnp.cos(x)``. Used in inverse Fourier Transforms.
+
+    Parameters
+    ----------  
+    x : ndarray
+        The data.
+    mode : ndarray
+        The choice of trigonometry functions.
+
+    Returns
+    -------
+    ndarray
+    '''
+    return jnp.where(mode==1, jnp.sin(x), jnp.cos(x))
 
 @jit
 def norm_helper(vec):
     '''
-    This is a helper method that calculates the following quantities:
-    - normN_prime_2d: The normal vector's length, |N|
-    - inv_normN_prime_2d: 1/|N|
-    Shape: (n_phi, n_theta, 3(xyz)); (n_phi, n_theta); (n_phi, n_theta)
+    Calculates :math:`|v|` and :math:`1/|v|` for a vector field
+    on a 2d surface. 
+
+    Parameters
+    ----------  
+    vec : ndarray, shape (Nx, Ny, ..., 3)
+        The vector field
+
+    Returns
+    -------
+    normN_prime_2d : ndarray, shape (Nx, Ny, ...)
+        The vector field's length, :math:`|v|`
+    inv_normN_prime_2d: ndarray, shape (Nx, Ny, ...)
+        1/the vector field's length, :math:`1/|v|`
     '''
     # Length of the non-unit WS normal vector |N|,
     # its inverse (1/|N|) and its inverse's derivatives
@@ -25,10 +52,25 @@ def project_arr_coord(
     operator, 
     unit1, unit2, unit3):
     '''
-    Project a (n_phi, n_theta, 3, <shape>) array in a given basis (unit1, unit2, unit3) 
-    with shape (n_phi, n_theta, 3). 
-    Outputs: (n_phi, n_theta, 3, <shape>)
-    Sample the first field period when one_field_period is True.
+    Project an array of vector fields on a 2d surface
+    in a given basis, ``unit1, unit2, unit3``.
+
+    Parameters
+    ----------  
+    operator : ndarray, shape (n_phi, n_theta, 3, ...)
+        An array of (n_phi, n_theta, 3) vector fields. 
+        ``operator.shape[:3]`` must be ``(n_phi, n_theta, 3)``.
+        Otehrwise the shape is flexible.
+    unit1 : ndarray, shape (n_phi, n_theta, 3)
+        Basis vector 1 where the vector field is sampled.
+    unit2 : ndarray, shape (n_phi, n_theta, 3)
+        Basis vector 2 where the vector field is sampled.
+    unit3 : ndarray, shape (n_phi, n_theta, 3)
+        Basis vector 3 where the vector field is sampled.
+    
+    Returns
+    -------
+    Outputs: ndarray, shape (n_phi, n_theta, 3, ...)
     '''
     # Memorizing shape of the last dimensions of the array
     len_phi = operator.shape[0]
@@ -58,6 +100,24 @@ def project_arr_cylindrical(
         gamma, 
         operator,
     ):
+    '''
+    Project a stack of vector fields onto a cylindrical 
+    coordinate for a given set of coordinate points.
+
+    Parameters
+    ----------  
+    gamma : ndarray, shape (n_phi, n_theta, 3)
+        The location of the coordinate points 
+        where the field is sampled in x, y, z.
+    operator : ndarray, shape (n_phi, n_theta, 3, ...)
+        A stack of (n_phi, n_theta, 3) vector fields.
+        ``operator.shape[:3]`` must be ``(n_phi, n_theta, 3)``.
+        Otherwise the shape is flexible.
+    
+    Returns
+    -------
+    Outputs: ndarray, shape (n_phi, n_theta, 3, ...)
+    '''
     # Keeping only the x, y components
     r_unit = jnp.zeros_like(gamma)
     r_unit = r_unit.at[:, :, -1].set(0)

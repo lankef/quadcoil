@@ -35,8 +35,8 @@ import jax.numpy as jnp
     # 'winding_quadpoints_theta',
     # - Objectives
     'objective_name',
-    # 'objective_weight_eff',
-    'objective_unit',
+    # 'objective_weight',
+    # 'objective_unit',
     # - Constraints 
     'constraint_name',
     'constraint_type',
@@ -57,15 +57,15 @@ import jax.numpy as jnp
     'maxiter_outer',
 ])
 def quadcoil(
-    nfp,
-    stellsym,
-    mpol,
-    ntor,
+    nfp:int,
+    stellsym:bool,
+    mpol:int,
+    ntor:int,
+    plasma_mpol:int,
+    plasma_ntor:int,
     plasma_dofs,
-    plasma_mpol,
-    plasma_ntor,
-    net_poloidal_current_amperes,
-    net_toroidal_current_amperes,
+    net_poloidal_current_amperes:float,
+    net_toroidal_current_amperes:float,
     
     # -- Defaults --
     
@@ -122,7 +122,116 @@ def quadcoil(
     maxiter_inner=1500,
     maxiter_outer=50,
 ):
+    '''
+    Solves a QUADCOIL problem.
 
+    Parameters
+    ----------
+    nfp : int
+        (Static) The number of field periods.
+    stellsym : bool
+        (Static) Stellarator symmetry.
+    mpol: int
+        (Static) The number of poloidal Fourier harmonics in the current potential :math:`\Phi_{sv}`,
+        which represents the sheet current by 
+        :math:`\mathbf{K} = \hat{\mathbf{n}}\times\nabla(\Phi_{sv} + \frac{G\phi'}{2\pi} + \frac{I\theta'}{2\pi})`,
+        where :math:`G` is the net poloidal current, and :math:`I` is the net toroidal current.
+    ntor: int
+        (Static) The number of toroidal Fourier harmonics in :math:`\Phi_{sv}`.
+    plasma_mpol,
+        (Static) The number of poloidal Fourier harmonics in the plasma boundary.
+    plasma_ntor,
+        (Static) The number of toroidal Fourier harmonics in the plasma boundary.
+    plasma_dofs,
+        (Static) The plasma surface degrees of freedom. Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()`` covention.
+    net_poloidal_current_amperes: float
+        (Traced) The net poloidal current :math:`G`.
+    net_toroidal_current_amperes: float
+        (Traced) The net toroidal current :math:`I`.
+    quadpoints_phi : ndarray, shape (nphi,), optional, default=None
+        (Traced) The poloidal quadrature points on the winding surface to evaluate the objectives at.
+        Uses one period from the winding surfacee by default.
+    quadpoints_theta : ndarray, shape (ntheta,), optional, default=None
+        (Traced) The toroidal quadrature points on the winding surface to evaluate the objectives at.
+        Uses one period from the winding surfacee by default.
+    cp_mn_unit : floatm optional, default=None 
+        (Traced) Current potential's normalization constant. 
+        By default will be generated from total net current.
+    plasma_quadpoints_phi : ndarray, shape (nphi_plasma,), optional, default=None
+        (Traced) Will be set to ``jnp.linspace(0, 1/nfp, 32, endpoint=False)`` by default.
+    plasma_quadpoints_theta : ndarray, shape (ntheta_plasma,), optional, default=None
+        (Traced) Will be set to ``jnp.linspace(0, 1, 32, endpoint=False)`` by default.
+    Bnormal_plasma : ndarray, shape (nphi, ntheta), optional, default=None
+        (Traced) The magnetic field distribution on the plasma 
+        surface. will be filled with zeros by default. 
+    plasma_coil_distance : float, optional, default=None
+        (Traced) The coil-plasma distance. Is set to ``None`` by default, 
+        but a value must be provided if ``winding_dofs`` is not provided.
+    winding_surface_generator : callable, optional, default=gen_winding_surface_atan
+        (Static) The winding surface generator.
+    winding_surface_generator_args : dict, optional, default={'pol_interp': 1, 'lam_tikhonov': 0.05}
+        (Static) The arguments for the winding surface generator.
+    winding_dofs : ndarray, shape (ndof_winding,)
+        (Traced) The winding surface degrees of freedom. 
+        Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()`` covention.
+        Will be generated using ``winding_surface_generator`` if 
+        ``plasma_coil_distance`` is provided. Must be provided otherwise.
+    winding_mpol : int, optional, default=5
+        (Static) The number of poloidal Fourier harmonics in the winding surface.
+    winding_ntor : int, optional, default=5
+        (Static) The number of toroidal Fourier harmonics in the winding surface.
+    winding_quadpoints_phi : ndarray, shape (nphi_winding,), optional, default=None
+        (Traced) Will be set to ``jnp.linspace(0, 1, 32*nfp, endpoint=False)`` by default.
+    winding_quadpoints_theta : ndarray, shape (ntheta_winding,), optional, default=None
+        (Traced) Will be set to ``jnp.linspace(0, 1, 32, endpoint=False)`` by default.
+    objective_name: tuple, optional, default='f_B_normalized_by_Bnormal_IG',
+        (Static) The names of the objective functions. Must be a member of ``quadcoil.objective`` that outputs a scalar.
+    objective_weight: ndarray, optional, default=None,
+        (Traced) The weights of the objective functions. Derivatives will be calculated w.r.t. this quantity.
+    objective_unit: tuple, optional, default=None,
+        (Traced) The normalization constants of the objective terms, so that ``f/objective_unit`` is :math:`O(1)`.
+    constraint_name : tuple, optional, default=(),
+        (Static) The names of the constraint functions. Must be a member of ``quadcoil.objective`` that outputs a scalar.
+    constraint_type : tuple, optional, default=(),
+        (Static) The types of the constraints. Must consists of ``'>=', '<=', '=='`` only.
+    constraint_unit : tuple, optional, default=(),
+        (Traced) The normalization constants of the constraints, so that ``f/constraint_unit`` is :math:`O(1)`.
+    constraint_value : ndarray, optional, default=(),
+        (Traced) The constraint thresholds. Derivatives will be calculated w.r.t. this quantity.
+    metric_name=('f_B', 'f_K'),
+        (Static) The names of the functions to diagnose the coil configurations with. Will be differentiated 
+        w.r.t. other input quantities.  
+    c_init : float, optional, default=1.
+        (Traced) The :math:`c` factor. Please see Constrained Optimization
+        and Lagrange Multiplier Methods Chapter 3. 
+    c_growth_rate : float, optional, default=1.1
+        (Traced) The growth rate of the :math:`c` factor.
+    ftol_outer : float, optional, default=1e-5
+        (Traced) Constraint tolerance of the outer augmented 
+        Lagrangian loop. Terminates when any is satisfied. 
+    ctol_outer : float, optional, default=1e-5
+        (Traced) Constraint tolerance of the outer augmented 
+        Lagrangian loop. Terminates when any is satisfied. 
+    xtol_outer : float, optional, default=1e-5
+        (Traced) Convergence rate tolerance of the outer augmented 
+        Lagrangian loop. Terminates when any is satisfied. 
+    gtol_outer : float, optional, default=1e-5
+        (Traced) Gradient tolerance of the outer augmented 
+        Lagrangian loop. Terminates when any is satisfied. 
+    ftol_inner : float, optional, default=1e-5
+        (Traced) Gradient tolerance of the inner LBFGS 
+        iteration. Terminates when any is satisfied. 
+    xtol_inner : float, optional, default=1e-5
+        (Traced) Gradient tolerance of the inner LBFGS 
+        iteration. Terminates when any is satisfied. 
+    gtol_inner : float, optional, default=1e-5
+        (Traced) Gradient tolerance of the inner LBFGS 
+        iteration. Terminates when any is satisfied. 
+    maxiter_outer: int, optional, default=50
+        (Static) The maximum of the outer iteration.
+    maxiter_inner: int, optional, default=1500
+        (Static) The maximum of the inner iteration.
+    '''
     ''' Default parameters '''
     
     if plasma_quadpoints_phi is None:
@@ -192,9 +301,9 @@ def quadcoil(
     # Only differentiate wrt the weights when 
     # it's not None.
     if objective_weight is not None:
-        y_dict_current['objective_weight_eff'] = jnp.array(objective_weight)/jnp.array(objective_unit)
+        y_dict_current['objective_weight'] = jnp.array(objective_weight)
     else:
-        y_dict_current['objective_weight_eff'] = None
+        y_dict_current['objective_weight'] = None
     # Only differentiate wrt normal field when 
     # it's not zero.
     if Bnormal_plasma is not None:
@@ -268,7 +377,11 @@ def quadcoil(
     # Maps parameters (dict) -> f, g, h, (callables, x -> scalar, arr, arr)
     def f_g_ineq_h_eq_from_y(y_dict):  
         qp_temp = y_to_qp(y_dict)
-        f_obj = parse_objectives(objective_name, y_dict['objective_weight_eff'])
+        f_obj = parse_objectives(
+            objective_name=objective_name, 
+            objective_unit=objective_unit,
+            objective_weight=y_dict['objective_weight'], 
+        )
         g_ineq, h_eq = parse_constraints(
             constraint_name=constraint_name,
             constraint_type=constraint_type,

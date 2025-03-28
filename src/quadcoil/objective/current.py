@@ -89,11 +89,11 @@ def K_theta(qp, cp_mn):
     b_K_theta = qp.net_poloidal_current_amperes*jnp.ones((K_theta.shape[0], K_theta.shape[1]))
     return A_K_theta @ cp_mn + b_K_theta
 
-@jit
-def signed_K_theta2(qp, cp_mn):
-    # signed K_theta. Maybe it'll behave better than K_theta?
-    Kt = K_theta(qp, cp_mn)
-    return Kt**2 * jnp.sign(Kt)
+# @jit
+# def signed_K_theta2(qp, cp_mn):
+#     # signed K_theta. Maybe it'll behave better than K_theta?
+#     Kt = K_theta(qp, cp_mn)
+#     return Kt**2 * jnp.sign(Kt)
 
 @jit 
 def f_K(qp, cp_mn):

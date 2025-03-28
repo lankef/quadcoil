@@ -1,6 +1,6 @@
 import unittest
 from quadcoil import get_objective, merge_callables, parse_constraints, parse_objectives
-from quadcoil.objective import f_B, f_K, K_dot_grad_K
+from quadcoil.objective import f_B, f_K, K_dot_grad_K, f_B_normalized_by_Bnormal_IG
 import jax.numpy as jnp
 import numpy as np
 from simsopt import load
@@ -76,10 +76,10 @@ class QuadcoilWrapperTest(unittest.TestCase):
         self.assertTrue(compare(h_eq_test_val[1:], -(pert_KK/unit_KK).ravel()))
     
     def test_parse_objectives(self):
-        self.assertTrue(compare(parse_objectives('f_B')(qp, cp.get_dofs()), f_B(qp, cp.get_dofs())))
+        self.assertTrue(compare(parse_objectives('f_B')(qp, cp.get_dofs()), f_B_normalized_by_Bnormal_IG(qp, cp.get_dofs())))
         self.assertTrue(compare(
-            parse_objectives(['f_B', 'f_K'], jnp.array([114, 514]))(qp, cp.get_dofs()), 
-            114 * f_B(qp, cp.get_dofs()) + 514 * f_K(qp, cp.get_dofs())
+            parse_objectives(['f_B', 'f_K'], (None, 1.), jnp.array([114, 514]))(qp, cp.get_dofs()), 
+            114 * f_B_normalized_by_Bnormal_IG(qp, cp.get_dofs()) + 514 * f_K(qp, cp.get_dofs())
         ))
 
 if __name__ == "__main__":

@@ -25,6 +25,14 @@ def Phi_with_net_current(qp, cp_mn):
     return(Phi_val)
 
 @jit
+def Phi2(qp, cp_mn):
+    return Phi(qp, cp_mn)**2
+
+@jit
+def Phi_abs(qp, cp_mn):
+    return jnp.abs(Phi(qp, cp_mn))
+
+@jit
 def f_max_Phi(qp, cp_mn):
     return jnp.max(jnp.abs(Phi(qp, cp_mn)))
     

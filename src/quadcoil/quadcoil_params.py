@@ -5,8 +5,6 @@ from jax import jit, tree_util
 from functools import lru_cache, partial
 
 '''
-This class is somewhat analogous to CurrentPotential in simsopt. 
-It stores all QUADCOIL parameters. These includes:
 - The plasma surface
 - The winding surface
 - The evaluation surface
@@ -15,6 +13,85 @@ It stores all QUADCOIL parameters. These includes:
 '''
 @tree_util.register_pytree_node_class
 class QuadcoilParams:
+    """
+    A class storing all informations required to solve a quadcoil 
+    problem. These includes plasma info, winding surface info, but 
+    does not include problem-specific info such as objectives, constraints
+    or solutions. This class is primarily intended as a concise way to 
+    pass information into objective functions. It allows functions
+    in ``quadcoil.objective`` to have the same signature, despite requiring
+    different info to calculate. 
+
+    Parameters
+    ----------
+    plasma_surface : SurfaceRZFourierJAX
+        The plasma surface.
+    winding_surface : SurfaceRZFourierJAX
+        The winding surface. Must have all field periods.
+    net_poloidal_current_amperes : float
+        The net poloidal current.
+    net_toroidal_current_amperes : float
+        The net toroidal current.
+    Bnormal_plasma : ndarray, shape (nphi, ntheta), optional, default=None
+        The magnetic field distribution on the plasma 
+        surface. 
+    mpol : int, optional, default=4
+        The number of poloidal Fourier harmonics in the current potential :math:`\Phi_{sv}`. 
+    ntor : int, optional, default=4
+        The number of toroidal Fourier harmonics in :math:`\Phi_{sv}`. 
+    quadpoints_phi : ndarray, shape (nphi,), optional, default=None
+        The toroidal quadrature points to evaluate quantities at. 
+        Takes one field period from the winding surface by default. 
+    quadpoints_theta : ndarray, shape (ntheta,), optional, default=None
+        The poloidal quadrature points to evaluate quantities at. 
+        Takes the winding surface's quadrature points by default. 
+
+    Attributes
+    ----------
+    plasma_surface : SurfaceRZFourierJAX
+        (Traced) The plasma surface.
+    winding_surface : SurfaceRZFourierJAX
+        (Traced) The winding surface. Must have all field periods.
+    eval_surface : SurfaceRZFourierJAX
+        (Traced) The evaluation surface. Has the same dofs as the winding surface, but uses the
+        quadrature points given by ``self.quadpoints_phi`` and ``self.quadpoints_phi``.
+    net_poloidal_current_amperes : float
+        (Traced) The net poloidal current.
+    net_toroidal_current_amperes : float
+        (Traced) The net toroidal current.
+    Bnormal_plasma : ndarray, shape (nphi, ntheta)
+        (Traced) The magnetic field distribution on the plasma 
+        surface. will be filled with zeros by default. 
+    quadpoints_phi : ndarray, shape (nphi,)
+        (Traced) The toroidal quadrature points to evaluate quantities at. 
+    quadpoints_theta : ndarray, shape (ntheta,)
+        (Traced) The poloidal quadrature points to evaluate quantities at. 
+    
+    nfp: int
+        (Static) The number of field periods.
+    stellsym: bool
+        (Static) Stellarator symmetry.
+    mpol: int
+        (Static) The number of poloidal Fourier harmonics in :math:`\Phi_{sv}`.
+    ntor: int
+        (Static) The number of toroidal Fourier harmonics in :math:`\Phi_{sv}`.
+    ndofs: int
+        (Static) The number of degrees of freedom in :math:`\Phi_{sv}`.
+    ndofs_half: int
+        (Static) ``ndof`` if ``stellsym==True``, ``ndof//2`` otherwise. 
+
+    Methods
+    -------
+    make_mn()
+        Generates 2 ``array(int)`` of Fourier mode numbers, :math:`m` and :math:`n`, that
+        gives the :math:`m` and :math:`n` of the corresponding element in 
+        ``self.dofs``. Caches.
+    Kdash_helper()
+        Calculates a series of quantities related to the derivative of :math:`\mathbf{K}`.
+        Caches.
+    diff_helper()
+        A helper for differentiating :math:`\Phi_{sv}`. Caches.
+    """
     def __init__(
         self,
         plasma_surface: SurfaceRZFourierJAX, 
@@ -71,7 +148,16 @@ class QuadcoilParams:
     @jit
     def make_mn(self):
         """
-        Make the list of m and n values. Equivalent to CurrentPotential.make_mn.
+        Generates 2 ``array(int)`` of Fourier mode numbers, :math:`m` and :math:`n`, that
+        gives the :math:`m` and :math:`n` of the corresponding element in 
+        ``self.dofs``. Equivalent to CurrentPotential.make_mn. Caches. 
+
+        Returns
+        -------
+        m : ndarray
+            An array of ints storing the poloidal Fourier mode numbers. Shape: (ndofs)
+        n : ndarray
+            An array of ints storing the toroidal Fourier mode numbers. Shape: (ndofs)
         """
         mpol = self.mpol
         ntor = self.ntor
@@ -87,20 +173,24 @@ class QuadcoilParams:
         if not stellsym:
             m = jnp.append(m, m)
             n = jnp.append(n, n)
-        return(m, n)
+        return m, n
     
     @lru_cache()
     @jit
     def Kdash_helper(self):
         '''
-        Calculates the following quantity
-        - Kdash1_sv_op, Kdash2_sv_op: 
-        Partial derivatives of K in term of Phi (current potential) harmonics.
-        Shape: (n_phi, n_theta, 3(xyz), n_dof)
-        - Kdash1_const, Kdash2_const: 
-        Partial derivatives of K due to secular terms (net poloidal/toroidal 
-        currents). 
-        Shape: (n_phi, n_theta, 3(xyz))
+        Calculates the following quantities. Caches.
+
+        Returns
+        -------
+        Kdash1_sv_op: ndarray, shape (n_phi, n_theta, 3(xyz), n_dof)
+        Kdash2_sv_op: ndarray, shape (n_phi, n_theta, 3(xyz), n_dof)
+            Partial derivatives of K in term of Phi (current potential) harmonics.
+            Shape: (n_phi, n_theta, 3(xyz), n_dof)
+        Kdash1_const: ndarray, shape (n_phi, n_theta, 3(xyz))
+        Kdash2_const: ndarray, shape (n_phi, n_theta, 3(xyz))
+            Partial derivatives of the part of K due produced by the 
+            uniform current from the net poloidal/toroidal currents. 
         '''
         normal = self.eval_surface.normal()
         gammadash1 = self.eval_surface.gammadash1()
@@ -191,20 +281,24 @@ class QuadcoilParams:
     ])
     def diff_helper(self, winding_surface_mode=False):
         '''
-        Calculates the following quantity:
-        - trig_m_i_n_i, trig_diff_m_i_n_i: 
-        IFT operator that transforms even/odd derivatives of Phi harmonics
-        produced by partial_* (see below). 
-        Shape: (n_phi, n_theta, n_dof)
-        - partial_theta, partial_phi, ... ,partial_phi_theta,
-        A partial derivative operators that works by multiplying the harmonic
-        coefficients of Phi by its harmonic number and a sign, depending whether
-        the coefficient is sin or cos. DOES NOT RE-ORDER the coefficients
-        into the simsopt conventions. Therefore, IFT for such derivatives 
-        must be performed with trig_m_i_n_i and trig_diff_m_i_n_i (see above).
+        Calculates the following quantities. Caches. 
 
-        When winding_surface_mode is set to True, uses the winding surface's quadpoints 
-        instead. This will be used in K(winding_surface_mode=True), which is used in B calculations.
+        Returns
+        -------
+        trig_m_i_n_i: ndarray, shape (n_phi, n_theta, n_dof)
+        trig_diff_m_i_n_i: ndarray, shape (n_phi, n_theta, n_dof)
+            IFT operator that performs IFT on an array of Fourier harmonics of
+            :math:`Phi_{sv}` or its derivatives (see below).
+        partial_phi: ndarray, shape (n_dof, n_dof)
+        partial_theta: ndarray, shape (n_dof, n_dof)
+        partial_phi_phi: ndarray, shape (n_dof, n_dof)
+        partial_phi_theta: ndarray, shape (n_dof, n_dof)
+        partial_theta_theta: ndarray, shape (n_dof, n_dof)
+            Partial derivative operators that works by multiplying the harmonic
+            coefficients of :math:`Phi_{sv}` by its harmonic number and a sign, depending whether
+            the coefficient is sin or cos. DOES NOT RE-ORDER the coefficients
+            into the simsopt conventions. Therefore, IFT for such derivatives 
+            must be performed with trig_m_i_n_i and trig_diff_m_i_n_i (see above).
         '''
         
         nfp = self.nfp

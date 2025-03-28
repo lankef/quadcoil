@@ -2,9 +2,23 @@ from . import objective
 import jax.numpy as jnp
 
 def get_objective(func_name: str):
-    # Takes a string as input and returns 
-    # the function with the same name in quadcoil.objective.
-    # throws an error 
+    '''
+    Takes a string as input and returns the function with the 
+    same name in ``quadcoil.objective``.
+    throws an error if a function with the same name cannot be found.
+    Used to parse ``str`` in ``quadcoil.quadcoil``.
+
+    Parameters
+    ----------  
+    func_name : str
+        Name of the function to find. 
+    
+    Returns
+    -------
+    callable
+        A callable with the same name in ``quadcoil.objective``.
+    '''
+    
     if hasattr(objective, func_name):
         func = getattr(objective, func_name)
         if callable(func):
@@ -15,10 +29,22 @@ def get_objective(func_name: str):
         raise ValueError(f"Function with name '{func_name}' not found in quadcoil.objective.")
 
 def merge_callables(callables):
-    # Merge a list of functions that 
-    # takes 2 arguments (all functions in the objective submodule does)
-    # and combine/flatten their output into 1 big 1d array. 
-    # Used to construct constraints.
+    '''
+    Merge a tuple of ``callable``s into one that 
+    takes 2 arguments (all functions in the ``quadcoil.objective`` do),
+    by flattening and concatenating their outputs into an 1D ``array``. 
+    Used to construct constraints.
+
+    Parameters
+    ----------  
+    callables : tuple of callables
+        The callables to merge. 
+    
+    Returns
+    -------
+    callable
+        A callable that returns a 1D ``array``
+    '''
     def merged_fn(qp, cp_mn):
         outputs = [fn(qp, cp_mn) for fn in callables]
         # Convert scalars to 1D arrays
@@ -32,28 +58,90 @@ def merge_callables(callables):
     
     return merged_fn
     
-def parse_objectives(objective_name, objective_weight=None): # , objective_unit=None):
-    # Converts a tuple of strings (or a single string for one objective only) 
-    # and an array of weights into a callable f_tot(a, b) that outputs the weighted 
-    # sum of f(a, b). 
+def parse_objectives(objective_name, objective_unit=None, objective_weight=1.): 
+    '''
+    Parses a tuple of ``str`` quantities names (or a single ``str`` for one objective only), 
+    an array of weights, and a tuple of units into a ``callable`` 
+    that outputs the weighted sum of the corresponding functions in ``quadcoil.objectives``. 
+
+    Parameters
+    ----------  
+    objective_name : str or tuple of str
+        The name of the quantities to combine into an objective funtion. 
+        The corresponding functions must all return scalars.
+    objective_weight : float or array of float, optional, default=1
+        The weight(s) of each objective terms.
+    objective_unit : float or tuple of float, optional, default=None
+        The normalization factor of each objective term. If set to ``None``
+        or a `tuple` with ``None``, then the corresponding objective will 
+        be normalized with its value when the current is uniform.
+        (or in other words, :math:`\Phi_{sv}=0`).
+
+    Returns
+    -------
+    f_tot : callable(QuadcoilParams, ndarray)
+        The weighted objective function that maps a QuadcoilParams 
+        and an array of :math:`\Phi_{sv}` Fourier coefficients into a scalar.
+    '''
     if isinstance(objective_name, str):
-        return get_objective(objective_name)
+        def f_tot(a, b, objective_unit=objective_unit):
+            if objective_unit is None:
+                # If a normalization unit is not provided, automatically 
+                # normalize by the value of the objective with 
+                # only the constant net poloidal and toroidal currents.
+                objective_unit = get_objective(objective_name)(a, jnp.zeros_like(b))
+            return get_objective(objective_name)(a, b) * objective_weight / objective_unit
+        return(f_tot)
     else:
         if len(objective_name) != len(objective_weight): # or len(objective_name) != len(objective_unit):
             raise ValueError('objective, objective_weight and objective_unit must have the same length.')
-        def f_tot(a, b):
+        def f_tot(a, b, objective_unit=objective_unit):
             out = 0
             for i in range(len(objective_name)):
-                out = out + get_objective(objective_name[i])(a, b) * objective_weight[i]
+                if objective_unit[i] is None:
+                    # If a normalization unit is not provided, automatically 
+                    # normalize by the value of the objective with 
+                    # only the constant net poloidal and toroidal currents.
+                    objective_unit_i = get_objective(objective_name[i])(a, jnp.zeros_like(b))
+                else:
+                    objective_unit_i = objective_unit[i]
+                out = out + get_objective(objective_name[i])(a, b) * objective_weight[i] / objective_unit_i
             return out
         return f_tot
 
 def parse_constraints(
-    constraint_name, # A tuple of function names in quadcoil.objective.
-    constraint_type, # A tuple of strings from ">=", "<=", "==".
-    constraint_unit, # A tuple of UNTRACED float/ints giving the constraints' order of magnitude.
-    constraint_value, # An array of TRACED floats giving the constraint targets.
+    constraint_name, 
+    constraint_type, 
+    constraint_unit, 
+    constraint_value, 
 ):
+    '''
+    Parses a series of tuples and arrays specifying the quantities, 
+    types (``'>=', '<=', '=='``)
+
+    Parameters
+    ----------  
+    constraint_name : tuple of str 
+        A tuple of quantity names in ``quadcoil.objective``. The corresponding 
+        quantity can be both scalars or a vector fields (``ndarray``).
+    constraint_type : tuple of str 
+        A tuple of strings. Must consists of ``'>=', '<=', '=='`` only.
+    constraint_unit : tuple of float, may contain None
+        A tuple of float/ints giving the constraints' order of magnitude.
+        If a corresponding element is None, will normalize by the value of the objective 
+        when the poloidal/toroidal current is uniform.
+    constraint_value : array(float)
+        An array of constraint thresholds.
+
+    Returns
+    -------
+    g_ineq : callable(QuadcoilParams, ndarray)
+        A ``callable`` for the inequality constraints. Returns will be 
+        greater than 0 when the constraints are violated.
+    h_eq : callable(QuadcoilParams, ndarray)
+        A ``callable`` for the equality constraints. Returns will be 
+        non-zero when the constraints are violated.
+    '''
     # Outputs g_ineq and h_ineq for the augmented lagrangian solver:
     # min f(x)
     # subject to 
@@ -94,11 +182,11 @@ def parse_constraints(
             cons_val_i=cons_val_i,
             sign=sign_i
         ): 
-            # # When the unit of a quantity is left blank,
-            # # automatically scale that quantity by its value
-            # # with only net poloidal/toroidal currents.
-            # if cons_unit_i is None:
-            #     cons_unit_i = cons_func_i(a, jnp.zeros_like(b))
+            # When the unit of a quantity is left blank,
+            # automatically scale that quantity by its value
+            # with only net poloidal/toroidal currents.
+            if cons_unit_i is None:
+                cons_unit_i = cons_func_i(a, jnp.zeros_like(b))
             # Scaling and centering constraints
             return sign * (cons_func_i(a, b) - cons_val_i) / cons_unit_i
         # Creating a list of function in h and g.

@@ -13,7 +13,7 @@ class QuadcoilKTest(unittest.TestCase):
     def test_regcoil(self):
         # First, test with the NESCOIL problem, auto-generating WS
         print('Testing NESCOIL, with auto-generated winding surface')
-        nescoil_phi_mn, nescoil_out_dict, nescoil_qp = quadcoil(
+        nescoil_phi_mn, nescoil_out_dict, nescoil_qp, _ = quadcoil(
             nfp=cp.nfp,
             stellsym=cp.stellsym,
             mpol=cp.mpol,
@@ -44,7 +44,7 @@ class QuadcoilKTest(unittest.TestCase):
         
         # First, test with the REGCOIL problem, auto-generating WS
         print('Testing REGCOIL, with auto-generated winding surface')
-        regcoil1_phi_mn, regcoil1_out_dict, regcoil1_qp = quadcoil(
+        regcoil1_phi_mn, regcoil1_out_dict, regcoil1_qp, _ = quadcoil(
             nfp=cp.nfp,
             stellsym=cp.stellsym,
             mpol=cp.mpol,
@@ -80,7 +80,7 @@ class QuadcoilKTest(unittest.TestCase):
 
         # Then, test with REGCOIL, given winding surface.
         print('Testing REGCOIL, with known winding surface')
-        regcoil2_phi_mn, regcoil2_out_dict, regcoil2_qp = quadcoil(
+        regcoil2_phi_mn, regcoil2_out_dict, regcoil2_qp, _ = quadcoil(
             nfp=cp.nfp,
             stellsym=cp.stellsym,
             mpol=cp.mpol,
@@ -130,7 +130,7 @@ class QuadcoilKTest(unittest.TestCase):
             plasma_dof_i[0] *= (1 + i)
             # Run QUADCOIL first
             time1 = time.time()
-            regcoili_phi_mn, regcoili_out_dict, regcoili_qp = quadcoil(
+            regcoili_phi_mn, regcoili_out_dict, regcoili_qp, _ = quadcoil(
                 nfp=cp.nfp,
                 stellsym=cp.stellsym,
                 mpol=cp.mpol,

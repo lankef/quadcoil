@@ -7,12 +7,12 @@ from jax.lax import while_loop
 
 lstsq_vmap = vmap(jnp.linalg.lstsq)
 
-def wl_debug(cond_fun, body_fun, init_val):
-    val = init_val
-    iter_num_wl = 1
-    while cond_fun(val):
-        val = body_fun(val)
-    return val
+# def wl_debug(cond_fun, body_fun, init_val):
+#     val = init_val
+#     iter_num_wl = 1
+#     while cond_fun(val):
+#         val = body_fun(val)
+#     return val
 
 run_opt_lbfgs = lambda init_params, fun, maxiter, ftol, xtol, gtol: \
     run_opt_optax(init_params, fun, maxiter, ftol, xtol, gtol, opt=optax.lbfgs())
