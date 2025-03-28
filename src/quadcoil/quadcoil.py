@@ -98,7 +98,7 @@ def quadcoil(
     # Quadcoil objective terms, weights, and units
     # objective_unit differ in that they are not differentiated wrt.
     # They also exist to aid readability.
-    objective_name='f_B_normalized_by_Bnormal_IG',
+    objective_name='f_B',
     objective_weight=None,
     objective_unit=None,
     # - Quadcoil constraints
@@ -375,7 +375,16 @@ def quadcoil(
     # A function that handles the parameter-dependence
     # of all objective functions. 
     # Maps parameters (dict) -> f, g, h, (callables, x -> scalar, arr, arr)
-    def f_g_ineq_h_eq_from_y(y_dict):  
+    def f_g_ineq_h_eq_from_y(
+            y_dict,
+            objective_name=objective_name,
+            objective_unit=objective_unit,
+            constraint_name=constraint_name,
+            constraint_type=constraint_type,
+            constraint_unit=constraint_unit,
+            constraint_value=constraint_value,
+            cp_mn_unit=cp_mn_unit,
+        ):  
         qp_temp = y_to_qp(y_dict)
         f_obj = parse_objectives(
             objective_name=objective_name, 

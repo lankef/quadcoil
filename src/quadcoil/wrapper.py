@@ -58,7 +58,7 @@ def merge_callables(callables):
     
     return merged_fn
     
-def parse_objectives(objective_name, objective_unit=None, objective_weight=1.): 
+def parse_objectives(objective_name, objective_unit=None, objective_weight=None): 
     '''
     Parses a tuple of ``str`` quantities names (or a single ``str`` for one objective only), 
     an array of weights, and a tuple of units into a ``callable`` 
@@ -84,18 +84,30 @@ def parse_objectives(objective_name, objective_unit=None, objective_weight=1.):
         and an array of :math:`\Phi_{sv}` Fourier coefficients into a scalar.
     '''
     if isinstance(objective_name, str):
-        def f_tot(a, b, objective_unit=objective_unit):
+        def f_tot(
+            a, b, 
+            objective_name=objective_name, 
+            objective_unit=objective_unit, 
+            objective_weight=objective_weight
+        ):
             if objective_unit is None:
                 # If a normalization unit is not provided, automatically 
                 # normalize by the value of the objective with 
                 # only the constant net poloidal and toroidal currents.
                 objective_unit = get_objective(objective_name)(a, jnp.zeros_like(b))
+            if objective_weight is None:
+                objective_weight=1
             return get_objective(objective_name)(a, b) * objective_weight / objective_unit
         return(f_tot)
     else:
         if len(objective_name) != len(objective_weight): # or len(objective_name) != len(objective_unit):
             raise ValueError('objective, objective_weight and objective_unit must have the same length.')
-        def f_tot(a, b, objective_unit=objective_unit):
+        def f_tot(
+                a, b, 
+                objective_name=objective_name, 
+                objective_unit=objective_unit, 
+                objective_weight=objective_weight
+            ):
             out = 0
             for i in range(len(objective_name)):
                 if objective_unit[i] is None:
@@ -176,12 +188,12 @@ def parse_constraints(
         # callable without running into the objective_weightbda reference 
         # issue.
         def cons_func_centered_i(
-            a, b, 
-            cons_func_i=cons_func_i, 
-            cons_unit_i=cons_unit_i, 
-            cons_val_i=cons_val_i,
-            sign=sign_i
-        ): 
+                a, b, 
+                cons_func_i=cons_func_i, 
+                cons_unit_i=cons_unit_i, 
+                cons_val_i=cons_val_i,
+                sign=sign_i
+            ): 
             # When the unit of a quantity is left blank,
             # automatically scale that quantity by its value
             # with only net poloidal/toroidal currents.
