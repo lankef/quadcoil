@@ -48,7 +48,7 @@ and the integrated current density :math:`f_K`.
 
 Now, we will go over the 4 outputs from ``quadcoil.quadcoil`` one by one.
 
-1. ``out_dict`` - Coil metrics and gradients
+``out_dict`` - Coil metrics and gradients
 ------------------------------------------------------------------
 ``out_dict`` is the most important output. It is a nested dict containing the 
 value and gradients of the coil quality metrics selected by ``metric_name``. 
@@ -84,7 +84,7 @@ that is organized by the name of the independent variable. This list will change
 based on whether multi-objective optimization is enabled, constraints are present, 
 or the winding surface is auto-generated/provided.
 
-2. ``qp`` - Problem configurations
+``qp`` - Problem configurations
 ---------------------------------------------------------------------
 ``qp : QuadcoilParams`` is an objects that contains information on the plasma boundary, 
 winding surface, net currents and resolutions. Together, ``qp`` and ``phi_mn`` contains 
@@ -95,7 +95,7 @@ It **does not** contain the objective and constraint choices.
 ``qp.winding_surface.to_simsopt()`` and ``qp.winding_surface.to_simsopt()`` 
 exports both surfaces as ``simsopt.geo.SurfaceRZFourier``.
 
-3. ``phi_mn`` - :math:`\Phi_{sv}` in Fourier representation 
+``phi_mn`` - :math:`\Phi_{sv}` in Fourier representation 
 ---------------------------------------------------------------------
 ``phi_mn`` is an ``ndarray`` storing the Fourier coefficients of :math:`\Phi_{sv}`.
 It uses the same convention as ``simsopt.field.CurrentPotentialFourier`` in the ``regcoil``
