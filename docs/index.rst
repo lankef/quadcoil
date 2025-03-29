@@ -24,7 +24,7 @@ Installation
 QUADCOIL requires JAX. For the JAX installation guide, see `here <https://docs.jax.dev/en/latest/installation.html>`_. 
 
 Option 1: GitHub + ``pip``
-~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Clone the `QUADCOIL source files  <https://github.com/lankef/quadcoil>`_, 
 and then run:
@@ -45,7 +45,7 @@ Publications
 
 
 .. toctree::
-   :maxdepth: 4
+   :maxdepth: 1
    :caption: Contents:
 
    math
