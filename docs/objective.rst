@@ -72,7 +72,7 @@ These objectives are related to the magnetic field on the plasma surface:
      - Scalar
      - The integrated normal field error. Also the NESCOIL objective.
    * - ``'f_B_normalized_by_Bnormal_IG'``
-     - :math:`\frac{f_B}{f_B\|_\text{net currents only}}`
+     - :math:`\frac{f_B}{f_B(\Phi_{sv}=0)}`
      - Scalar
      - :math:`f_B`, normalized by its value with only the net toroidal and poloidal currents.
    * - ``'f_max_Bnormal_abs'``

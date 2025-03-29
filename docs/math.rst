@@ -23,5 +23,13 @@ density of a dipole array pointing perpendicular to the winding surface.
 The second and third terms represent contributions from the net poloidal current :math:`G` and 
 the net toroidal current :math:`I`. :math:`G` is determined by the equilibrium, and :math:`I` is a free variable.
 
+QUADCOIL solves the constrained optimization problem:
 
+.. math::
 
+   \Phi^*_{sv} = &\text{argmin}_{\Phi_{sv}} \Sigma_i\lambda_i f_i(\Phi_{sv}),
+   &\text{subject to } g_j(\Phi_{sv}) \leq \text{ or } \geq\text{ or } = p_j \\
+   ...
+
+Here, :math:`f_i` can be any supported scalar quantity(ies), and :math:`g_j` can be 
+any supported scalars or fields. See :ref:`available_quantities` for the list of supported quantities.

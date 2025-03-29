@@ -319,13 +319,10 @@ QUADCOIL supports both equality and inequality constraints, on scalar quantities
 
 .. math::
 
-    ...\\
-    \frac{g_j(\Phi_{sv})}{b_j}\leq \text{ or } \geq\text{ or } = p_j \\
-    ...\\
-    \frac{h_k(\Phi_{sv})}{e_k} = q_k \\
+    \frac{g_j(\Phi_{sv})}{b_j}\leq \text{ or } \geq\text{ or } = \frac{p_j}{b_j} \\
     ...
 
-Like in multi-objective optimization, :math:`\nabla_{p_j}` and :math:`\nabla_{q_k}` will be available, but **not** :math:`\nabla_{b_j}` or :math:`\nabla_{e_k}`.
+Like in multi-objective optimization, QUADCOIL will calculate :math:`\nabla_{p_j}`, but not :math:`\nabla_{b_j}`.
 
 .. list-table::
    :header-rows: 1
@@ -345,13 +342,13 @@ Like in multi-objective optimization, :math:`\nabla_{p_j}` and :math:`\nabla_{q_
    * - ⭐ ``constraint_unit``
      - ``tuple`` of ``float``, traced
      - ``()``
-     - A tuple of normalization constants, :math:`b_j` and :math:`e_k`.
+     - A tuple of normalization constants, :math:`b_j`, so that :math:`g_j/b_j` and :math:`p_j/b_j\approx O(1)`. If an element is ``None``, :math:`a_i` will be set to :math:`f_i(\Phi_{sv}=0)`.
    * - ⭐ ``constraint_value``
      - ``ndarray``, traced
      - ``()``
-     - An array of constraint thresholds, :math:`p_j` and :math:`q_k`.
+     - An array of constraint thresholds, :math:`p_j`.
 
-6. Setting coil metrics
+1. Setting coil metrics
 ---------------------------
 
 We are almost there. After an optimum coil set :math:`\Phi^*_{sv}` is found, QUADCOIL will evaluate a list of coil quality metrics :math:`M_l(\Phi^*_{sv})`. Derivatives w.r.t. the following quantities will also be available:
