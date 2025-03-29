@@ -94,8 +94,8 @@ For readability, we label:
 
 For more info on the available quantities in QUADCOIL, see :ref:`available_quantities`.
 
-Defining the plasma boundary
-----------------------------
+1. Defining the plasma boundary
+----------------------------------------
 
 We first look at parameters defining the plasma boundary. QUADCOIL currently only supports :math:`(R, Z)` Fourier surfaces. The plasma boundary parameters uses the conventions in ``simsopt.geo.surfaceRZFourier``. More surface implementations will be added.
 
@@ -141,8 +141,8 @@ We first look at parameters defining the plasma boundary. QUADCOIL currently onl
 
 Here, ``plasma.dofs`` can be obtained from Simsopt using ``simsopt.geo.SurfaceRZFourier.get_dofs()``.
 
-Setting net currents and resolutions
-------------------------------------
+2. Setting net currents and resolutions
+------------------------------------------
 
 These parameters defines basic properties of the sheet current solutions.
 
@@ -182,8 +182,8 @@ These parameters defines basic properties of the sheet current solutions.
      - :math:`\sqrt{G^2 + I^2}` if it is non-zero, :math:`\frac{d_{cs}B_\text{normal}^\text{plasma}}{\mu_0}` otherwise.
      - A normalization constant :math:`a_\Phi`, so that :math:`\Phi_{sv}`'s Fourier coefficients satisfy :math:`\Phi_{sv, M, N}/a_\Phi\approx O(1)`. Automatically calculated by default.
 
-Choosing the winding surface
-----------------------------
+3. Choosing the winding surface
+--------------------------------------------
 
 The winding surface can either be generated automatically or specified.
 
@@ -253,8 +253,8 @@ QUADCOIL can also run on a known winding surface for tasks such as blanket optim
      - ``jnp.linspace(0, 1, 32, endpoint=False)``
      - Poloidal quadrature points on the winding surface for evaluating integrals.
 
-Choosing the objective function(s)
-----------------------------------
+4. Choosing the objective function(s)
+----------------------------------------
 
 QUADCOIL can perform single or multi-objective optimization. Objectives and constraints in QUADCOIL must be selected from :ref:`available_quantities` by entering their names as ``str``\s. The quantity selected as objective(s) must have scalar output.
 
@@ -312,8 +312,8 @@ To select multi-objective mode, pass a ``tuple`` as ``objective_name``. ``object
      - ``None``
      - A tuple of normalization constants :math:`a_i`. If an element is ``None``, :math:`a_i` will be set to :math:`f_i(\Phi_{sv}=0)`.
 
-Setting constraints
--------------------
+5. Setting constraints
+--------------------------
 
 QUADCOIL supports both equality and inequality constraints, on scalar quantities or fields:
 
@@ -351,8 +351,8 @@ Like in multi-objective optimization, :math:`\nabla_{p_j}` and :math:`\nabla_{q_
      - ``()``
      - An array of constraint thresholds, :math:`p_j` and :math:`q_k`.
 
-Setting coil metrics
---------------------
+6. Setting coil metrics
+---------------------------
 
 We are almost there. After an optimum coil set :math:`\Phi^*_{sv}` is found, QUADCOIL will evaluate a list of coil quality metrics :math:`M_l(\Phi^*_{sv})`. Derivatives w.r.t. the following quantities will also be available:
 
@@ -377,7 +377,8 @@ We still choose these metrics by giving a ``tuple`` containing their names:
      - ``('f_B', 'f_K')``
      - A tuple of metric names.
 
-## 7. (Optional) Tweaking the augmented Lagrangian solver
+7. (Optional) Tweaking the augmented Lagrangian solver
+-------------------------------------------------------------------------
 
 The augmented Lagrangian solver can be fine-tuned for a specific problem if the default parameters do not yield sufficiently accurate results.
 
