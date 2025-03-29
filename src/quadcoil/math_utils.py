@@ -3,7 +3,7 @@ from jax import jit
 
 
 def sin_or_cos(x, mode):
-    '''
+    r'''
     Scans a pair of arrays, ``x`` and ``mode``. Where ``mode==1``, return ``jnp.sin(x)``. 
     Otherwise return ``jnp.cos(x)``. Used in inverse Fourier Transforms.
 
@@ -22,7 +22,7 @@ def sin_or_cos(x, mode):
 
 @jit
 def norm_helper(vec):
-    '''
+    r'''
     Calculates :math:`|v|` and :math:`1/|v|` for a vector field
     on a 2d surface. 
 
@@ -51,7 +51,7 @@ def norm_helper(vec):
 def project_arr_coord(
     operator, 
     unit1, unit2, unit3):
-    '''
+    r'''
     Project an array of vector fields on a 2d surface
     in a given basis, ``unit1, unit2, unit3``.
 
@@ -100,7 +100,7 @@ def project_arr_cylindrical(
         gamma, 
         operator,
     ):
-    '''
+    r'''
     Project a stack of vector fields onto a cylindrical 
     coordinate for a given set of coordinate points.
 

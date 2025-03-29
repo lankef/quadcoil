@@ -59,17 +59,17 @@ import jax.numpy as jnp
 def quadcoil(
     nfp:int,
     stellsym:bool,
-    mpol:int,
-    ntor:int,
     plasma_mpol:int,
     plasma_ntor:int,
     plasma_dofs,
     net_poloidal_current_amperes:float,
-    net_toroidal_current_amperes:float,
     
     # -- Defaults --
     
     # - Quadcoil parameters
+    net_toroidal_current_amperes:float=0.,
+    mpol:int=4,
+    ntor:int=4,
     # Quadpoints to evaluate objectives at
     quadpoints_phi=None,
     quadpoints_theta=None,
@@ -112,17 +112,17 @@ def quadcoil(
     # - Solver options
     c_init=1.,
     c_growth_rate=1.1,
-    ftol_outer=1e-5, # constraint tolerance
-    ctol_outer=1e-5, # constraint tolerance
-    xtol_outer=1e-5, # convergence rate tolerance
-    gtol_outer=1e-5, # gradient tolerance
-    ftol_inner=1e-5,
-    xtol_inner=1e-5,
-    gtol_inner=1e-5,
+    ftol_outer=1e-7, # convergence rate tolerance
+    ctol_outer=1e-7, # constraint tolerance
+    xtol_outer=1e-7, # convergence rate tolerance
+    gtol_outer=1e-7, # gradient tolerance
+    ftol_inner=1e-7,
+    xtol_inner=0.,
+    gtol_inner=1e-7,
     maxiter_inner=1500,
     maxiter_outer=50,
 ):
-    '''
+    r'''
     Solves a QUADCOIL problem.
 
     Parameters
@@ -131,23 +131,23 @@ def quadcoil(
         (Static) The number of field periods.
     stellsym : bool
         (Static) Stellarator symmetry.
-    mpol: int
+    plasma_mpol
+        (Static) The number of poloidal Fourier harmonics in the plasma boundary.
+    plasma_ntor
+        (Static) The number of toroidal Fourier harmonics in the plasma boundary.
+    plasma_dofs
+        (Static) The plasma surface degrees of freedom. Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()`` covention.
+    net_poloidal_current_amperes: float
+        (Traced) The net poloidal current :math:`G`.
+    net_toroidal_current_amperes: float, optional, default=0
+        (Traced) The net toroidal current :math:`I`.
+    mpol: int, optional, default=4
         (Static) The number of poloidal Fourier harmonics in the current potential :math:`\Phi_{sv}`,
         which represents the sheet current by 
         :math:`\mathbf{K} = \hat{\mathbf{n}}\times\nabla(\Phi_{sv} + \frac{G\phi'}{2\pi} + \frac{I\theta'}{2\pi})`,
         where :math:`G` is the net poloidal current, and :math:`I` is the net toroidal current.
-    ntor: int
+    ntor: int, optional, default=4
         (Static) The number of toroidal Fourier harmonics in :math:`\Phi_{sv}`.
-    plasma_mpol,
-        (Static) The number of poloidal Fourier harmonics in the plasma boundary.
-    plasma_ntor,
-        (Static) The number of toroidal Fourier harmonics in the plasma boundary.
-    plasma_dofs,
-        (Static) The plasma surface degrees of freedom. Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()`` covention.
-    net_poloidal_current_amperes: float
-        (Traced) The net poloidal current :math:`G`.
-    net_toroidal_current_amperes: float
-        (Traced) The net toroidal current :math:`I`.
     quadpoints_phi : ndarray, shape (nphi,), optional, default=None
         (Traced) The poloidal quadrature points on the winding surface to evaluate the objectives at.
         Uses one period from the winding surfacee by default.
@@ -202,29 +202,29 @@ def quadcoil(
         (Static) The names of the functions to diagnose the coil configurations with. Will be differentiated 
         w.r.t. other input quantities.  
     c_init : float, optional, default=1.
-        (Traced) The :math:`c` factor. Please see Constrained Optimization
-        and Lagrange Multiplier Methods Chapter 3. 
+        (Traced) The initial :math:`c` factor. Please see
+        *Constrained Optimization and Lagrange Multiplier Methods* Chapter 3.
     c_growth_rate : float, optional, default=1.1
         (Traced) The growth rate of the :math:`c` factor.
-    ftol_outer : float, optional, default=1e-5
+    ftol_outer : float, optional, default=1e-7
         (Traced) Constraint tolerance of the outer augmented 
         Lagrangian loop. Terminates when any is satisfied. 
-    ctol_outer : float, optional, default=1e-5
+    ctol_outer : float, optional, default=1e-7
         (Traced) Constraint tolerance of the outer augmented 
         Lagrangian loop. Terminates when any is satisfied. 
-    xtol_outer : float, optional, default=1e-5
+    xtol_outer : float, optional, default=1e-7
         (Traced) Convergence rate tolerance of the outer augmented 
         Lagrangian loop. Terminates when any is satisfied. 
-    gtol_outer : float, optional, default=1e-5
+    gtol_outer : float, optional, default=1e-7
         (Traced) Gradient tolerance of the outer augmented 
         Lagrangian loop. Terminates when any is satisfied. 
-    ftol_inner : float, optional, default=1e-5
+    ftol_inner : float, optional, default=1e-7
         (Traced) Gradient tolerance of the inner LBFGS 
         iteration. Terminates when any is satisfied. 
-    xtol_inner : float, optional, default=1e-5
+    xtol_inner : float, optional, default=0
         (Traced) Gradient tolerance of the inner LBFGS 
         iteration. Terminates when any is satisfied. 
-    gtol_inner : float, optional, default=1e-5
+    gtol_inner : float, optional, default=1e-7
         (Traced) Gradient tolerance of the inner LBFGS 
         iteration. Terminates when any is satisfied. 
     maxiter_outer: int, optional, default=50
@@ -489,9 +489,10 @@ def quadcoil(
         # dfdy1, dfdy2 are both dicts.
         dfdy = {}
         for key in dfdy1.keys():
-            dfdy['df_d' + key] = -jnp.array(dfdy1[key]) + jnp.array(dfdy2[key])
+            if dfdy1[key] is not None and dfdy2[key] is not None:
+                dfdy['df_d' + key] = -jnp.array(dfdy1[key]) + jnp.array(dfdy2[key])
         out_dict[metric_name_i] = {
             'value': f_metric(x_k, y_dict_current), 
             'grad': dfdy
         }
-    return(cp_mn, out_dict, qp, solve_results)
+    return(out_dict, qp, cp_mn, solve_results)

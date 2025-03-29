@@ -13,7 +13,7 @@ from functools import lru_cache, partial
 '''
 @tree_util.register_pytree_node_class
 class QuadcoilParams:
-    """
+    r'''
     A class storing all informations required to solve a quadcoil 
     problem. These includes plasma info, winding surface info, but 
     does not include problem-specific info such as objectives, constraints
@@ -91,7 +91,7 @@ class QuadcoilParams:
         Caches.
     diff_helper()
         A helper for differentiating :math:`\Phi_{sv}`. Caches.
-    """
+    '''
     def __init__(
         self,
         plasma_surface: SurfaceRZFourierJAX, 
@@ -147,7 +147,7 @@ class QuadcoilParams:
     @lru_cache()
     @jit
     def make_mn(self):
-        """
+        r'''
         Generates 2 ``array(int)`` of Fourier mode numbers, :math:`m` and :math:`n`, that
         gives the :math:`m` and :math:`n` of the corresponding element in 
         ``self.dofs``. Equivalent to CurrentPotential.make_mn. Caches. 
@@ -158,7 +158,7 @@ class QuadcoilParams:
             An array of ints storing the poloidal Fourier mode numbers. Shape: (ndofs)
         n : ndarray
             An array of ints storing the toroidal Fourier mode numbers. Shape: (ndofs)
-        """
+        '''
         mpol = self.mpol
         ntor = self.ntor
         stellsym = self.stellsym
@@ -178,7 +178,7 @@ class QuadcoilParams:
     @lru_cache()
     @jit
     def Kdash_helper(self):
-        '''
+        r'''
         Calculates the following quantities. Caches.
 
         Returns
@@ -280,7 +280,7 @@ class QuadcoilParams:
         'winding_surface_mode',
     ])
     def diff_helper(self, winding_surface_mode=False):
-        '''
+        r'''
         Calculates the following quantities. Caches. 
 
         Returns

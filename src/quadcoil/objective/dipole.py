@@ -35,6 +35,10 @@ def Phi_abs(qp, cp_mn):
 @jit
 def f_max_Phi(qp, cp_mn):
     return jnp.max(jnp.abs(Phi(qp, cp_mn)))
+
+@jit
+def f_l1_Phi(qp, cp_mn):
+    return jnp.sum(jnp.abs(Phi(qp, cp_mn)))
     
 @jit
 def f_max_Phi2(qp, cp_mn):

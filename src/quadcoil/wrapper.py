@@ -2,7 +2,7 @@ from . import objective
 import jax.numpy as jnp
 
 def get_objective(func_name: str):
-    '''
+    r'''
     Takes a string as input and returns the function with the 
     same name in ``quadcoil.objective``.
     throws an error if a function with the same name cannot be found.
@@ -29,7 +29,7 @@ def get_objective(func_name: str):
         raise ValueError(f"Function with name '{func_name}' not found in quadcoil.objective.")
 
 def merge_callables(callables):
-    '''
+    r'''
     Merge a tuple of ``callable``s into one that 
     takes 2 arguments (all functions in the ``quadcoil.objective`` do),
     by flattening and concatenating their outputs into an 1D ``array``. 
@@ -59,7 +59,7 @@ def merge_callables(callables):
     return merged_fn
     
 def parse_objectives(objective_name, objective_unit=None, objective_weight=None): 
-    '''
+    r'''
     Parses a tuple of ``str`` quantities names (or a single ``str`` for one objective only), 
     an array of weights, and a tuple of units into a ``callable`` 
     that outputs the weighted sum of the corresponding functions in ``quadcoil.objectives``. 
@@ -94,7 +94,7 @@ def parse_objectives(objective_name, objective_unit=None, objective_weight=None)
                 # If a normalization unit is not provided, automatically 
                 # normalize by the value of the objective with 
                 # only the constant net poloidal and toroidal currents.
-                objective_unit = get_objective(objective_name)(a, jnp.zeros_like(b))
+                objective_unit = jnp.abs(get_objective(objective_name)(a, jnp.zeros_like(b)))
             if objective_weight is None:
                 objective_weight=1
             return get_objective(objective_name)(a, b) * objective_weight / objective_unit
@@ -127,7 +127,7 @@ def parse_constraints(
     constraint_unit, 
     constraint_value, 
 ):
-    '''
+    r'''
     Parses a series of tuples and arrays specifying the quantities, 
     types (``'>=', '<=', '=='``)
 
@@ -198,7 +198,7 @@ def parse_constraints(
             # automatically scale that quantity by its value
             # with only net poloidal/toroidal currents.
             if cons_unit_i is None:
-                cons_unit_i = cons_func_i(a, jnp.zeros_like(b))
+                cons_unit_i = jnp.max(jnp.abs(cons_func_i(a, jnp.zeros_like(b))))
             # Scaling and centering constraints
             return sign * (cons_func_i(a, b) - cons_val_i) / cons_unit_i
         # Creating a list of function in h and g.
