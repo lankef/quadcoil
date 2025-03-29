@@ -92,6 +92,8 @@ For readability, we label:
 - ⭐: Inputs required by optional features.
 - The rest are resolution and numerical settings that can be left to the defaults.
 
+For more info on the available quantities in QUADCOIL, see :ref:`available_quantities`.
+
 Defining the plasma boundary
 ----------------------------
 
@@ -254,7 +256,7 @@ QUADCOIL can also run on a known winding surface for tasks such as blanket optim
 Choosing the objective function(s)
 ----------------------------------
 
-QUADCOIL can perform single or multi-objective optimization. Objectives and constraints in QUADCOIL must be selected from the `list of available quantities <objective>`_ by entering their names as ``str``\s. The quantity selected as objective(s) must have scalar output.
+QUADCOIL can perform single or multi-objective optimization. Objectives and constraints in QUADCOIL must be selected from :ref:`available_quantities` by entering their names as ``str``\s. The quantity selected as objective(s) must have scalar output.
 
 Single-objective
 ~~~~~~~~~~~~~~~~

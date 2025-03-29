@@ -1,3 +1,5 @@
+.. _available_quantities:
+
 Available Quantities
 ====================
 
