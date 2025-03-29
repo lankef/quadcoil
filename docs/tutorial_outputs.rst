@@ -84,17 +84,18 @@ that is organized by the name of the independent variable. This list will change
 based on whether multi-objective optimization is enabled, constraints are present, 
 or the winding surface is auto-generated/provided.
 
-2. ``qp`` - The problem setup information.
+2. ``qp`` - Problem configurations
 ---------------------------------------------------------------------
 ``qp : QuadcoilParams`` is an objects that contains information on the plasma boundary, 
 winding surface, net currents and resolutions. Together, ``qp`` and ``phi_mn`` contains 
 all informations required to evaluate any physical quantities available in ``quadcoil.objective``.
+It **does not** contain the objective and constraint choices. 
 
 ``qp`` can be used to reconstruct the configuration in Simsopt. 
 ``qp.winding_surface.to_simsopt()`` and ``qp.winding_surface.to_simsopt()`` 
 exports both surfaces as ``simsopt.geo.SurfaceRZFourier``.
 
-3. ``phi_mn`` - The Fourier coefficients of :math:`\Phi_{sv}` 
+3. ``phi_mn`` - :math:`\Phi_{sv}` in Fourier representation 
 ---------------------------------------------------------------------
 ``phi_mn`` is an ``ndarray`` storing the Fourier coefficients of :math:`\Phi_{sv}`.
 It uses the same convention as ``simsopt.field.CurrentPotentialFourier`` in the ``regcoil``
@@ -103,6 +104,6 @@ branch of simsopt.
 Together, ``qp`` and ``phi_mn`` contains all informations required to evaluate any 
 physical quantities available in ``quadcoil.objective``. 
 
-``status`` - The end state of the augmented Lagrangian optimizer
+``status`` - Optimizer end state
 ---------------------------------------------------------------------
 
