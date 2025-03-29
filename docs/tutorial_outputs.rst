@@ -79,10 +79,11 @@ Its structure is:
     
 Here, we can see that the first level of the dictionary is organized by the 
 name of the metric, ``'f_B'`` and ``'f_K'``. The second level is organized into 
-two categories, ``'value'`` and ``'grad'``. The ``'grad'`` entry contains a third level, 
-that is organized by the name of the independent variable. This list will change 
-based on whether multi-objective optimization is enabled, constraints are present, 
-or the winding surface is auto-generated/provided.
+two categories, ``'value'`` and ``'grad'``. The ``'grad'`` entry contains a third level. 
+It is organized by the name of the independent variable of each gradient.
+The keys in the third level will change based on whether 
+multi-objective optimization is enabled, constraints are present, 
+and whether the winding surface is provided.
 
 ``qp`` - Problem configurations
 ---------------------------------------------------------------------
