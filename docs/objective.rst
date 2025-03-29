@@ -35,7 +35,7 @@ All members of ``quadcoil.objective`` require the same inputs:
 - ``qp : QuadcoilParams`` - Stores the plasma and winding surface information.
 - ``phi_mn : ndarray`` - The Fourier Coefficients of $\Phi_{sv}$ produced by ``quadcoil.quadcoil``.
 
-Notation:
+Notation
 ---------
 
 - :math:`\mathbf{B}`: The magnetic field on the plasma boundary.
