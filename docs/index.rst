@@ -7,6 +7,7 @@ the stellarator coil complexity proxy/global coil optimizer!
 .. image:: ./assets/title.png
    :alt: An example coil set for NCSX
    :align: center
+   :width: 300px
 
 QUADCOIL is a global coil optimization code that approximates coils with a smooth sheet current. 
 In other words, it's a "winding surface" code. However, unlike other winding surface codes, QUADCOIL:
@@ -15,16 +16,18 @@ In other words, it's a "winding surface" code. However, unlike other winding sur
 - Supports non-convex quadratic penalties/constraints, such as curvature 
   :math:`\mathbf{K} \cdot \nabla \mathbf{K}`.
 - Includes robust winding surface generators that do not produce self-intersections.
-- Is fully differentiable with respect to plasma shape, winding surface shape 
-  (if auto-generation is disabled), objective weights, and constraint thresholds.
+- Calculates derivatives with respect to plasma shape, winding surface shape, objective weights, and constraint thresholds.
 
 Installation
 ------------
 
-### Option 1: GitHub Download
+QUADCOIL requires JAX. For the JAX installation guide, see `here <https://docs.jax.dev/en/latest/installation.html>`_. 
 
-Clone the QUADCOIL source files from its `GitHub repository <https://github.com/lankef/quadcoil>`_, 
-and then install by:
+Option 1: GitHub + ``pip``
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Clone the `QUADCOIL source files  <https://github.com/lankef/quadcoil>`_, 
+and then run:
 
 .. code-block:: bash
 

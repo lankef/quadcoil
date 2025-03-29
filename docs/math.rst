@@ -17,8 +17,8 @@ with a "current potential" :math:`\Phi`:
    \Phi = \Phi_{sv} + \frac{G\phi'}{2\pi} + \frac{I\theta'}{2\pi}
 
 The first term represents contributions from a "single-valued" component, :math:`\Phi_{sv}`. 
-:math:`\Phi_{sv}` is the degree of freedom QUADCOIL solves for. It can also be thought of as a 
-dipole density distribution on the winding surface.
+:math:`\Phi_{sv}` is the degree of freedom QUADCOIL solves for. It can also be thought of as the
+density of a dipole array pointing perpendicular to the winding surface.
 
 The second and third terms represent contributions from the net poloidal current :math:`G` and 
 the net toroidal current :math:`I`. :math:`G` is determined by the equilibrium, and :math:`I` is a free variable.
