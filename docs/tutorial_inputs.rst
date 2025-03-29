@@ -1,4 +1,4 @@
-Tutorial 1: running QUADCOIL
+Tutorial I: running QUADCOIL
 ================================
 
 ``quadcoil.quadcoil()`` is a wrapper that performs all necessary steps needed to generate a sheet current coil set from a plasma boundary, given coil-plasma distance and other engineering requirements. These includes:

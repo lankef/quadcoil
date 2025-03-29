@@ -1,5 +1,5 @@
-Tutorial 2: interpreting outputs
-================================
+Tutorial II: interpreting outputs
+===================================
 
 This tutorial will explain how to interpret the output from QUADCOIL. 
 We illustrate this with the example in ``example/topology.ipynb``:

@@ -48,5 +48,7 @@ Publications
    math
    tutorial_inputs
    tutorial_outputs
+   tutorial_to_desc
+   tutorial_to_simsopt
    objective    
    quadcoil
