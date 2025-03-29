@@ -49,7 +49,7 @@ class SurfaceRZFourierJAX:
     def get_dofs(self):
         return(self.dofs.copy())
 
-    ''' Gamma '''
+    # ''' Gamma '''
     
     # Attention, gamma() evaluations are NOT cached 
     # like in simsopt to make the class look 
@@ -89,7 +89,7 @@ class SurfaceRZFourierJAX:
         normal = self.normal()
         return normal/jnp.linalg.norm(normal, axis=-1)[:, :, None]
 
-    ''' Other cached quantities '''
+    # ''' Other cached quantities '''
     @lru_cache()
     @jit
     def da(self):
@@ -107,14 +107,14 @@ class SurfaceRZFourierJAX:
     @lru_cache()
     @jit
     def grad_helper(self):
-        '''
-        This is a helper method that calculates the contravariant 
-        vectors, grad phi and grad theta, using the curvilinear coordinate 
-        identities:
-        - grad1: grad phi = (dg2 x (dg1 x dg2))/|dg1 x dg2|^2
-        - grad2: grad theta = -(dg1 x (dg2 x dg1))/|dg1 x dg2|^2
-        Shape: (n_phi, n_theta, 3(xyz))
-        '''
+        # '''
+        # This is a helper method that calculates the contravariant 
+        # vectors, grad phi and grad theta, using the curvilinear coordinate 
+        # identities:
+        # - grad1: grad phi = (dg2 x (dg1 x dg2))/|dg1 x dg2|^2
+        # - grad2: grad theta = -(dg1 x (dg2 x dg1))/|dg1 x dg2|^2
+        # Shape: (n_phi, n_theta, 3(xyz))
+        # '''
         dg2 = self.gammadash2()
         dg1 = self.gammadash1()
         dg1xdg2 = jnp.cross(dg1, dg2, axis=-1)
@@ -128,12 +128,12 @@ class SurfaceRZFourierJAX:
     @lru_cache()
     @jit
     def unitnormaldash(self):
-        ''' 
-        This is a helper method that calculates the following quantities:
-        - unitnormaldash1: d unitnormal/dphi
-        - unitnormaldash2: d unitnormal/dtheta
-        Shape: (n_phi, n_theta, 3(xyz))
-        '''
+        # ''' 
+        # This is a helper method that calculates the following quantities:
+        # - unitnormaldash1: d unitnormal/dphi
+        # - unitnormaldash2: d unitnormal/dtheta
+        # Shape: (n_phi, n_theta, 3(xyz))
+        # '''
         normal = self.normal()
         gammadash1 = self.gammadash1()
         gammadash2 = self.gammadash2()
@@ -170,14 +170,14 @@ class SurfaceRZFourierJAX:
     @lru_cache()
     @jit
     def dga_inv_n_dashb(self):
-        ''' 
-        This is a helper method that calculates the following quantities:
-        - dg1_inv_n_dash1: d[(1/|n|)(dgamma/dphi)]/dphi
-        - dg1_inv_n_dash2: d[(1/|n|)(dgamma/dphi)]/dtheta
-        - dg2_inv_n_dash1: d[(1/|n|)(dgamma/dtheta)]/dphi
-        - dg2_inv_n_dash2: d[(1/|n|)(dgamma/dtheta)]/dtheta
-        Shape: (n_phi, n_theta, 3(xyz))
-        '''
+        # ''' 
+        # This is a helper method that calculates the following quantities:
+        # - dg1_inv_n_dash1: d[(1/|n|)(dgamma/dphi)]/dphi
+        # - dg1_inv_n_dash2: d[(1/|n|)(dgamma/dphi)]/dtheta
+        # - dg2_inv_n_dash1: d[(1/|n|)(dgamma/dtheta)]/dphi
+        # - dg2_inv_n_dash2: d[(1/|n|)(dgamma/dtheta)]/dtheta
+        # Shape: (n_phi, n_theta, 3(xyz))
+        # '''
         normal = self.normal()
         # gammadash1() calculates partial r/partial phi. Keep in mind that the angles
         # in simsopt go from 0 to 1.
@@ -230,7 +230,7 @@ class SurfaceRZFourierJAX:
             dg2_inv_n_dash2 
         )
     
-    ''' JAX prereqs '''
+    # ''' JAX prereqs '''
     
     def tree_flatten(self):
         children = (
@@ -263,7 +263,7 @@ class SurfaceRZFourierJAX:
         )
 
 
-''' Backends '''
+# ''' Backends '''
 def dof_to_rz_op(
         phi_grid, theta_grid, 
         nfp, stellsym,
@@ -367,10 +367,10 @@ def dof_to_gamma_op(
     nfp, stellsym,
     dash1_order=0, dash2_order=0,
     mpol:int=10, ntor:int=10):
-    '''
-    Generates an operator with shape [ndof, nphi, ntheta, 3(x, y, z)]
-    that calculates gamma from a surface's dofs.
-    '''
+    # '''
+    # Generates an operator with shape [ndof, nphi, ntheta, 3(x, y, z)]
+    # that calculates gamma from a surface's dofs.
+    # '''
     dof_to_x = 0
     dof_to_y = 0
     for dash1_order_rz in range(dash1_order + 1):

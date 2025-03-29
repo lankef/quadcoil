@@ -4,13 +4,13 @@ from .math_utils import sin_or_cos, norm_helper
 from jax import jit, tree_util
 from functools import lru_cache, partial
 
-'''
-- The plasma surface
-- The winding surface
-- The evaluation surface
-- The net currents
-- Numerical parameters
-'''
+# Contains
+# - The plasma surface
+# - The winding surface
+# - The evaluation surface
+# - The net currents
+# - Numerical parameters
+
 @tree_util.register_pytree_node_class
 class QuadcoilParams:
     r'''
@@ -79,18 +79,6 @@ class QuadcoilParams:
         (Static) The number of degrees of freedom in :math:`\Phi_{sv}`.
     ndofs_half: int
         (Static) ``ndof`` if ``stellsym==True``, ``ndof//2`` otherwise. 
-
-    Methods
-    -------
-    make_mn()
-        Generates 2 ``array(int)`` of Fourier mode numbers, :math:`m` and :math:`n`, that
-        gives the :math:`m` and :math:`n` of the corresponding element in 
-        ``self.dofs``. Caches.
-    Kdash_helper()
-        Calculates a series of quantities related to the derivative of :math:`\mathbf{K}`.
-        Caches.
-    diff_helper()
-        A helper for differentiating :math:`\Phi_{sv}`. Caches.
     '''
     def __init__(
         self,
@@ -105,7 +93,7 @@ class QuadcoilParams:
         quadpoints_theta=None, 
         ):
         
-        ''' Writing peroperties '''
+        # Writing peroperties 
         
         self.plasma_surface = plasma_surface
         self.winding_surface = winding_surface
@@ -118,7 +106,8 @@ class QuadcoilParams:
         self.ntor = ntor
         self.ndofs, self.ndofs_half = cp_ndofs(self.stellsym, self.mpol, self.ntor)
 
-        ''' Generating evaluation surface '''
+        # Generating evaluation surface 
+
         if quadpoints_phi is None:
             len_phi = len(winding_surface.quadpoints_phi)//winding_surface.nfp
             self.quadpoints_phi = winding_surface.quadpoints_phi[:len_phi]
@@ -142,8 +131,8 @@ class QuadcoilParams:
             dofs=self.winding_surface.dofs
         )
     
-    ''' -- Cached quantites -- '''
-    ''' == Helpers == '''
+    # -- Cached quantites -- 
+    # == Helpers == 
     @lru_cache()
     @jit
     def make_mn(self):
@@ -195,16 +184,8 @@ class QuadcoilParams:
         normal = self.eval_surface.normal()
         gammadash1 = self.eval_surface.gammadash1()
         gammadash2 = self.eval_surface.gammadash2()
-        gammadash1dash1 = self.eval_surface.gammadash1dash1()
-        gammadash1dash2 = self.eval_surface.gammadash1dash2()
-        gammadash2dash2 = self.eval_surface.gammadash2dash2()
         net_poloidal_current_amperes = self.net_poloidal_current_amperes
         net_toroidal_current_amperes = self.net_toroidal_current_amperes
-        quadpoints_phi = self.quadpoints_phi
-        quadpoints_theta = self.quadpoints_theta
-        nfp = self.nfp
-        stellsym = self.stellsym
-        cp_m, cp_n = self.make_mn()
         normN_prime_2d, _ = norm_helper(normal)
         (
             trig_m_i_n_i,
@@ -361,7 +342,7 @@ class QuadcoilParams:
             partial_theta_theta,
         )
         
-    ''' -- JAX prereqs -- '''
+    # -- JAX prereqs --
     def tree_flatten(self):
         children = (
             self.plasma_surface,

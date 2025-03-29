@@ -7,7 +7,6 @@ the stellarator coil complexity proxy/global coil optimizer!
 .. image:: ./assets/title.png
    :alt: An example coil set for NCSX
    :align: center
-   :title: An example coil set for NCSX
 
 QUADCOIL is a global coil optimization code that approximates coils with a smooth sheet current. 
 In other words, it's a "winding surface" code. However, unlike other winding surface codes, QUADCOIL:
@@ -45,6 +44,7 @@ Publications
 .. toctree::
    :maxdepth: 4
    :caption: Contents:
+
    math
    tutorial_inputs
    tutorial_outputs

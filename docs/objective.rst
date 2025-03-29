@@ -9,6 +9,7 @@ simply pass their names into ``quadcoil.quadcoil``.
 ``quadcoil.quadcoil``, like:
 
 .. code-block:: python
+
     phi_mn, out_dict, qp, status = quadcoil(
         ...
         objective_name=('f_B',),
@@ -22,9 +23,12 @@ simply pass their names into ``quadcoil.quadcoil``.
 
 If needed, these quantities can also be
 directly imported as functions from ``quadcoil.objective``:
+
 .. code-block:: python
+
     from quadcoil.objective import K_theta
     print(K_theta(qp, phi_mn))
+
 All members of ``quadcoil.objective`` require the same inputs:
 - ``qp : QuadcoilParams`` - Stores the plasma and winding surface information.
 - ``phi_mn : ndarray`` - The Fourier Coefficients of $\Phi_{sv}$ produced by ``quadcoil.quadcoil``.

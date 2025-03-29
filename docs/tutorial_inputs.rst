@@ -1,5 +1,5 @@
 Tutorial 1: running QUADCOIL
-================
+================================
 
 ``quadcoil.quadcoil()`` is a wrapper that performs all necessary steps needed to generate a sheet current coil set from a plasma boundary, given coil-plasma distance and other engineering requirements. These includes:
 
@@ -95,27 +95,47 @@ For readability, we label:
 Defining the plasma boundary
 ----------------------------
 
-We first look at parameters defining the plasma boundary. QUADCOIL currently only supports $(R, Z)$ Fourier surfaces. The plasma boundary parameters uses the conventions in ``simsopt.geo.surfaceRZFourier``. More surface implementations will be added.
+We first look at parameters defining the plasma boundary. QUADCOIL currently only supports :math:`(R, Z)` Fourier surfaces. The plasma boundary parameters uses the conventions in ``simsopt.geo.surfaceRZFourier``. More surface implementations will be added.
 
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| Parameter                     | Type                    | Default | Definition                                                                                           |
-+===============================+=========================+=========+======================================================================================================+
-| ❗``nfp``                      | ``int``, static         | N/A     | Number of field periods. Equivalent to ``SurfaceRZFourier.nfp``                                       |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ❗``stellsym``                 | ``bool``, static        | N/A     | Number of field periods. Equivalent to ``SurfaceRZFourier.stellsym``                                  |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ❗``plasma_mpol``              | ``int``, static         | N/A     | Number of poloidal harmonics. Equivalent to ``SurfaceRZFourier.mpol``                                 |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ❗``plasma_ntor``              | ``int``, static         | N/A     | Number of toroidal harmonics. Equivalent to ``SurfaceRZFourier.ntor``                                 |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ❗``plasma_dofs``              | ``ndarray``, traced     | N/A     | Plasma dofs. Obtainable from ``SurfaceRZFourier.get_dofs()``                                          |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ``plasma_quadpoints_phi``     | ``ndarray``, traced     | ``jnp.linspace(0, 1/nfp, 32, endpoint=False)`` | Plasma toroidal quadrature points. Must be an 1D array that goes from 0 to ``1/nfp``, without the endpoint. Equivalent to ``SurfaceRZFourier.quadpoints_phi`` |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ``plasma_quadpoints_theta``   | ``ndarray``, traced     | ``jnp.linspace(0, 1, 32, endpoint=False)``    | Plasma poloidal quadrature points. Must be an 1D array that goes from 0 to 1, without the endpoint. Equivalent to ``SurfaceRZFourier.quadpoints_theta``        |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ⭐``Bnormal_plasma``           | ``ndarray``, traced     | ``0``   | Normal magnetic field on the plasma boundary, $B_\text{normal}^\text{plasma}$. Zero by default. Must be ``len(plasma_quadpoints_phi)`` x ``len(plasma_quadpoints_theta)`` |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
+.. list-table::
+   :header-rows: 1
+
+   * - Parameter
+     - Type
+     - Default
+     - Definition
+   * - ❗ ``nfp``
+     - ``int``, static
+     - N/A
+     - Number of field periods. Equivalent to ``SurfaceRZFourier.nfp``
+   * - ❗ ``stellsym``
+     - ``bool``, static
+     - N/A
+     - Number of field periods. Equivalent to ``SurfaceRZFourier.stellsym``
+   * - ❗ ``plasma_mpol``
+     - ``int``, static
+     - N/A
+     - Number of poloidal harmonics. Equivalent to ``SurfaceRZFourier.mpol``
+   * - ❗ ``plasma_ntor``
+     - ``int``, static
+     - N/A
+     - Number of toroidal harmonics. Equivalent to ``SurfaceRZFourier.ntor``
+   * - ❗ ``plasma_dofs``
+     - ``ndarray``, traced
+     - N/A
+     - Plasma dofs. Obtainable from ``SurfaceRZFourier.get_dofs()``
+   * - ``plasma_quadpoints_phi``
+     - ``ndarray``, traced
+     - ``jnp.linspace(0, 1/nfp, 32, endpoint=False)``
+     - Plasma toroidal quadrature points. Must be an 1D array that goes from 0 to ``1/nfp``, without the endpoint. Equivalent to ``SurfaceRZFourier.quadpoints_phi``
+   * - ``plasma_quadpoints_theta``
+     - ``ndarray``, traced
+     - ``jnp.linspace(0, 1, 32, endpoint=False)``
+     - Plasma poloidal quadrature points. Must be an 1D array that goes from 0 to 1, without the endpoint. Equivalent to ``SurfaceRZFourier.quadpoints_theta``
+   * - ⭐ ``Bnormal_plasma``
+     - ``ndarray``, traced
+     - ``0``
+     - Normal magnetic field on the plasma boundary, :math:`B_\text{normal}^\text{plasma}`. Zero by default. Must be ``len(plasma_quadpoints_phi)`` x ``len(plasma_quadpoints_theta)``
 
 Here, ``plasma.dofs`` can be obtained from Simsopt using ``simsopt.geo.SurfaceRZFourier.get_dofs()``.
 
@@ -124,23 +144,41 @@ Setting net currents and resolutions
 
 These parameters defines basic properties of the sheet current solutions.
 
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| Parameter                     | Type                    | Default | Definition                                                                                           |
-+===============================+=========================+=========+======================================================================================================+
-| ❗``net_poloidal_current_amperes`` | ``float``, traced   | N/A     | The net poloidal current $G$ in Amperes. Determined by the equilibrium.                              |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ⭐``net_toroidal_current_amperes`` | ``float``, traced   | 0       | The net toroidal current $I$ in Amperes. A free variable.                                            |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ``mpol``                      | ``int``, static         | 4       | The number of poloidal harmonics in $\Phi_{sv}$                                                      |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ``ntor``                      | ``int``, static         | 4       | The number of toroidal harmonics in $\Phi_{sv}$                                                      |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ``quadpoints_phi``            | ``ndarray``, traced     | The first field period from the winding surface | Toroidal quadrature points on the winding surface for evaluating coil quantities. Must be an 1D array that goes from 0 to ``1/nfp``, without the endpoint. Equivalent to ``SurfaceRZFourier.quadpoints_phi`` |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ``quadpoints_theta``          | ``ndarray``, traced     | The winding surface quadpoints | Poloidal quadrature points on the winding surface for evaluating coil quantities.                     |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ``cp_mn_unit``                | ``float``, traced       | $\sqrt{G^2 + I^2}$ if it is non-zero, $\frac{d_{cs}B_\text{normal}^\text{plasma}}{\mu_0}$ otherwise. | A normalization constant $a_\Phi$, so that $\Phi_{sv}$'s Fourier coefficients satisfy $\Phi_{sv, M, N}/a_\Phi\approx O(1)$. Automatically calculated by default. |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
+.. list-table::
+   :header-rows: 1
+
+   * - Parameter
+     - Type
+     - Default
+     - Definition
+   * - ❗ ``net_poloidal_current_amperes``
+     - ``float``, traced
+     - N/A
+     - The net poloidal current :math:`G` in Amperes. Determined by the equilibrium.
+   * - ⭐ ``net_toroidal_current_amperes``
+     - ``float``, traced
+     - 0
+     - The net toroidal current :math:`I` in Amperes. A free variable.
+   * - ``mpol``
+     - ``int``, static
+     - 4
+     - The number of poloidal harmonics in :math:`\Phi_{sv}`
+   * - ``ntor``
+     - ``int``, static
+     - 4
+     - The number of toroidal harmonics in :math:`\Phi_{sv}`
+   * - ``quadpoints_phi``
+     - ``ndarray``, traced
+     - The first field period from the winding surface
+     - Toroidal quadrature points on the winding surface for evaluating coil quantities. Must be an 1D array that goes from 0 to ``1/nfp``, without the endpoint. Equivalent to ``SurfaceRZFourier.quadpoints_phi``
+   * - ``quadpoints_theta``
+     - ``ndarray``, traced
+     - The winding surface quadpoints
+     - Poloidal quadrature points on the winding surface for evaluating coil quantities.
+   * - ``cp_mn_unit``
+     - ``float``, traced
+     - :math:`\sqrt{G^2 + I^2}` if it is non-zero, :math:`\frac{d_{cs}B_\text{normal}^\text{plasma}}{\mu_0}` otherwise.
+     - A normalization constant :math:`a_\Phi`, so that :math:`\Phi_{sv}`'s Fourier coefficients satisfy :math:`\Phi_{sv, M, N}/a_\Phi\approx O(1)`. Automatically calculated by default.
 
 Choosing the winding surface
 ----------------------------
@@ -152,38 +190,66 @@ Auto-generate
 
 QUADCOIL can automatically generate winding surfaces when used as an equilibrium-stage coil complexity proxy. To auto generate the winding surface, set:
 
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| Parameter                     | Type                    | Default | Definition                                                                                           |
-+===============================+=========================+=========+======================================================================================================+
-| ❗``plasma_coil_distance``     | ``float``, traced       | ``None``, but **must be specified** to auto-generate winding surface. | The coil-plasma distance $d_{cs}$.                                           |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ``winding_mpol``              | ``int``, static         | 5       | The number of poloidal harmonics in the winding surface.                                             |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ``winding_ntor``              | ``int``, static         | 5       | The number of toroidal harmonics in the winding surface.                                             |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ``winding_surface_generator`` | ``callable``, static. Must have the correct signatures | ``gen_winding_surface_atan`` | The winding surface generator.                                                                       |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ``winding_surface_generator_args`` | ``callable``       | ``{'pol_interp': 1, 'lam_tikhonov': 0.05}` | Arguments for the winding surface generator.                                                        |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
+.. list-table::
+   :header-rows: 1
+
+   * - Parameter
+     - Type
+     - Default
+     - Definition
+   * - ❗ ``plasma_coil_distance``
+     - ``float``, traced
+     - ``None``, but **must be specified** to auto-generate winding surface.
+     - The coil-plasma distance :math:`d_{cs}`.
+   * - ``winding_mpol``
+     - ``int``, static
+     - 5
+     - The number of poloidal harmonics in the winding surface.
+   * - ``winding_ntor``
+     - ``int``, static
+     - 5
+     - The number of toroidal harmonics in the winding surface.
+   * - ``winding_surface_generator``
+     - ``callable``, static. Must have the correct signatures
+     - ``gen_winding_surface_atan``
+     - The winding surface generator.
+   * - ``winding_surface_generator_args``
+     - ``callable``
+     - ``{'pol_interp': 1, 'lam_tikhonov': 0.05}``
+     - Arguments for the winding surface generator.
 
 Known winding surface
 ~~~~~~~~~~~~~~~~~~~~~
 
 QUADCOIL can also run on a known winding surface for tasks such as blanket optimization. To specify a winding surface, set:
 
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| Parameter                     | Type                    | Default | Definition                                                                                           |
-+===============================+=========================+=========+======================================================================================================+
-| ❗``winding_dofs``             | ``ndarray``, traced     | ``None``, but **must be specified** to auto-generate winding surface. | The winding surface degrees of freedom.                           |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ❗``winding_mpol``             | ``int``, static         | ``5``, but **must change match** ``winding_dofs``. | The winding surface poloidal harmonic numbers.                    |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ❗``winding_ntor``             | ``int``, static         | ``5``, but **must change match** ``winding_dofs``. | The winding surface toroidal harmonic numbers.                    |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ``winding_quadpoints_phi``    | ``ndarray``, traced     | ``jnp.linspace(0, 1, 32*nfp, endpoint=False)`` | Toroidal quadrature points on the winding surface for evaluating surface integrals. Must be an 1D array that goes from 0 to 1, without the endpoint. Equivalent to SurfaceRZFourier.quadpoints_phi |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ``winding_quadpoints_theta``  | ``ndarray``, traced     | ``jnp.linspace(0, 1, 32, endpoint=False)`` | Poloidal quadrature points on the winding surface for evaluating integrals.                          |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
+.. list-table::
+   :header-rows: 1
+
+   * - Parameter
+     - Type
+     - Default
+     - Definition
+   * - ❗ ``winding_dofs``
+     - ``ndarray``, traced
+     - ``None``, but **must be specified** to auto-generate winding surface.
+     - The winding surface degrees of freedom.
+   * - ❗ ``winding_mpol``
+     - ``int``, static
+     - ``5``, but **must change match** ``winding_dofs``.
+     - The winding surface poloidal harmonic numbers.
+   * - ❗ ``winding_ntor``
+     - ``int``, static
+     - ``5``, but **must change match** ``winding_dofs``.
+     - The winding surface toroidal harmonic numbers.
+   * - ``winding_quadpoints_phi``
+     - ``ndarray``, traced
+     - ``jnp.linspace(0, 1, 32*nfp, endpoint=False)``
+     - Toroidal quadrature points on the winding surface for evaluating surface integrals. Must be an 1D array that goes from 0 to 1, without the endpoint. Equivalent to SurfaceRZFourier.quadpoints_phi
+   * - ``winding_quadpoints_theta``
+     - ``ndarray``, traced
+     - ``jnp.linspace(0, 1, 32, endpoint=False)``
+     - Poloidal quadrature points on the winding surface for evaluating integrals.
 
 Choosing the objective function(s)
 ----------------------------------
@@ -195,13 +261,21 @@ Single-objective
 
 In this mode, QUADDCOIL will minimize one quantity selected from the list. To select single-objective mode, pass a single ``str`` as the ``objective_name``.
 
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| Parameter                     | Type                    | Default | Definition                                                                                           |
-+===============================+=========================+=========+======================================================================================================+
-| ⭐``objective_name``           | ``str``, static         | ``'f_B'`` | The objective function $f$. By default the NESCOIL objective.                                        |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ⭐``objective_unit``           | ``float``, traced       | $f(\Phi_{sv}=0)$ | A normalization constant $a$, so that $f/c\approx O(1)$. Will be automatically calculated from $f$'s with only current from $I, G$. |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
+.. list-table::
+   :header-rows: 1
+
+   * - Parameter
+     - Type
+     - Default
+     - Definition
+   * - ⭐ ``objective_name``
+     - ``str``, static
+     - ``'f_B'``
+     - The objective function :math:`f`. By default the NESCOIL objective.
+   * - ⭐ ``objective_unit``
+     - ``float``, traced
+     - :math:`f(\Phi_{sv}=0)`
+     - A normalization constant :math:`a`, so that :math:`f/c\approx O(1)`. Will be automatically calculated from :math:`f`'s with only current from :math:`I, G`.
 
 Multi-objective
 ~~~~~~~~~~~~~~~
@@ -212,19 +286,29 @@ While performing multi-objective optimization, QUADCOIL will minimize a weighted
 
     f(\Phi_{sv}) = \Sigma_i \frac{w_i}{a_i} f_i(\Phi_{sv}).
 
-Here, $w_i$ are the weights/regularization strength of each objective term, and $a_i$ are normalization constants so that $f_i/a_i\approx O(1)$, and the optimizer is well-behaved. In gradient calculations, $\nabla_{w_i}$ will be available, but **not** $\nabla_{a_i}$. Note that multi-objective problems can have constraints too.
+Here, :math:`w_i` are the weights/regularization strength of each objective term, and :math:`a_i` are normalization constants so that :math:`f_i/a_i\approx O(1)`, and the optimizer is well-behaved. In gradient calculations, :math:`\nabla_{w_i}` will be available, but **not** :math:`\nabla_{a_i}`. Note that multi-objective problems can have constraints too.
 
 To select multi-objective mode, pass a ``tuple`` as ``objective_name``. ``objective_name``, ``objective_weight``, ``objective_unit`` Must have the same length.
 
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| Parameter                     | Type                    | Default | Definition                                                                                           |
-+===============================+=========================+=========+======================================================================================================+
-| ⭐``objective_name``           | ``tuple`` of ``str``, static | ``'f_B'`` | A tuple of objective terms $f_i$.                                                                    |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ⭐``objective_weight``         | ``ndarray``, traced     | ``None`` | An array of weights $w_i$.                                                                           |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ⭐``objective_unit``           | ``tuple`` of ``float``, traced | ``None`` | A tuple of normalization constants $a_i$. If an element is ``None``, $a_i$ will be set to $f_i(\Phi_{sv}=0)$. |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
+.. list-table::
+   :header-rows: 1
+
+   * - Parameter
+     - Type
+     - Default
+     - Definition
+   * - ⭐ ``objective_name``
+     - ``tuple`` of ``str``, static
+     - ``'f_B'``
+     - A tuple of objective terms :math:`f_i`.
+   * - ⭐ ``objective_weight``
+     - ``ndarray``, traced
+     - ``None``
+     - An array of weights :math:`w_i`.
+   * - ⭐ ``objective_unit``
+     - ``tuple`` of ``float``, traced
+     - ``None``
+     - A tuple of normalization constants :math:`a_i`. If an element is ``None``, :math:`a_i` will be set to :math:`f_i(\Phi_{sv}=0)`.
 
 Setting constraints
 -------------------
@@ -239,24 +323,36 @@ QUADCOIL supports both equality and inequality constraints, on scalar quantities
     \frac{h_k(\Phi_{sv})}{e_k} = q_k \\
     ...
 
-Like in multi-objective optimization, $\nabla_{p_j}$ and $\nabla_{q_k}$ will be available, but **not** $\nabla_{b_j}$ or $\nabla_{e_k}$.
+Like in multi-objective optimization, :math:`\nabla_{p_j}` and :math:`\nabla_{q_k}` will be available, but **not** :math:`\nabla_{b_j}` or :math:`\nabla_{e_k}`.
 
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| Parameter                     | Type                    | Default | Definition                                                                                           |
-+===============================+=========================+=========+======================================================================================================+
-| ⭐``constraint_name``          | ``tuple`` of ``str``, static | ``()`` | A tuple of constraint names. No constraints by default.                                              |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ⭐``constraint_type``          | ``tuple`` of ``str``, static | ``()`` | A tuple of constraint types. Choose from ``>=``, ``<=`` and ``==``.                                   |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ⭐``constraint_unit``          | ``tuple`` of ``float``, traced | ``()`` | A tuple of normalization constants, $b_j$ and $e_k$.                                                 |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| ⭐``constraint_value``         | ``ndarray``, traced     | ``()``  | An array of constraint thresholds, $p_j$ and $q_k$.                                                  |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
+.. list-table::
+   :header-rows: 1
+
+   * - Parameter
+     - Type
+     - Default
+     - Definition
+   * - ⭐ ``constraint_name``
+     - ``tuple`` of ``str``, static
+     - ``()``
+     - A tuple of constraint names. No constraints by default.
+   * - ⭐ ``constraint_type``
+     - ``tuple`` of ``str``, static
+     - ``()``
+     - A tuple of constraint types. Choose from ``>=``, ``<=`` and ``==``.
+   * - ⭐ ``constraint_unit``
+     - ``tuple`` of ``float``, traced
+     - ``()``
+     - A tuple of normalization constants, :math:`b_j` and :math:`e_k`.
+   * - ⭐ ``constraint_value``
+     - ``ndarray``, traced
+     - ``()``
+     - An array of constraint thresholds, :math:`p_j` and :math:`q_k`.
 
 Setting coil metrics
 --------------------
 
-We are almost there. After an optimum coil set $\Phi^*_{sv}$ is found, QUADCOIL will evaluate a list of coil quality metrics $M_l(\Phi^*_{sv})$. Derivatives w.r.t. the following quantities will also be available:
+We are almost there. After an optimum coil set :math:`\Phi^*_{sv}` is found, QUADCOIL will evaluate a list of coil quality metrics :math:`M_l(\Phi^*_{sv})`. Derivatives w.r.t. the following quantities will also be available:
 
 - ``plasma_dofs``
 - ``net_poloidal_current_amperes``
@@ -267,46 +363,72 @@ We are almost there. After an optimum coil set $\Phi^*_{sv}$ is found, QUADCOIL 
 
 We still choose these metrics by giving a ``tuple`` containing their names:
 
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
-| Parameter                     | Type                    | Default | Definition                                                                                           |
-+===============================+=========================+=========+======================================================================================================+
-| ⭐``metric_name``              | ``tuple`` of ``str``, static | ``('f_B', 'f_K')`` | A tuple of metric names.                                                                             |
-+-------------------------------+-------------------------+---------+------------------------------------------------------------------------------------------------------+
+.. list-table::
+   :header-rows: 1
+
+   * - Parameter
+     - Type
+     - Default
+     - Definition
+   * - ⭐ ``metric_name``
+     - ``tuple`` of ``str``, static
+     - ``('f_B', 'f_K')``
+     - A tuple of metric names.
 
 ## 7. (Optional) Tweaking the augmented Lagrangian solver
 
 The augmented Lagrangian solver can be fine-tuned for a specific problem if the default parameters do not yield sufficiently accurate results.
 
+.. list-table::
+   :header-rows: 1
 
-+------------+----------------+----------+----------------------------------------------------------------------------+
-| Parameter  | Type           | Default  | Definition                                                                 |
-+============+================+==========+============================================================================+
-| ``a_init`` | ``float``, traced | ``1.`` | The *c* factor. Please see *Constrained Optimization and Lagrange*        |
-|            |                |          | *Multiplier Methods*, Chapter 3.                                          |
-+------------+----------------+----------+----------------------------------------------------------------------------+
-| ``c_growth_rate`` | ``float``, traced | ``1.2`` | The growth rate of the *c* factor.                                      |
-+------------+----------------+----------+----------------------------------------------------------------------------+
-| ``ftol_outer`` | ``float``, traced | ``1e-7`` | Objective convergence rate tolerance of the outer augmented Lagrangian    |
-|              |                |          | loop. Terminates when any of 4 outer conditions is satisfied.             |
-+------------+----------------+----------+----------------------------------------------------------------------------+
-| ``ctol_outer`` | ``float``, traced | ``1e-7`` | Constraint tolerance of the outer augmented Lagrangian loop.              |
-+------------+----------------+----------+----------------------------------------------------------------------------+
-| ``xtol_outer`` | ``float``, traced | ``1e-7`` | Convergence rate tolerance of the outer augmented Lagrangian loop.        |
-+------------+----------------+----------+----------------------------------------------------------------------------+
-| ``gtol_outer`` | ``float``, traced | ``1e-7`` | Gradient tolerance of the outer augmented Lagrangian loop.                |
-+------------+----------------+----------+----------------------------------------------------------------------------+
-| ``ftol_inner`` | ``float``, traced | ``1e-7`` | Gradient tolerance of the inner LBFGS iteration. Terminates when any of   |
-|              |                |          | 3 inner conditions is satisfied.                                          |
-+------------+----------------+----------+----------------------------------------------------------------------------+
-| ``xtol_inner`` | ``float``, traced | ``0.`` | *x* convergence rate tolerance of the inner LBFGS iteration.              |
-|              |                |          | **Non-zero values may impact metric gradient accuracies.**                |
-+------------+----------------+----------+----------------------------------------------------------------------------+
-| ``gtol_inner`` | ``float``, traced | ``1e-7`` | Gradient tolerance of the inner LBFGS iteration.                          |
-+------------+----------------+----------+----------------------------------------------------------------------------+
-| ``maxiter_outer`` | ``int``, static | ``50`` | The maximum number of outer iterations permitted.                         |
-+------------+----------------+----------+----------------------------------------------------------------------------+
-| ``maxiter_inner`` | ``int``, static | ``1500`` | The maximum number of inner iterations permitted.                        |
-+------------+----------------+----------+----------------------------------------------------------------------------+
+   * - Parameter
+     - Type
+     - Default
+     - Definition
+   * - ``a_init``
+     - ``float``, traced
+     - ``1.``
+     - The *c* factor. Please see *Constrained Optimization and Lagrange* *Multiplier Methods*, Chapter 3.
+   * - ``c_growth_rate``
+     - ``float``, traced
+     - ``1.2``
+     - The growth rate of the *c* factor.
+   * - ``ftol_outer``
+     - ``float``, traced
+     - ``1e-7``
+     - Objective convergence rate tolerance of the outer augmented Lagrangian loop. Terminates when any of 4 outer conditions is satisfied.
+   * - ``ctol_outer``
+     - ``float``, traced
+     - ``1e-7``
+     - Constraint tolerance of the outer augmented Lagrangian loop.
+   * - ``xtol_outer``
+     - ``float``, traced
+     - ``1e-7``
+     - Convergence rate tolerance of the outer augmented Lagrangian loop.
+   * - ``gtol_outer``
+     - ``float``, traced
+     - ``1e-7``
+     - Gradient tolerance of the outer augmented Lagrangian loop.
+   * - ``ftol_inner``
+     - ``float``, traced
+     - ``1e-7``
+     - Gradient tolerance of the inner LBFGS iteration. Terminates when any of 3 inner conditions is satisfied.
+   * - ``xtol_inner``
+     - ``float``, traced
+     - ``0.``
+     - *x* convergence rate tolerance of the inner LBFGS iteration. **Non-zero values may impact metric gradient accuracies.**
+   * - ``gtol_inner``
+     - ``float``, traced
+     - ``1e-7``
+     - Gradient tolerance of the inner LBFGS iteration.
+   * - ``maxiter_outer``
+     - ``int``, static
+     - ``50``
+     - The maximum number of outer iterations permitted.
+   * - ``maxiter_inner``
+     - ``int``, static
+     - ``1500``
+     - The maximum number of inner iterations permitted.
 
 Thus far, we have successfully run an instance of QUADCOIL. The next section will explain how to interpret the outputs.
-

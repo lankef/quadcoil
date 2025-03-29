@@ -148,7 +148,7 @@ def run_opt_optax(init_params, fun, maxiter, ftol, xtol, gtol, opt):
         final_df, # Changes in f
     )
 
-''' Constrained optimization '''
+# ''' Constrained optimization '''
 
 # A simple augmented Lagrangian implementation
 # This jit flag is temporary, because we want 
@@ -196,11 +196,14 @@ def solve_constrained(
     ):
     r'''
     Solves the constrained optimization problem:
+
     .. math::
+
         \min_x f(x) \\
         \text{subject to } \\
         h(x) = 0, \\
         g(x) \leq 0 \\
+        
     Using the augmented Lagrangian method in 
     *Constrained Optimization and Lagrange Multiplier Methods* Chapter 3.
     Please refer to the chapter for notation.
@@ -278,27 +281,29 @@ def solve_constrained(
     -------
     status : dict
         The end state of the iteration. Contains the following entries:
+
         .. code-block:: python
-        init_dict = {
-            'niter_outer' : int, # The outer iteration number
-            'dx_outer' : float, # The L2 norm of the change in x between the last 2 outer iterations
-            'df_outer' : float, # The L2 norm of the change in f between the last 2 outer iterations
-            'dg_outer' : float, # The L2 norm of the change in g between the last 2 outer iterations
-            'dh_outer' : float, # The L2 norm of the change in h between the last 2 outer iterations
-            'f_k' : float, # The value of f at the optimum
-            'g_k' : ndarray, # The value of g at the optimum
-            'h_k' : ndarray, # The value of h at the optimum
-            'x_k' : ndarray, # The optimum
-            'val_l_k' : float, # The value of the augmented Lagrangian objective l_k at the optimum 
-            'grad_l_k' : ndarray, # The gradient of the augmented Lagrangian objective l_k at the optimum 
-            'c_k' : float, # The final value of c
-            'lam_k' : ndarray, # The final value of lambda
-            'mu_k' : ndarray, # The final value of mu
-            'niter_inner_k' : int, # The number of L-BFGS iterations in the last step
-            'dx_k' : float, # The L2 norm of the change in x between the last 2 inner L-BFGS iteration
-            'du_k' : float, # The L2 norm of the change in update between the last 2 inner L-BFGS iteration
-            'df_k' : float, # The L2 norm of the change in f between the last 2 inner L-BFGS iteration
-        }
+        
+            init_dict = {
+                'niter_outer' : int, # The outer iteration number
+                'dx_outer' : float, # The L2 norm of the change in x between the last 2 outer iterations
+                'df_outer' : float, # The L2 norm of the change in f between the last 2 outer iterations
+                'dg_outer' : float, # The L2 norm of the change in g between the last 2 outer iterations
+                'dh_outer' : float, # The L2 norm of the change in h between the last 2 outer iterations
+                'f_k' : float, # The value of f at the optimum
+                'g_k' : ndarray, # The value of g at the optimum
+                'h_k' : ndarray, # The value of h at the optimum
+                'x_k' : ndarray, # The optimum
+                'val_l_k' : float, # The value of the augmented Lagrangian objective l_k at the optimum 
+                'grad_l_k' : ndarray, # The gradient of the augmented Lagrangian objective l_k at the optimum 
+                'c_k' : float, # The final value of c
+                'lam_k' : ndarray, # The final value of lambda
+                'mu_k' : ndarray, # The final value of mu
+                'niter_inner_k' : int, # The number of L-BFGS iterations in the last step
+                'dx_k' : float, # The L2 norm of the change in x between the last 2 inner L-BFGS iteration
+                'du_k' : float, # The L2 norm of the change in update between the last 2 inner L-BFGS iteration
+                'df_k' : float, # The L2 norm of the change in f between the last 2 inner L-BFGS iteration
+            }
     '''
     # Has shape n_cons_ineq
     gplus = lambda x, mu, c: jnp.max(jnp.array([g_ineq(x), -mu/c]), axis=0)

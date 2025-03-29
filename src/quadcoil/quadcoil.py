@@ -131,51 +131,44 @@ def quadcoil(
         (Static) The number of field periods.
     stellsym : bool
         (Static) Stellarator symmetry.
-    plasma_mpol
+    plasma_mpol : int
         (Static) The number of poloidal Fourier harmonics in the plasma boundary.
-    plasma_ntor
+    plasma_ntor : int
         (Static) The number of toroidal Fourier harmonics in the plasma boundary.
-    plasma_dofs
-        (Static) The plasma surface degrees of freedom. Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()`` covention.
-    net_poloidal_current_amperes: float
+    plasma_dofs : ndarray
+        (Static) The plasma surface degrees of freedom. Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()`` convention.
+    net_poloidal_current_amperes : float
         (Traced) The net poloidal current :math:`G`.
-    net_toroidal_current_amperes: float, optional, default=0
+    net_toroidal_current_amperes : float, optional, default=0
         (Traced) The net toroidal current :math:`I`.
-    mpol: int, optional, default=4
-        (Static) The number of poloidal Fourier harmonics in the current potential :math:`\Phi_{sv}`,
-        which represents the sheet current by 
-        :math:`\mathbf{K} = \hat{\mathbf{n}}\times\nabla(\Phi_{sv} + \frac{G\phi'}{2\pi} + \frac{I\theta'}{2\pi})`,
-        where :math:`G` is the net poloidal current, and :math:`I` is the net toroidal current.
-    ntor: int, optional, default=4
+    mpol : int, optional, default=4
+        (Static) The number of poloidal Fourier harmonics in the current potential :math:`\Phi_{sv}`.
+    ntor : int, optional, default=4
         (Static) The number of toroidal Fourier harmonics in :math:`\Phi_{sv}`.
     quadpoints_phi : ndarray, shape (nphi,), optional, default=None
         (Traced) The poloidal quadrature points on the winding surface to evaluate the objectives at.
-        Uses one period from the winding surfacee by default.
+        Uses one period from the winding surface by default.
     quadpoints_theta : ndarray, shape (ntheta,), optional, default=None
         (Traced) The toroidal quadrature points on the winding surface to evaluate the objectives at.
-        Uses one period from the winding surfacee by default.
-    cp_mn_unit : floatm optional, default=None 
-        (Traced) Current potential's normalization constant. 
+        Uses one period from the winding surface by default.
+    cp_mn_unit : float, optional, default=None
+        (Traced) Current potential's normalization constant.
         By default will be generated from total net current.
     plasma_quadpoints_phi : ndarray, shape (nphi_plasma,), optional, default=None
         (Traced) Will be set to ``jnp.linspace(0, 1/nfp, 32, endpoint=False)`` by default.
     plasma_quadpoints_theta : ndarray, shape (ntheta_plasma,), optional, default=None
         (Traced) Will be set to ``jnp.linspace(0, 1, 32, endpoint=False)`` by default.
     Bnormal_plasma : ndarray, shape (nphi, ntheta), optional, default=None
-        (Traced) The magnetic field distribution on the plasma 
-        surface. will be filled with zeros by default. 
+        (Traced) The magnetic field distribution on the plasma surface. Will be filled with zeros by default.
     plasma_coil_distance : float, optional, default=None
-        (Traced) The coil-plasma distance. Is set to ``None`` by default, 
-        but a value must be provided if ``winding_dofs`` is not provided.
+        (Traced) The coil-plasma distance. Is set to ``None`` by default, but a value must be provided if ``winding_dofs`` is not provided.
     winding_surface_generator : callable, optional, default=gen_winding_surface_atan
         (Static) The winding surface generator.
     winding_surface_generator_args : dict, optional, default={'pol_interp': 1, 'lam_tikhonov': 0.05}
         (Static) The arguments for the winding surface generator.
     winding_dofs : ndarray, shape (ndof_winding,)
-        (Traced) The winding surface degrees of freedom. 
-        Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()`` covention.
-        Will be generated using ``winding_surface_generator`` if 
-        ``plasma_coil_distance`` is provided. Must be provided otherwise.
+        (Traced) The winding surface degrees of freedom. Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()`` convention.
+        Will be generated using ``winding_surface_generator`` if ``plasma_coil_distance`` is provided. Must be provided otherwise.
     winding_mpol : int, optional, default=5
         (Static) The number of poloidal Fourier harmonics in the winding surface.
     winding_ntor : int, optional, default=5
@@ -184,54 +177,46 @@ def quadcoil(
         (Traced) Will be set to ``jnp.linspace(0, 1, 32*nfp, endpoint=False)`` by default.
     winding_quadpoints_theta : ndarray, shape (ntheta_winding,), optional, default=None
         (Traced) Will be set to ``jnp.linspace(0, 1, 32, endpoint=False)`` by default.
-    objective_name: tuple, optional, default='f_B_normalized_by_Bnormal_IG',
+    objective_name : tuple, optional, default='f_B_normalized_by_Bnormal_IG'
         (Static) The names of the objective functions. Must be a member of ``quadcoil.objective`` that outputs a scalar.
-    objective_weight: ndarray, optional, default=None,
+    objective_weight : ndarray, optional, default=None
         (Traced) The weights of the objective functions. Derivatives will be calculated w.r.t. this quantity.
-    objective_unit: tuple, optional, default=None,
+    objective_unit : tuple, optional, default=None
         (Traced) The normalization constants of the objective terms, so that ``f/objective_unit`` is :math:`O(1)`.
-    constraint_name : tuple, optional, default=(),
+    constraint_name : tuple, optional, default=()
         (Static) The names of the constraint functions. Must be a member of ``quadcoil.objective`` that outputs a scalar.
-    constraint_type : tuple, optional, default=(),
-        (Static) The types of the constraints. Must consists of ``'>=', '<=', '=='`` only.
-    constraint_unit : tuple, optional, default=(),
+    constraint_type : tuple, optional, default=()
+        (Static) The types of the constraints. Must consist of ``'>='``, ``'<='``, ``'=='`` only.
+    constraint_unit : tuple, optional, default=()
         (Traced) The normalization constants of the constraints, so that ``f/constraint_unit`` is :math:`O(1)`.
-    constraint_value : ndarray, optional, default=(),
+    constraint_value : ndarray, optional, default=()
         (Traced) The constraint thresholds. Derivatives will be calculated w.r.t. this quantity.
-    metric_name=('f_B', 'f_K'),
-        (Static) The names of the functions to diagnose the coil configurations with. Will be differentiated 
-        w.r.t. other input quantities.  
+    metric_name : tuple, optional, default=('f_B', 'f_K')
+        (Static) The names of the functions to diagnose the coil configurations with. Will be differentiated w.r.t. other input quantities.
     c_init : float, optional, default=1.
-        (Traced) The initial :math:`c` factor. Please see
-        *Constrained Optimization and Lagrange Multiplier Methods* Chapter 3.
+        (Traced) The initial :math:`c` factor. Please see *Constrained Optimization and Lagrange Multiplier Methods* Chapter 3.
     c_growth_rate : float, optional, default=1.1
         (Traced) The growth rate of the :math:`c` factor.
     ftol_outer : float, optional, default=1e-7
-        (Traced) Constraint tolerance of the outer augmented 
-        Lagrangian loop. Terminates when any is satisfied. 
+        (Traced) Constraint tolerance of the outer augmented Lagrangian loop. Terminates when any 3 of the outer conditions is satisfied.
     ctol_outer : float, optional, default=1e-7
-        (Traced) Constraint tolerance of the outer augmented 
-        Lagrangian loop. Terminates when any is satisfied. 
+        (Traced) Constraint tolerance of the outer augmented Lagrangian loop. Terminates when any 3 of the outer conditions is satisfied.
     xtol_outer : float, optional, default=1e-7
-        (Traced) Convergence rate tolerance of the outer augmented 
-        Lagrangian loop. Terminates when any is satisfied. 
+        (Traced) Convergence rate tolerance of the outer augmented Lagrangian loop. Terminates when any 3 of the outer conditions is satisfied.
     gtol_outer : float, optional, default=1e-7
-        (Traced) Gradient tolerance of the outer augmented 
-        Lagrangian loop. Terminates when any is satisfied. 
+        (Traced) Gradient tolerance of the outer augmented Lagrangian loop. Terminates when any is satisfied.
     ftol_inner : float, optional, default=1e-7
-        (Traced) Gradient tolerance of the inner LBFGS 
-        iteration. Terminates when any is satisfied. 
+        (Traced) Gradient tolerance of the inner LBFGS iteration. Terminates when any is satisfied.
     xtol_inner : float, optional, default=0
-        (Traced) Gradient tolerance of the inner LBFGS 
-        iteration. Terminates when any is satisfied. 
+        (Traced) Gradient tolerance of the inner LBFGS iteration. Terminates when any is satisfied.
     gtol_inner : float, optional, default=1e-7
-        (Traced) Gradient tolerance of the inner LBFGS 
-        iteration. Terminates when any is satisfied. 
-    maxiter_outer: int, optional, default=50
+        (Traced) Gradient tolerance of the inner LBFGS iteration. Terminates when any is satisfied.
+    maxiter_outer : int, optional, default=50
         (Static) The maximum of the outer iteration.
-    maxiter_inner: int, optional, default=1500
+    maxiter_inner : int, optional, default=1500
         (Static) The maximum of the inner iteration.
     '''
+
     ''' Default parameters '''
     
     if plasma_quadpoints_phi is None:
