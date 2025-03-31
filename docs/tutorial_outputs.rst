@@ -90,6 +90,7 @@ and whether the winding surface is provided.
 ``qp : QuadcoilParams`` is an objects that contains information on the plasma boundary, 
 winding surface, net currents and resolutions. Together, ``qp`` and ``phi_mn`` contains 
 all informations required to evaluate any physical quantities available in ``quadcoil.objective``.
+For how to do this, see :ref:`available_quantities`.
 It **does not** contain the objective and constraint choices. 
 
 ``qp`` can be used to reconstruct the configuration in Simsopt. 

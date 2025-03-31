@@ -32,8 +32,9 @@ directly imported as functions from ``quadcoil.objective``:
     print(K_theta(qp, phi_mn))
 
 All members of ``quadcoil.objective`` require the same inputs:
+
 - ``qp : QuadcoilParams`` - Stores the plasma and winding surface information.
-- ``phi_mn : ndarray`` - The Fourier Coefficients of $\Phi_{sv}$ produced by ``quadcoil.quadcoil``.
+- ``phi_mn : ndarray`` - The Fourier Coefficients of :math:`\Phi_{sv}` produced by ``quadcoil.quadcoil``.
 
 Notation
 ---------
