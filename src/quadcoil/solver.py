@@ -1,8 +1,8 @@
-
+import warnings
 import jax.numpy as jnp
 import optax
 import optax.tree_utils as otu
-from jax import jit, vmap
+from jax import jit, vmap, grad
 from jax.lax import while_loop
 
 lstsq_vmap = vmap(jnp.linalg.lstsq)
@@ -14,7 +14,7 @@ lstsq_vmap = vmap(jnp.linalg.lstsq)
 #         val = body_fun(val)
 #     return val
 
-def run_opt_lbfgs(init_params, fun, maxiter, ftol, xtol, gtol):
+def run_opt_lbfgs(init_params, fun, maxiter, fstop, xstop, gtol):
     r'''
     A wrapper for performing unconstrained optimization using ``optax.lbfgs``.
     
@@ -26,10 +26,10 @@ def run_opt_lbfgs(init_params, fun, maxiter, ftol, xtol, gtol):
         The objective function.
     maxiter : int
         The maximum iteration number.
-    ftol : float
+    fstop : float
         The objective function convergence rate tolerance. 
         Terminates when any one of the tolerances is satisfied.
-    xtol : float
+    xstop : float
         The unknown convergence rate tolerance. 
         Terminates when any one of the tolerances is satisfied.
     gtol : float
@@ -53,13 +53,13 @@ def run_opt_lbfgs(init_params, fun, maxiter, ftol, xtol, gtol):
     final_df : float
         The rate of change of f at the optimum.
     '''
-    return run_opt_optax(init_params, fun, maxiter, ftol, xtol, gtol, opt=optax.lbfgs())
+    return run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt=optax.lbfgs())
 
 # # Not robust. Does not have the up to date output signature. In here for backup purposes.
-# def run_opt_bfgs(init_params, fun, maxiter, ftol, xtol, gtol): 
+# def run_opt_bfgs(init_params, fun, maxiter, fstop, xstop, gtol): 
 #     return jax.scipy.optimize.minimize(fun=fun, x0=init_params, method='BFGS', tol=gtol, options={'maxiter': maxiter,}).x
 
-def run_opt_optax(init_params, fun, maxiter, ftol, xtol, gtol, opt):
+def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt):
     r'''
     A wrapper for performing unconstrained optimization using ``optax.base.GradientTransformationExtraArgs``.
     
@@ -71,10 +71,10 @@ def run_opt_optax(init_params, fun, maxiter, ftol, xtol, gtol, opt):
         The objective function.
     maxiter : int
         The maximum iteration number.
-    ftol : float
+    fstop : float
         The objective function convergence rate tolerance. 
         Terminates when any one of the tolerances is satisfied.
-    xtol : float
+    xstop : float
         The unknown convergence rate tolerance. 
         Terminates when any one of the tolerances is satisfied.
     gtol : float
@@ -118,16 +118,16 @@ def run_opt_optax(init_params, fun, maxiter, ftol, xtol, gtol, opt):
         )
   
     def continuing_criterion(carry):
-        params, _, _, dx, du, df, state = carry
+        params, _, value, dx, du, df, state = carry
         iter_num = otu.tree_get(state, 'count')
         grad = otu.tree_get(state, 'grad')
         err = otu.tree_l2_norm(grad)
         return (iter_num == 0) | (
             (iter_num < maxiter) 
             & (err >= gtol)
-            & (dx >= xtol)
-            & (du >= xtol)
-            & (df >= ftol)
+            & (dx >= xstop)
+            & (du >= xstop)
+            & (df/jnp.abs(value) >= fstop)
         )
     init_carry = (
         init_params, 
@@ -159,12 +159,12 @@ def run_opt_optax(init_params, fun, maxiter, ftol, xtol, gtol, opt):
 #     'g_ineq',
 #     'run_opt',
 #     'c_growth_rate',
-#     'ftol_outer',
+#     'fstop_outer',
 #     'ctol_outer',
-#     'xtol_outer',
+#     'xstop_outer',
 #     'gtol_outer',
-#     'ftol_inner',
-#     'xtol_inner',
+#     'fstop_inner',
+#     'xstop_inner',
 #     'gtol_inner',
 #     'maxiter_inner',
 #     'maxiter_outer',
@@ -181,12 +181,12 @@ def solve_constrained(
         h_eq=lambda x:jnp.zeros(1),
         mu_init=jnp.zeros(1),
         g_ineq=lambda x:jnp.zeros(1),
-        ftol_outer=1e-7, # constraint tolerance
-        ctol_outer=1e-7, # constraint tolerance
-        xtol_outer=1e-7, # convergence rate tolerance
+        fstop_outer=1e-7, # constraint tolerance
+        xstop_outer=1e-7, # convergence rate tolerance
         gtol_outer=1e-7, # gradient tolerance
-        ftol_inner=1e-7,
-        xtol_inner=1e-7,
+        ctol_outer=1e-7, # constraint tolerance
+        fstop_inner=1e-7,
+        xstop_inner=1e-7,
         gtol_inner=1e-7,
         maxiter_inner=1500,
         maxiter_outer=50,
@@ -214,10 +214,10 @@ def solve_constrained(
     fun : callable
     maxiter : int
         The maximum iteration number.
-    ftol : float
+    fstop : float
         The objective function convergence rate tolerance. 
         Terminates when any one of the tolerances is satisfied.
-    xtol : float
+    xstop : float
         The unknown convergence rate tolerance. 
         Terminates when any one of the tolerances is satisfied.
     gtol : float
@@ -251,27 +251,27 @@ def solve_constrained(
         The equality constraint function. 
         Must map ``x`` to an ``ndarray`` with shape ``(Ng)``.
         No constraints by default.
-    ftol_outer : float, optional, default=1e-7
-        (Traced) Constraint tolerance of the outer augmented 
-        Lagrangian loop. Terminates when any is satisfied. 
-    ctol_outer : float, optional, default=1e-7
-        (Traced) Constraint tolerance of the outer augmented 
-        Lagrangian loop. Terminates when any is satisfied. 
-    xtol_outer : float, optional, default=1e-7
-        (Traced) Convergence rate tolerance of the outer augmented 
-        Lagrangian loop. Terminates when any is satisfied. 
+    fstop_outer : float, optional, default=1e-7
+        (Traced) ``f`` convergence rate of the outer augmented 
+        Lagrangian loop. Terminates when ``df`` falls below this. 
+    xstop_outer : float, optional, default=1e-7
+        (Traced) ``x`` convergence rate of the outer augmented 
+        Lagrangian loop. Terminates when ``dx`` falls below this. 
     gtol_outer : float, optional, default=1e-7
         (Traced) Gradient tolerance of the outer augmented 
-        Lagrangian loop. Terminates when any is satisfied. 
-    ftol_inner : float, optional, default=1e-7
-        (Traced) Gradient tolerance of the inner LBFGS 
-        iteration. Terminates when any is satisfied. 
-    xtol_inner : float, optional, default=0
-        (Traced) Gradient tolerance of the inner LBFGS 
-        iteration. Terminates when any is satisfied. 
+        Lagrangian loop. Terminates when both tols are satisfied. 
+    ctol_outer : float, optional, default=1e-7
+        (Traced) Constraint tolerance of the outer augmented 
+        Lagrangian loop. Terminates when both tols are satisfied. 
+    fstop_inner : float, optional, default=1e-7
+        (Traced) ``f`` convergence rate of the inner LBFGS 
+        Lagrangian loop. Terminates when ``df`` falls below this. 
+    xstop_inner : float, optional, default=0
+        (Traced) ``x`` convergence rate of the outer augmented 
+        Lagrangian loop. Terminates when ``dx`` falls below this. 
     gtol_inner : float, optional, default=1e-7
         (Traced) Gradient tolerance of the inner LBFGS 
-        iteration. Terminates when any is satisfied. 
+        iteration. Terminates when is satisfied. 
     maxiter_outer: int, optional, default=50
         (Static) The maximum of the outer iteration.
     maxiter_inner: int, optional, default=1500
@@ -285,59 +285,63 @@ def solve_constrained(
         .. code-block:: python
         
             init_dict = {
-                'niter_outer' : int, # The outer iteration number
-                'dx_outer' : float, # The L2 norm of the change in x between the last 2 outer iterations
-                'df_outer' : float, # The L2 norm of the change in f between the last 2 outer iterations
-                'dg_outer' : float, # The L2 norm of the change in g between the last 2 outer iterations
-                'dh_outer' : float, # The L2 norm of the change in h between the last 2 outer iterations
-                'f_k' : float, # The value of f at the optimum
-                'g_k' : ndarray, # The value of g at the optimum
-                'h_k' : ndarray, # The value of h at the optimum
-                'x_k' : ndarray, # The optimum
-                'val_l_k' : float, # The value of the augmented Lagrangian objective l_k at the optimum 
+                'outer_niter' : int, # The outer iteration number
+                'outer_dx' : float, # The L2 norm of the change in x between the last 2 outer iterations
+                'outer_df' : float, # The L2 norm of the change in f between the last 2 outer iterations
+                'outer_dg' : float, # The L2 norm of the change in g between the last 2 outer iterations
+                'outer_dh' : float, # The L2 norm of the change in h between the last 2 outer iterations
+                'inner_fin_f' : float, # The value of f at the optimum
+                'inner_fin_g' : ndarray, # The value of g at the optimum
+                'inner_fin_h' : ndarray, # The value of h at the optimum
+                'inner_fin_x' : ndarray, # The optimum
+                'inner_fin_l' : float, # The value of the augmented Lagrangian objective l_k at the optimum 
                 'grad_l_k' : ndarray, # The gradient of the augmented Lagrangian objective l_k at the optimum 
-                'c_k' : float, # The final value of c
-                'lam_k' : ndarray, # The final value of lambda
-                'mu_k' : ndarray, # The final value of mu
-                'niter_inner_k' : int, # The number of L-BFGS iterations in the last step
-                'dx_k' : float, # The L2 norm of the change in x between the last 2 inner L-BFGS iteration
-                'du_k' : float, # The L2 norm of the change in update between the last 2 inner L-BFGS iteration
-                'df_k' : float, # The L2 norm of the change in f between the last 2 inner L-BFGS iteration
+                'inner_fin_c' : float, # The final value of c
+                'inner_fin_lam' : ndarray, # The final value of lambda
+                'inner_fin_mu' : ndarray, # The final value of mu
+                'inner_fin_niter' : int, # The number of L-BFGS iterations in the last step
+                'inner_fin_dx' : float, # The L2 norm of the change in x between the last 2 inner L-BFGS iteration
+                'inner_fin_du' : float, # The L2 norm of the change in update between the last 2 inner L-BFGS iteration
+                'inner_fin_dl' : float, # The L2 norm of the change in f between the last 2 inner L-BFGS iteration
             }
     '''
     # Has shape n_cons_ineq
     gplus = lambda x, mu, c: jnp.max(jnp.array([g_ineq(x), -mu/c]), axis=0)
-
+    grad_f = grad(f_obj)
     # True when non-convergent.
-    @jit
+    # @jit
     def outer_convergence_criterion(dict_in):
-        x_k = dict_in['x_k']
-        dx_outer = dict_in['dx_outer']
-        grad_l_k = dict_in['grad_l_k']
-        niter_outer = dict_in['niter_outer']
-        df_outer = dict_in['df_outer']
-        dg_outer = dict_in['dg_outer']
-        dh_outer = dict_in['dh_outer']
+        x_k = dict_in['inner_fin_x']
+        dx_outer = dict_in['outer_dx']
+        grad_f_k = dict_in['inner_fin_grad_f']
+        niter_outer = dict_in['outer_niter']
+        df_outer = dict_in['outer_df']
+        dg_outer = dict_in['outer_dg']
+        dh_outer = dict_in['outer_dh']
+        f_k = dict_in['inner_fin_f']
+        g_k_mag = jnp.max(jnp.abs(dict_in['inner_fin_g']))
+        h_k_mag = jnp.max(jnp.abs(dict_in['inner_fin_h']))
         # This is the convergence condition (True when not converged yet)
         return(
             (niter_outer == 0) | (
-                # Only continue if max iter is not exceeded
+                # Stop if max iter is exceeded
                 (niter_outer < maxiter_outer) 
-                # Only continue if gradient is greater than tol
-                & (grad_l_k >= gtol_outer)
-                # Only continue if reduction in any of f, g, or h
-                # is greater than tol.
+                # Only stop if reduction in all of f, g, or h
+                # falls below the criterion
                 & (
-                    (df_outer >= ftol_outer)
-                    | (dg_outer >= ftol_outer)
-                    | (dh_outer >= ftol_outer)
+                    (jnp.where(f_k>0, df_outer/jnp.abs(f_k), 0) >= fstop_outer)
+                    | (jnp.where(g_k_mag>0, dg_outer/g_k_mag, 0) >= fstop_outer)
+                    | (jnp.where(h_k_mag>0, dh_outer/h_k_mag, 0) >= fstop_outer)
                 )
-                # Only continue if the iteration convergence 
-                # rate is greater than tol
-                & (dx_outer >= xtol_outer)
-                # Only continue if all constraints are satisfied
+                # Stop if the iteration convergence 
+                # rate falls below the stopping criterion
+                & (dx_outer >= xstop_outer)
+                # If no other stopping criteria are triggered,
+                # only stop when both gradient and tolerance 
+                # tlerance are reached.
                 & (
-                    jnp.any(h_eq(x_k) >= ctol_outer)
+                    (grad_f_k >= gtol_outer)
+                    | jnp.any(h_eq(x_k) >= ctol_outer)
                     | jnp.any(h_eq(x_k) <= -ctol_outer)
                     | jnp.any(g_ineq(x_k) >= ctol_outer)
                 )
@@ -345,15 +349,15 @@ def solve_constrained(
         )
 
     # Recursion
-    @jit
+    # @jit
     def body_fun_augmented_lagrangian(dict_in, x_dummy=None):
-        x_km1 = dict_in['x_k']
-        c_k = dict_in['c_k']
-        lam_k = dict_in['lam_k']
-        mu_k = dict_in['mu_k']
-        f_km1 = dict_in['f_k']
-        g_km1 = dict_in['g_k']
-        h_km1 = dict_in['h_k']
+        x_km1 = dict_in['inner_fin_x']
+        c_k = dict_in['inner_fin_c']
+        lam_k = dict_in['inner_fin_lam']
+        mu_k = dict_in['inner_fin_mu']
+        f_km1 = dict_in['inner_fin_f']
+        g_km1 = dict_in['inner_fin_g']
+        h_km1 = dict_in['inner_fin_h']
 
         l_k = lambda x: (
             f_obj(x) 
@@ -367,7 +371,7 @@ def solve_constrained(
         # Solving a stage of the problem
         
         # x, count, dx, du, df,
-        x_k, val_l_k, grad_l_k, niter_inner_k, dx_k, du_k, df_k = run_opt(x_km1, l_k, maxiter_inner, ftol_inner, xtol_inner, gtol_inner)
+        x_k, val_l_k, grad_l_k, niter_inner_k, dx_k, du_k, dL_k = run_opt(x_km1, l_k, maxiter_inner, fstop_inner, xstop_inner, gtol_inner)
 
         lam_k_first_order = lam_k + c_k * h_eq(x_k)
         mu_k_first_order = mu_k + c_k * gplus(x_k, mu_k, c_k)
@@ -376,47 +380,47 @@ def solve_constrained(
         g_k = g_ineq(x_k)
         h_k = h_eq(x_k)
         dict_out = {
-            'niter_outer': dict_in['niter_outer']+1,
-            'dx_outer': jnp.linalg.norm(x_k - x_km1),
-            'df_outer': jnp.max(jnp.abs(f_k - f_km1)),
-            'dg_outer': jnp.max(jnp.abs(g_k - g_km1)),
-            'dh_outer': jnp.max(jnp.abs(h_k - h_km1)),
-            'f_k': f_k,
-            'g_k': g_k,
-            'h_k': h_k,
-            'x_k': x_k,
-            'val_l_k': val_l_k,
-            'grad_l_k': jnp.linalg.norm(grad_l_k),
-            'c_k': c_k * c_growth_rate,
-            'lam_k': lam_k_first_order,
-            'mu_k': mu_k_first_order,
-            'niter_inner_k': niter_inner_k,
-            'dx_k': dx_k,
-            'du_k': du_k,
-            'df_k': df_k,
+            'outer_niter': dict_in['outer_niter']+1,
+            'outer_dx': jnp.linalg.norm(x_k - x_km1),
+            'outer_df': jnp.max(jnp.abs(f_k - f_km1)),
+            'outer_dg': jnp.max(jnp.abs(g_k - g_km1)),
+            'outer_dh': jnp.max(jnp.abs(h_k - h_km1)),
+            'inner_fin_f': f_k,
+            'inner_fin_g': g_k,
+            'inner_fin_h': h_k,
+            'inner_fin_x': x_k,
+            'inner_fin_l': val_l_k,
+            'inner_fin_grad_f': jnp.linalg.norm(grad_f(x_k)),
+            'inner_fin_c': c_k * c_growth_rate,
+            'inner_fin_lam': lam_k_first_order,
+            'inner_fin_mu': mu_k_first_order,
+            'inner_fin_niter': niter_inner_k,
+            'inner_fin_dx': dx_k,
+            'inner_fin_du': du_k,
+            'inner_fin_dl': dL_k,
         }
         return(dict_out)
     init_dict = {
-        'niter_outer': 0,       
+        'outer_niter': 0,       
         # Changes in x between the kth and k-1th iteration
-        'dx_outer': 0.,
+        'outer_dx': 0.,
         # Changes in f, g, h between the kth and k-1th iteration
-        'df_outer': 0., 
-        'dg_outer': 0.,
-        'dh_outer': 0.,
-        'f_k': f_obj(x_init), # Value of f, g, h after the kth iteration
-        'g_k': g_ineq(x_init),
-        'h_k': h_eq(x_init),
-        'x_k': x_init,
-        'val_l_k': 0.,
-        'grad_l_k': 0.,
-        'c_k': c_init,
-        'lam_k': lam_init,
-        'mu_k': mu_init,
-        'niter_inner_k': 0,
-        'dx_k': 0.,
-        'du_k': 0.,
-        'df_k': 0.,
+        'outer_df': 0., 
+        'outer_dg': 0.,
+        'outer_dh': 0.,
+        'inner_fin_f': f_obj(x_init), # Value of f, g, h after the kth iteration
+        'inner_fin_g': g_ineq(x_init),
+        'inner_fin_h': h_eq(x_init),
+        'inner_fin_x': x_init,
+        'inner_fin_l': 0.,
+        'inner_fin_grad_f': 0.,
+        'inner_fin_c': c_init,
+        'inner_fin_lam': lam_init,
+        'inner_fin_mu': mu_init,
+        'inner_fin_niter': 0,
+        'inner_fin_dx': 0.,
+        'inner_fin_du': 0.,
+        'inner_fin_dl': 0.,
     }
     result = while_loop(
         cond_fun=outer_convergence_criterion,

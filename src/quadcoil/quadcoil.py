@@ -46,12 +46,12 @@ import jax.numpy as jnp
     'metric_name',
     # 'c_init',
     # 'c_growth_rate',
-    # 'ftol_outer',
+    # 'fstop_outer',
     # 'ctol_outer',
-    # 'xtol_outer',
+    # 'xstop_outer',
     # 'gtol_outer',
-    # 'ftol_inner',
-    # 'xtol_inner',
+    # 'fstop_inner',
+    # 'xstop_inner',
     # 'gtol_inner',
     'maxiter_inner',
     'maxiter_outer',
@@ -73,9 +73,10 @@ def quadcoil(
     # Quadpoints to evaluate objectives at
     quadpoints_phi=None,
     quadpoints_theta=None,
+    x_init=None, 
     # Current potential's normalization constant. 
     # By default will be generated from net total current.
-    cp_mn_unit=None ,
+    cp_mn_unit=None,
     
     # - Plasma parameters
     plasma_quadpoints_phi=None,
@@ -111,13 +112,13 @@ def quadcoil(
 
     # - Solver options
     c_init=1.,
-    c_growth_rate=1.1,
-    ftol_outer=1e-7, # convergence rate tolerance
-    ctol_outer=1e-7, # constraint tolerance
-    xtol_outer=1e-7, # convergence rate tolerance
+    c_growth_rate=1.2,
+    fstop_outer=1e-7, # convergence rate tolerance
+    xstop_outer=1e-7, # convergence rate tolerance
     gtol_outer=1e-7, # gradient tolerance
-    ftol_inner=1e-7,
-    xtol_inner=0.,
+    ctol_outer=1e-7, # constraint tolerance
+    fstop_inner=1e-7,
+    xstop_inner=0.,
     gtol_inner=1e-7,
     maxiter_inner=1500,
     maxiter_outer=50,
@@ -151,6 +152,8 @@ def quadcoil(
     quadpoints_theta : ndarray, shape (ntheta,), optional, default=None
         (Traced) The toroidal quadrature points on the winding surface to evaluate the objectives at.
         Uses one period from the winding surface by default.
+    x_unit : ndarray, optional, default=None
+        (Traced) The initial guess. All zeros by default.
     cp_mn_unit : float, optional, default=None
         (Traced) Current potential's normalization constant.
         By default will be generated from total net current.
@@ -195,19 +198,19 @@ def quadcoil(
         (Static) The names of the functions to diagnose the coil configurations with. Will be differentiated w.r.t. other input quantities.
     c_init : float, optional, default=1.
         (Traced) The initial :math:`c` factor. Please see *Constrained Optimization and Lagrange Multiplier Methods* Chapter 3.
-    c_growth_rate : float, optional, default=1.1
+    c_growth_rate : float, optional, default=1.2
         (Traced) The growth rate of the :math:`c` factor.
-    ftol_outer : float, optional, default=1e-7
+    fstop_outer : float, optional, default=1e-7
         (Traced) Constraint tolerance of the outer augmented Lagrangian loop. Terminates when any 3 of the outer conditions is satisfied.
     ctol_outer : float, optional, default=1e-7
         (Traced) Constraint tolerance of the outer augmented Lagrangian loop. Terminates when any 3 of the outer conditions is satisfied.
-    xtol_outer : float, optional, default=1e-7
+    xstop_outer : float, optional, default=1e-7
         (Traced) Convergence rate tolerance of the outer augmented Lagrangian loop. Terminates when any 3 of the outer conditions is satisfied.
     gtol_outer : float, optional, default=1e-7
         (Traced) Gradient tolerance of the outer augmented Lagrangian loop. Terminates when any is satisfied.
-    ftol_inner : float, optional, default=1e-7
+    fstop_inner : float, optional, default=1e-7
         (Traced) Gradient tolerance of the inner LBFGS iteration. Terminates when any is satisfied.
-    xtol_inner : float, optional, default=0
+    xstop_inner : float, optional, default=0
         (Traced) Gradient tolerance of the inner LBFGS iteration. Terminates when any is satisfied.
     gtol_inner : float, optional, default=1e-7
         (Traced) Gradient tolerance of the inner LBFGS iteration. Terminates when any is satisfied.
@@ -392,7 +395,10 @@ def quadcoil(
     ''' Initializing solver and values '''
 
     qp = y_to_qp(y_dict_current)
-    x_init_scaled = jnp.zeros(qp.ndofs)
+    if x_init is None:
+        x_init_scaled = jnp.zeros(qp.ndofs)
+    else:
+        x_init_scaled = x_init / cp_mn_unit
     f_obj, g_ineq, h_eq = f_g_ineq_h_eq_from_y(y_dict_current)
     mu_init = jnp.zeros_like(g_ineq(x_init_scaled))
     lam_init = jnp.zeros_like(h_eq(x_init_scaled))
@@ -411,27 +417,27 @@ def quadcoil(
         g_ineq=g_ineq,
         c_init=c_init,
         c_growth_rate=c_growth_rate,
-        ftol_outer=ftol_outer,
+        fstop_outer=fstop_outer,
         ctol_outer=ctol_outer,
-        xtol_outer=xtol_outer,
+        xstop_outer=xstop_outer,
         gtol_outer=gtol_outer,
-        ftol_inner=ftol_inner,
-        xtol_inner=xtol_inner,
+        fstop_inner=fstop_inner,
+        xstop_inner=xstop_inner,
         gtol_inner=gtol_inner,
         maxiter_inner=maxiter_inner,
         maxiter_outer=maxiter_outer,
     )
     # The optimum, unit-less.
-    x_k = solve_results['x_k']
+    x_k = solve_results['inner_fin_x']
     cp_mn = x_k * cp_mn_unit
     
     ''' Recover the l_k in the last iteration for dx_k/dy '''
 
     # First, we reproduce the augmented lagrangian objective l_k that 
     # led to the optimum.
-    c_k = solve_results['c_k']
-    lam_k = solve_results['lam_k']
-    mu_k = solve_results['mu_k']
+    c_k = solve_results['inner_fin_c']
+    lam_k = solve_results['inner_fin_lam']
+    mu_k = solve_results['inner_fin_mu']
     # @jit
     def l_k(x, y): 
         f_obj, g_ineq, h_eq = f_g_ineq_h_eq_from_y(y)

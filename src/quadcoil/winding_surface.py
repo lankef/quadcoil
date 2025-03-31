@@ -6,7 +6,7 @@ from functools import partial
 from .surfacerzfourier_jax import dof_to_rz_op, SurfaceRZFourierJAX
 import lineax as lx
 
-@partial(jit, static_argnames=['nfp', 'stellsym', 'mpol', 'ntor', 'lam_tikhonov', 'lam_gaussian',])
+# @partial(jit, static_argnames=['nfp', 'stellsym', 'mpol', 'ntor', 'lam_tikhonov', 'lam_gaussian',])
 def fit_surfacerzfourier(
         phi_grid, theta_grid, 
         r_fit, z_fit, 
@@ -49,7 +49,8 @@ def fit_surfacerzfourier(
     # dofs_expand, resid, rank, s = jnp.linalg.lstsq(A_lstsq.T.dot(A_lstsq) + lam, A_lstsq.T.dot(b_lstsq))
     # but is faster and more robust to gradients.
     operator = lx.MatrixLinearOperator(A_lstsq.T.dot(A_lstsq) + lam)
-    solver = lx.QR()  # or lx.AutoLinearSolver(well_posed=None)
+    # solver = lx.QR()  # or lx.AutoLinearSolver(well_posed=None)
+    solver = lx.AutoLinearSolver(well_posed=False)
     solution = lx.linear_solve(operator, A_lstsq.T.dot(b_lstsq), solver)
     return(solution.value)
 
@@ -61,10 +62,10 @@ gen_rot_matrix = lambda theta: jnp.array([
     [0,              0,             1]
 ])
 
-@partial(jit, static_argnames=[
-    'nfp', 'stellsym', 
-    'mpol', 'ntor', 
-])
+# @partial(jit, static_argnames=[
+#     'nfp', 'stellsym', 
+#     'mpol', 'ntor', 
+# ])
 def gen_winding_surface_offset(
         plasma_gamma, d_expand, 
         nfp, stellsym,
@@ -134,7 +135,7 @@ def get_line_intersection(p0, p1, p2, p3):
     t = ( s2[0] * (p0[1] - p2[1]) - s2[1] * (p0[0] - p2[0])) * inv_denom
     return (s >= 0) & (s <= 1) & (t >= 0) & (t <= 1) & (denom!=0)
 
-@jit
+# @jit
 def polygon_self_intersection(r_pol, z_pol):
     len_theta = len(r_pol)
     # Takes a planar polygon and removes self-intersecting regions.
@@ -191,14 +192,14 @@ def polygon_self_intersection(r_pol, z_pol):
     weight = jnp.where(jnp.roll(weight, 1)==0, 0, 1)
     return(weight)
 
-@partial(jit, static_argnames=[
-    'nfp',
-    'stellsym',
-    'mpol',
-    'ntor',
-    'pol_interp',
-    'lam_tikhonov'
-])
+# @partial(jit, static_argnames=[
+#     'nfp',
+#     'stellsym',
+#     'mpol',
+#     'ntor',
+#     'pol_interp',
+#     'lam_tikhonov'
+# ])
 def gen_winding_surface_atan(
         plasma_gamma, d_expand, 
         nfp, stellsym,

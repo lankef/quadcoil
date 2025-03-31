@@ -96,7 +96,7 @@ def parse_objectives(objective_name, objective_unit=None, objective_weight=None)
                 # only the constant net poloidal and toroidal currents.
                 objective_unit = jnp.abs(get_objective(objective_name)(a, jnp.zeros_like(b)))
             if objective_weight is None:
-                objective_weight=1
+                objective_weight=1.
             return get_objective(objective_name)(a, b) * objective_weight / objective_unit
         return(f_tot)
     else:

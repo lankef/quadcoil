@@ -63,12 +63,12 @@ QUADCOIL can be run by simply importing and calling ``quadcoil.quadcoil()``:
         # - Solver options
         a_init=1.,
         c_growth_rate=1.1,
-        ftol_outer=1e-7, # constraint tolerance
-        ctol_outer=1e-7, # constraint tolerance
-        xtol_outer=1e-7, # convergence rate tolerance
-        gtol_outer=1e-7, # gradient tolerance
-        ftol_inner=1e-7,
-        xtol_inner=0.,
+        fstop_outer=1e-7, 
+        xstop_outer=1e-7, 
+        gtol_outer=1e-7, 
+        ctol_outer=1e-7, 
+        fstop_inner=1e-7,
+        xstop_inner=0.,
         gtol_inner=1e-7,
         maxiter_inner=1500,
         maxiter_outer=50,
@@ -177,6 +177,10 @@ These parameters defines basic properties of the sheet current solutions.
      - ``ndarray``, traced
      - The winding surface quadpoints
      - Poloidal quadrature points on the winding surface for evaluating coil quantities.
+   * - ``x_init``
+     - ``ndarray``, traced
+     - All zeros
+     - Initial state of x. All zeros by default. 
    * - ``cp_mn_unit``
      - ``float``, traced
      - :math:`\sqrt{G^2 + I^2}` if it is non-zero, :math:`\frac{d_{cs}B_\text{normal}^\text{plasma}}{\mu_0}` otherwise.
@@ -256,7 +260,12 @@ QUADCOIL can also run on a known winding surface for tasks such as blanket optim
 4. Choosing the objective function(s)
 ----------------------------------------
 
-QUADCOIL can perform single or multi-objective optimization. Objectives and constraints in QUADCOIL must be selected from :ref:`available_quantities` by entering their names as ``str``\s. The quantity selected as objective(s) must have scalar output.
+QUADCOIL can perform single or multi-objective optimization. Objectives and constraints in QUADCOIL must be selected from :ref:`available_quantities` by entering their names as ``str``\s. The quantity selected as objective(s) must have scalar output. 
+
+**CAUTION!**
+
+As we will see below, every objective and constraint **must be accompanied** by a normalization constant, referred to as ``<something>_unit``, that scales the objective/constraint to :math:`O(1)`. Without this constant, the optimizer will not behave well. QUADCOIL can automatically calculate these constants from :math:`f(\Phi_{sv}=0)`, but this can be inaccurate. We **strongly** advise providing a value. For the objective, the constant can come from an optimum :math:`\Phi_{sv}^*` that uses automatically calculated normalizing constants. For the constraint, the constant can be the constraint threshold. 
+
 
 Single-objective
 ~~~~~~~~~~~~~~~~
@@ -394,30 +403,30 @@ The augmented Lagrangian solver can be fine-tuned for a specific problem if the 
      - ``float``, traced
      - ``1.2``
      - The growth rate of the *c* factor.
-   * - ``ftol_outer``
+   * - ``fstop_outer``
      - ``float``, traced
      - ``1e-7``
-     - Objective convergence rate tolerance of the outer augmented Lagrangian loop. Terminates when any of 4 outer conditions is satisfied.
-   * - ``ctol_outer``
+     - :math:`f_{obj}(\Phi_{sv})` stopping criterion of the outer augmented Lagrangian loop. Terminates the convergence rate falls below this number.
+   * - ``xstop_outer``
      - ``float``, traced
      - ``1e-7``
-     - Constraint tolerance of the outer augmented Lagrangian loop.
-   * - ``xtol_outer``
-     - ``float``, traced
-     - ``1e-7``
-     - Convergence rate tolerance of the outer augmented Lagrangian loop.
+     - :math:`\Phi_{sv}` stopping criterion of the outer augmented Lagrangian loop. Terminates the convergence rate falls below this number.
    * - ``gtol_outer``
      - ``float``, traced
      - ``1e-7``
-     - Gradient tolerance of the outer augmented Lagrangian loop.
-   * - ``ftol_inner``
+     - Gradient tolerance of the outer augmented Lagrangian loop. Terminates when both tolerances are satisfied.
+   * - ``ctol_outer``
      - ``float``, traced
      - ``1e-7``
-     - Gradient tolerance of the inner LBFGS iteration. Terminates when any of 3 inner conditions is satisfied.
-   * - ``xtol_inner``
+     - Constraint tolerance of the outer augmented Lagrangian loop. Terminates when both tolerances are satisfied.
+   * - ``fstop_inner``
+     - ``float``, traced
+     - ``1e-7``
+     - :math:`f_{obj}(\Phi_{sv})` stopping criterion of the inner LBFGS iteration. Terminates the convergence rate falls below this number.
+   * - ``xstop_inner``
      - ``float``, traced
      - ``0.``
-     - *x* convergence rate tolerance of the inner LBFGS iteration. **Non-zero values may impact metric gradient accuracies.**
+     - :math:`\Phi_{sv}` stopping criterion of the inner LBFGS iteration. Terminates the convergence rate falls below this number.
    * - ``gtol_inner``
      - ``float``, traced
      - ``1e-7``
