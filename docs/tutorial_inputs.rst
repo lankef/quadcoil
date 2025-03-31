@@ -357,7 +357,7 @@ Like in multi-objective optimization, QUADCOIL will calculate :math:`\nabla_{p_j
      - ``()``
      - An array of constraint thresholds, :math:`p_j`.
 
-1. Setting coil metrics
+6. Setting coil metrics
 ---------------------------
 
 We are almost there. After an optimum coil set :math:`\Phi^*_{sv}` is found, QUADCOIL will evaluate a list of coil quality metrics :math:`M_l(\Phi^*_{sv})`. Derivatives w.r.t. the following quantities will also be available:
