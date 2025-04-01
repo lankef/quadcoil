@@ -7,76 +7,50 @@ Tutorial I: running QUADCOIL
 2. Setting up and solving the QUADCOIL problem.
 3. Evaluating the coil metrics and their derivative.
 
-QUADCOIL can be run by simply importing and calling ``quadcoil.quadcoil()``. The simplest demo case is:
+QUADCOIL can be run by simply importing and calling ``quadcoil.quadcoil()``. 
+A minimal example can be found in ``examples/simple_example.ipynb``:
 
 .. code-block:: python
-    # SWAP WITH A REGCOIL PAGE
-    ''' An example QUADCOIL call '''
-    # Disabling 64 bit variable is highly recommended for 
-    # the default tolerance but not necessary. Offers 
-    # significant speed-up.
-    from jax import config
-    config.update('jax_enable_x64', False)
-
     from quadcoil import quadcoil
-    out_dict, qp, phi_mn, status = quadcoil(
-        # - Parameters without defaults
-        nfp,
-        stellsym,
-        plasma_mpol,
-        plasma_ntor,
-        plasma_dofs,
-        net_poloidal_current_amperes,
-        # - Parameters with defaults
-        # - Quadcoil parameters
-        net_toroidal_current_amperes=0,
-        mpol=4,
-        ntor=4,
-        quadpoints_phi=None, 
-        quadpoints_theta=None,
-        cp_mn_unit=None,
-        # - Plasma parameters
-        plasma_quadpoints_phi=None, 
-        plasma_quadpoints_theta=None,
-        Bnormal_plasma=None,
-        # - Winding parameters (offset)
-        plasma_coil_distance=None,
-        winding_surface_generator=gen_winding_surface_atan,
-        winding_surface_generator_args={'pol_interp': 1, 'lam_tikhonov': 0.05},
-        # - Winding parameters (known surface)
-        winding_dofs=None,
-        winding_mpol=5, 
-        winding_ntor=5,
-        winding_quadpoints_phi=None,
-        winding_quadpoints_theta=None,
-        # - Objectives
+    from simsopt import load
+
+    # Loading an equilibrium's boundary using simsopt
+    equil_qs = Vmec('wout_LandremanPaul2021_QA_lowres.nc', keep_all_files=True)
+    plasma_surface = equil_qs.boundary
+    net_poloidal_current_amperes = equil_qs.external_current()
+
+    nescoil_out_dict, nescoil_qp, nescoil_phi_mn, _ = quadcoil(
+        nfp=plasma_surface.nfp,
+        stellsym=plasma_surface.stellsym,
+        mpol=4, # 4 poloidal harmonics for the current potential
+        ntor=4, # 4 toroidal harmonics for the current potential
+        plasma_dofs=plasma_surface.get_dofs(),
+        plasma_mpol=plasma_surface.mpol,
+        plasma_ntor=plasma_surface.ntor,
+        net_poloidal_current_amperes=net_poloidal_current_amperes,
+        net_toroidal_current_amperes=0.,
+        plasma_coil_distance=plasma_surface.minor_radius(),
+        # Set the objective to 
+        # f_B
         objective_name='f_B',
         objective_weight=None,
         objective_unit=None,
-        # - Constraints
-        constraint_name=(),
-        constraint_type=(),
-        constraint_unit=(),
-        constraint_value=(),
-        # - Metrics to study
-        metric_name=('f_B', 'f_K'),
-        # - Solver options
-        c_init=1.,
-        c_growth_rate=1.1,
-        fstop_outer=1e-7, 
-        xstop_outer=1e-7, 
-        gtol_outer=1e-7, 
-        ctol_outer=1e-7, 
-        fstop_inner=1e-7,
-        xstop_inner=0.,
-        gtol_inner=1e-7,
-        maxiter_inner=1500,
-        maxiter_outer=50,
+        # Set the output metrics to f_B and f_K
+        metric_name=('f_B', 'f_K')
     )
 
-All parameters to ``quadcoil.quadcoil()`` are ``ndarrays``, ``str``, or other built-in types. No additional imports are required.
+    # Plotting the solution
+    from quadcoil.objective import Phi_with_net_current
+    import matplotlib.pyplot as plt
+    
+    plt.contour(
+        nescoil_qp.quadpoints_phi, 
+        nescoil_qp.quadpoints_theta,
+        Phi_with_net_current(nescoil_qp, nescoil_phi_mn), 
+        levels=40
+    )
 
-This tutorial will explain how to set up a custom coil optimizer/proxy with QUADCOIL using ``quadcoil.quadcoil()``, by going over all input parameters and their physical meaning. These parameters fall in 7 categories:
+Here, we solved the NESCOIL problem (minimizing field error with no additional constraints) on the Landreman-Paul QS configuration. This tutorial will explain how to set up a more compelex coil optimizer/proxy with QUADCOIL using ``quadcoil.quadcoil()``, by going over all input parameters and their physical meaning. These parameters fall in 7 categories:
 
 1. Plasma boundary
 2. Sheet current properties (net current, resolution, ...)
@@ -92,7 +66,7 @@ For readability, we label:
 - ⭐: Inputs required by optional features.
 - The rest are resolution and numerical settings that can be left to the defaults.
 
-For more info on the available quantities in QUADCOIL, see :ref:`available_quantities`.
+All parameters to ``quadcoil.quadcoil()`` are ``ndarrays``, ``str``, or other built-in types. No additional imports are required. Objective functions are chosen by choosing names from the list of available quantities: :ref:`available_quantities`.
 
 1. Defining the plasma boundary
 ----------------------------------------
@@ -132,7 +106,7 @@ We first look at parameters defining the plasma boundary. QUADCOIL currently onl
      - Plasma toroidal quadrature points. Must be an 1D array that goes from 0 to ``1/nfp``, without the endpoint. Equivalent to ``SurfaceRZFourier.quadpoints_phi``
    * - ``plasma_quadpoints_theta``
      - ``ndarray``, traced
-     - ``jnp.linspace(0, 1, 32, endpoint=False)``
+     - ``jnp.linspace(0, 1, 34, endpoint=False)``
      - Plasma poloidal quadrature points. Must be an 1D array that goes from 0 to 1, without the endpoint. Equivalent to ``SurfaceRZFourier.quadpoints_theta``
    * - ⭐ ``Bnormal_plasma``
      - ``ndarray``, traced
@@ -163,7 +137,7 @@ These parameters defines basic properties of the sheet current solutions.
      - The net toroidal current :math:`I` in Amperes. A free variable.
    * - ``mpol``
      - ``int``, static
-     - 4
+     - 6
      - The number of poloidal harmonics in :math:`\Phi_{sv}`
    * - ``ntor``
      - ``int``, static
@@ -209,7 +183,7 @@ QUADCOIL can automatically generate winding surfaces when used as an equilibrium
      - The coil-plasma distance :math:`d_{cs}`.
    * - ``winding_mpol``
      - ``int``, static
-     - 5
+     - 6
      - The number of poloidal harmonics in the winding surface.
    * - ``winding_ntor``
      - ``int``, static
@@ -242,7 +216,7 @@ QUADCOIL can also run on a known winding surface for tasks such as blanket optim
      - The winding surface degrees of freedom.
    * - ❗ ``winding_mpol``
      - ``int``, static
-     - ``5``, but **must change match** ``winding_dofs``.
+     - ``6``, but **must change match** ``winding_dofs``.
      - The winding surface poloidal harmonic numbers.
    * - ❗ ``winding_ntor``
      - ``int``, static
@@ -254,7 +228,7 @@ QUADCOIL can also run on a known winding surface for tasks such as blanket optim
      - Toroidal quadrature points on the winding surface for evaluating surface integrals. Must be an 1D array that goes from 0 to 1, without the endpoint. Equivalent to SurfaceRZFourier.quadpoints_phi
    * - ``winding_quadpoints_theta``
      - ``ndarray``, traced
-     - ``jnp.linspace(0, 1, 32, endpoint=False)``
+     - ``jnp.linspace(0, 1, 34, endpoint=False)``
      - Poloidal quadrature points on the winding surface for evaluating integrals.
 
 4. Choosing the objective function(s)
@@ -437,7 +411,7 @@ The augmented Lagrangian solver can be fine-tuned for a specific problem if the 
      - The maximum number of outer iterations permitted.
    * - ``maxiter_inner``
      - ``int``, static
-     - ``1500``
+     - ``500``
      - The maximum number of inner iterations permitted.
 
 Thus far, we have successfully run an instance of QUADCOIL. The next section will explain how to interpret the outputs.

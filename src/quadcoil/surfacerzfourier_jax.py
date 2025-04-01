@@ -33,6 +33,48 @@ class SurfaceRZFourierJAX:
             dofs=simsopt_surf.get_dofs(),
         )
 
+    def from_desc(desc_surf, quadpoints_phi, quadpoints_theta):
+        try:
+            from desc.vmec_utils import ptolemy_identity_fwd, ptolemy_identity_rev
+        except:
+            raise RuntimeError('desc.ptolemy_identity_rev needs to be available for transform a DESC surface to a SurfaceRZFourier')
+        # mm, nn is the same as mc, nc from make_rzfourier_mc_ms_nc_ns
+        # ms, ns are just mc, nc with the first zero removed.
+        # R modes
+        mm, nn, rs_raw, rc_raw = ptolemy_identity_rev(desc_surf.R_basis.modes[:,1], desc_surf.R_basis.modes[:,2], desc_surf.R_lmn)
+        # Z modes
+        _, _, zs_raw, zc_raw = ptolemy_identity_rev(desc_surf.Z_basis.modes[:,1], desc_surf.Z_basis.modes[:,2], desc_surf.Z_lmn)
+        # Loading basic properties
+        mpol = jnp.max(mm)
+        ntor = jnp.max(nn)
+        stellsym = desc_surf.sym
+        nfp = desc_surf.NFP
+        # Stellsym SurfaceRZFourier's dofs consists of 
+        # [rc, zs]
+        # Non-stellsym SurfaceRZFourier's dofs consists of 
+        # [rc, rs, zc, zs]
+        # Because rs, zs from ptolemy_identity_rev shares the same m, n 
+        # arrays as rc, zc, they both have a zero as the first element 
+        # that need to be removed.
+        rc = rc_raw.flatten()
+        rs = rs_raw.flatten()[1:]
+        zc = zc_raw.flatten()
+        zs = zs_raw.flatten()[1:]
+        if stellsym:
+            dofs = jnp.concatenate([rc, zs])
+        else:
+            dofs = jnp.concatenate([rc, rs, zc, zs])
+
+        return SurfaceRZFourierJAX(
+            nfp=nfp,
+            stellsym=stellsym,
+            mpol=mpol,
+            ntor=ntor,
+            quadpoints_phi=quadpoints_phi,
+            quadpoints_theta=quadpoints_theta,
+            dofs=dofs,
+        )
+
     def to_simsopt(self):
         from simsopt.geo import SurfaceRZFourier
         surf = SurfaceRZFourier(
@@ -262,6 +304,19 @@ class SurfaceRZFourierJAX:
             dofs=children[2],
         )
 
+def make_rzfourier_mc_ms_nc_ns(mpol, ntor):
+    # Make a list of mc, ms, nc, ns
+    ms = jnp.concatenate([
+        jnp.zeros(ntor),
+        jnp.repeat(jnp.arange(1, mpol+1), ntor*2+1)
+    ])
+    ns = jnp.concatenate([
+        jnp.arange(1, ntor+1),
+        jnp.tile(jnp.arange(-ntor, ntor+1), mpol)
+    ])
+    mc = jnp.concatenate([jnp.zeros(1), ms])
+    nc = jnp.concatenate([jnp.zeros(1), ns])
+    return mc, ms, nc, ns
 
 # ''' Backends '''
 def dof_to_rz_op(
@@ -271,31 +326,15 @@ def dof_to_rz_op(
         mpol:int=10, ntor:int=10):
     # maps a [ndof] array
     # to a [nphi, ntheta, 2(r, z)] array.
-    m_c = jnp.concatenate([
-        jnp.zeros(ntor+1),
-        jnp.repeat(jnp.arange(1, mpol+1), ntor*2+1)
-    ])
-    m_s = jnp.concatenate([
-        jnp.zeros(ntor),
-        jnp.repeat(jnp.arange(1, mpol+1), ntor*2+1)
-    ])
-    n_c = jnp.concatenate([
-        jnp.arange(0, ntor+1),
-        jnp.tile(jnp.arange(-ntor, ntor+1), mpol)
-    ])
-    n_s = jnp.concatenate([
-        jnp.arange(1, ntor+1),
-        jnp.tile(jnp.arange(-ntor, ntor+1), mpol)
-    ])
-    
+    mc, ms, nc, ns = make_rzfourier_mc_ms_nc_ns(mpol, ntor)
     total_neg = (dash1_order + dash2_order)//2
     derivative_factor_c = (
-        (- n_c[:, None, None] * jnp.pi * 2 * nfp) ** dash1_order 
-        * (m_c[:, None, None] * jnp.pi * 2      ) ** dash2_order
+        (- nc[:, None, None] * jnp.pi * 2 * nfp) ** dash1_order 
+        * (mc[:, None, None] * jnp.pi * 2      ) ** dash2_order
     ) * (-1) ** total_neg
     derivative_factor_s = (
-        (- n_s[:, None, None] * jnp.pi * 2 * nfp) ** dash1_order 
-        * (m_s[:, None, None] * jnp.pi * 2      ) ** dash2_order
+        (- ns[:, None, None] * jnp.pi * 2 * nfp) ** dash1_order 
+        * (ms[:, None, None] * jnp.pi * 2      ) ** dash2_order
     ) * (-1) ** total_neg
     if (dash1_order + dash2_order)%2 == 0:
         # 2 arrays of shape [*stack of mn, nphi, ntheta]
@@ -309,12 +348,12 @@ def dof_to_rz_op(
         #     ...
         # ]
         cmn = derivative_factor_c * jnp.cos(
-            m_c[:, None, None] * jnp.pi * 2 * theta_grid[None, :, :]
-            - n_c[:, None, None] * jnp.pi * 2 * nfp * phi_grid[None, :, :]
+            mc[:, None, None] * jnp.pi * 2 * theta_grid[None, :, :]
+            - nc[:, None, None] * jnp.pi * 2 * nfp * phi_grid[None, :, :]
         )
         smn = derivative_factor_s * jnp.sin(
-            m_s[:, None, None] * jnp.pi * 2 * theta_grid[None, :, :]
-            - n_s[:, None, None] * jnp.pi * 2 * nfp * phi_grid[None, :, :]
+            ms[:, None, None] * jnp.pi * 2 * theta_grid[None, :, :]
+            - ns[:, None, None] * jnp.pi * 2 * nfp * phi_grid[None, :, :]
         )
     else:
         # For odd-order derivatives, 
@@ -328,14 +367,14 @@ def dof_to_rz_op(
         #     ...
         # ]
         cmn = -derivative_factor_c * jnp.sin(
-            m_c[:, None, None] * theta_grid[None, :, :] * jnp.pi * 2
-            - n_c[:, None, None] * phi_grid[None, :, :] * jnp.pi * 2 * nfp
+            mc[:, None, None] * theta_grid[None, :, :] * jnp.pi * 2
+            - nc[:, None, None] * phi_grid[None, :, :] * jnp.pi * 2 * nfp
         )
         smn = derivative_factor_s * jnp.cos(
-            m_s[:, None, None] * theta_grid[None, :, :] * jnp.pi * 2
-            - n_s[:, None, None] * phi_grid[None, :, :] * jnp.pi * 2 * nfp
+            ms[:, None, None] * theta_grid[None, :, :] * jnp.pi * 2
+            - ns[:, None, None] * phi_grid[None, :, :] * jnp.pi * 2 * nfp
         )
-    m_2_n_2 = jnp.concatenate([m_c, m_s]) ** 2 + jnp.concatenate([n_c, n_s]) ** 2
+    m_2_n_2 = jnp.concatenate([mc, ms]) ** 2 + jnp.concatenate([nc, ns]) ** 2
     if not stellsym:
         m_2_n_2 = jnp.tile(m_2_n_2, 2)
     # Stellsym SurfaceRZFourier's dofs consists of 

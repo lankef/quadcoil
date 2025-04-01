@@ -76,7 +76,6 @@ def gen_winding_surface_offset(
     # only works for large offset distances, where center (from the unweighted
     # avg of the quadrature points' rz coordinate) of the offset surface's rz cross sections
     # lay within the cross sections. 
-
     theta = 2 * jnp.pi / nfp
     rotation_matrix = gen_rot_matrix(theta)
 

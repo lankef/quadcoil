@@ -27,7 +27,7 @@ import jax.numpy as jnp
     # - WS options
     # 'plasma_coil_distance',
     'winding_surface_generator',
-    'winding_surface_generator_args',
+    # 'winding_surface_generator_args',
     # 'winding_dofs',
     'winding_mpol',
     'winding_ntor',
@@ -68,7 +68,7 @@ def quadcoil(
     
     # - Quadcoil parameters
     net_toroidal_current_amperes:float=0.,
-    mpol:int=4,
+    mpol:int=6,
     ntor:int=4,
     # Quadpoints to evaluate objectives at
     quadpoints_phi=None,
@@ -84,14 +84,14 @@ def quadcoil(
     Bnormal_plasma=None,
 
     # - Winding parameters (offset)
-    plasma_coil_distance=None,
+    plasma_coil_distance:float=None,
     winding_surface_generator=gen_winding_surface_atan,
     winding_surface_generator_args={'pol_interp': 1, 'lam_tikhonov': 0.05},
 
     # - Winding parameters (Providing surface)
     winding_dofs=None,
-    winding_mpol=5,
-    winding_ntor=5,
+    winding_mpol:int=6,
+    winding_ntor:int=5,
     winding_quadpoints_phi=None,
     winding_quadpoints_theta=None,
 
@@ -111,17 +111,17 @@ def quadcoil(
     metric_name=('f_B', 'f_K'),
 
     # - Solver options
-    c_init=1.,
-    c_growth_rate=1.2,
-    fstop_outer=1e-7, # convergence rate tolerance
-    xstop_outer=1e-7, # convergence rate tolerance
-    gtol_outer=1e-7, # gradient tolerance
-    ctol_outer=1e-7, # constraint tolerance
-    fstop_inner=1e-7,
-    xstop_inner=0.,
-    gtol_inner=1e-7,
-    maxiter_inner=1500,
-    maxiter_outer=50,
+    c_init:float=1.,
+    c_growth_rate:float=1.2,
+    fstop_outer:float=1e-7, # convergence rate tolerance
+    xstop_outer:float=1e-7, # convergence rate tolerance
+    gtol_outer:float=1e-7, # gradient tolerance
+    ctol_outer:float=1e-7, # constraint tolerance
+    fstop_inner:float=1e-7,
+    xstop_inner:float=0.,
+    gtol_inner:float=1e-7,
+    maxiter_inner:int=500,
+    maxiter_outer:int=50,
 ):
     r'''
     Solves a QUADCOIL problem.
@@ -142,7 +142,7 @@ def quadcoil(
         (Traced) The net poloidal current :math:`G`.
     net_toroidal_current_amperes : float, optional, default=0
         (Traced) The net toroidal current :math:`I`.
-    mpol : int, optional, default=4
+    mpol : int, optional, default=6
         (Static) The number of poloidal Fourier harmonics in the current potential :math:`\Phi_{sv}`.
     ntor : int, optional, default=4
         (Static) The number of toroidal Fourier harmonics in :math:`\Phi_{sv}`.
@@ -160,7 +160,7 @@ def quadcoil(
     plasma_quadpoints_phi : ndarray, shape (nphi_plasma,), optional, default=None
         (Traced) Will be set to ``jnp.linspace(0, 1/nfp, 32, endpoint=False)`` by default.
     plasma_quadpoints_theta : ndarray, shape (ntheta_plasma,), optional, default=None
-        (Traced) Will be set to ``jnp.linspace(0, 1, 32, endpoint=False)`` by default.
+        (Traced) Will be set to ``jnp.linspace(0, 1, 34, endpoint=False)`` by default.
     Bnormal_plasma : ndarray, shape (nphi, ntheta), optional, default=None
         (Traced) The magnetic field distribution on the plasma surface. Will be filled with zeros by default.
     plasma_coil_distance : float, optional, default=None
@@ -172,14 +172,14 @@ def quadcoil(
     winding_dofs : ndarray, shape (ndof_winding,)
         (Traced) The winding surface degrees of freedom. Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()`` convention.
         Will be generated using ``winding_surface_generator`` if ``plasma_coil_distance`` is provided. Must be provided otherwise.
-    winding_mpol : int, optional, default=5
+    winding_mpol : int, optional, default=6
         (Static) The number of poloidal Fourier harmonics in the winding surface.
     winding_ntor : int, optional, default=5
         (Static) The number of toroidal Fourier harmonics in the winding surface.
     winding_quadpoints_phi : ndarray, shape (nphi_winding,), optional, default=None
         (Traced) Will be set to ``jnp.linspace(0, 1, 32*nfp, endpoint=False)`` by default.
     winding_quadpoints_theta : ndarray, shape (ntheta_winding,), optional, default=None
-        (Traced) Will be set to ``jnp.linspace(0, 1, 32, endpoint=False)`` by default.
+        (Traced) Will be set to ``jnp.linspace(0, 1, 34, endpoint=False)`` by default.
     objective_name : tuple, optional, default='f_B_normalized_by_Bnormal_IG'
         (Static) The names of the objective functions. Must be a member of ``quadcoil.objective`` that outputs a scalar.
     objective_weight : ndarray, optional, default=None
@@ -216,7 +216,7 @@ def quadcoil(
         (Traced) Gradient tolerance of the inner LBFGS iteration. Terminates when any is satisfied.
     maxiter_outer : int, optional, default=50
         (Static) The maximum of the outer iteration.
-    maxiter_inner : int, optional, default=1500
+    maxiter_inner : int, optional, default=500
         (Static) The maximum of the inner iteration.
     '''
 
@@ -225,11 +225,11 @@ def quadcoil(
     if plasma_quadpoints_phi is None:
         plasma_quadpoints_phi = jnp.linspace(0, 1/nfp, 32, endpoint=False)
     if plasma_quadpoints_theta is None:
-        plasma_quadpoints_theta = jnp.linspace(0, 1, 32, endpoint=False)
+        plasma_quadpoints_theta = jnp.linspace(0, 1, 34, endpoint=False)
     if winding_quadpoints_phi is None:
         winding_quadpoints_phi = jnp.linspace(0, 1, 32*nfp, endpoint=False)
     if winding_quadpoints_theta is None:
-        winding_quadpoints_theta = jnp.linspace(0, 1, 32, endpoint=False)
+        winding_quadpoints_theta = jnp.linspace(0, 1, 34, endpoint=False)
     if plasma_coil_distance is None and winding_dofs is None:
          raise ValueError('At least one of plasma_coil_distance and winding_dofs must be provided.')
     if plasma_coil_distance is not None and winding_dofs is not None:
