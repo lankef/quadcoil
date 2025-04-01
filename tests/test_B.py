@@ -1,8 +1,13 @@
 import unittest
 from quadcoil.objective import winding_surface_B, Bnormal, f_B, f_K
 import jax.numpy as jnp
-from simsopt.field.magneticfieldclasses import WindingSurfaceField
 from load_test_data import load_data, compare
+try:
+    from simsopt.field import CurrentPotentialFourier, CurrentPotentialSolve
+    from simsopt.field.magneticfieldclasses import WindingSurfaceField
+    CPF_AVAILABLE = True
+except ImportError:
+    CPF_AVAILABLE = False
 
 winding_surface, plasma_surface, cp, cpst, qp = load_data()
     
@@ -20,6 +25,7 @@ class QuadcoilBTest(unittest.TestCase):
     The surface current K along the theta direction
     """
 
+    @unittest.skipIf(not CPF_AVAILABLE, "Skipping B test, simsopt.field.CurrentPotentialFourier unavailable.")
     def test_winding_surface_B(self):
         B_test = winding_surface_B(qp, cp.get_dofs())
         Bfield = WindingSurfaceField(cp)
@@ -28,10 +34,12 @@ class QuadcoilBTest(unittest.TestCase):
         B_ans = Bfield.B()
         self.assertTrue(compare(B_test.reshape(-1, 3), B_ans))
 
+    @unittest.skipIf(not CPF_AVAILABLE, "Skipping Bnormal test, simsopt.field.CurrentPotentialFourier unavailable.")
     def test_B_normal(self):
         B_GI_test = Bnormal(qp, jnp.zeros_like(cp.get_dofs()))
         self.assertTrue(compare(B_GI_test.flatten(), cpst.B_GI))
 
+    @unittest.skipIf(not CPF_AVAILABLE, "Skipping f_B, f_K test, simsopt.field.CurrentPotentialFourier unavailable.")
     def test_f_B_and_f_K(self):
         phi, f_B_ans, f_K_ans = cpst.solve_tikhonov()
         f_B_val = f_B(qp, phi)

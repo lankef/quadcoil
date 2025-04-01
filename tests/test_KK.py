@@ -3,14 +3,19 @@ from quadcoil import QuadcoilParams, SurfaceRZFourierJAX, project_arr_cylindrica
 from quadcoil.objective import K_dot_grad_K, K_dot_grad_K_cyl
 import jax.numpy as jnp
 import numpy as np
-from simsopt.field import CurrentPotentialFourier, CurrentPotentialSolve
 from simsopt.geo import SurfaceRZFourier
 from load_test_data import load_data, compare
+try:
+    from simsopt.field import CurrentPotentialFourier, CurrentPotentialSolve
+    CPF_AVAILABLE = True
+except ImportError:
+    CPF_AVAILABLE = False
 
 winding_surface, plasma_surface, cp, _, _ = load_data()
 
 class QuadcoilKKTest(unittest.TestCase):
 
+    @unittest.skipIf(not CPF_AVAILABLE, "Skipping K dot grad K test, simsopt.field.CurrentPotentialFourier unavailable.")
     def test_KK(self):
         for i in range(5):
             # We compare the operator and a finite difference value of K dot grad K

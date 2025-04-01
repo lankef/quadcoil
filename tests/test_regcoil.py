@@ -1,6 +1,10 @@
 
 from load_test_data import load_data, compare
-from simsopt.field import CurrentPotentialFourier, CurrentPotentialSolve
+try:
+    from simsopt.field import CurrentPotentialFourier, CurrentPotentialSolve
+    CPF_AVAILABLE = True
+except ImportError:
+    CPF_AVAILABLE = False
 from quadcoil import quadcoil
 import jax.numpy as jnp
 import numpy as np
@@ -10,10 +14,11 @@ import time
 winding_surface, plasma_surface, cp, cpst, qp = load_data()
 
 class QuadcoilKTest(unittest.TestCase):
+    @unittest.skipIf(not CPF_AVAILABLE, "Skipping sln vs regcoil test, simsopt.field.CurrentPotentialFourier unavailable.")
     def test_regcoil(self):
         # First, test with the NESCOIL problem, auto-generating WS
         print('Testing NESCOIL, with auto-generated winding surface')
-        nescoil_phi_mn, nescoil_out_dict, nescoil_qp, _ = quadcoil(
+        nescoil_out_dict, nescoil_qp, nescoil_phi_mn, _ = quadcoil(
             nfp=cp.nfp,
             stellsym=cp.stellsym,
             mpol=cp.mpol,
@@ -33,7 +38,7 @@ class QuadcoilKTest(unittest.TestCase):
             net_toroidal_current_amperes=cp.net_toroidal_current_amperes,
             stellsym=True)
         cpst0 = CurrentPotentialSolve(cp0, plasma_surface, 0)
-        nescoil_phi_mn_ans, nescoil_f_B_ans, nescoil_f_K_ans = cpst1.solve_tikhonov()
+        nescoil_phi_mn_ans, nescoil_f_B_ans, nescoil_f_K_ans = cpst0.solve_tikhonov()
         print('Phi:')
         compare(nescoil_phi_mn_ans, nescoil_phi_mn, 1e-3)
         print('f_B:')
@@ -44,7 +49,7 @@ class QuadcoilKTest(unittest.TestCase):
         
         # First, test with the REGCOIL problem, auto-generating WS
         print('Testing REGCOIL, with auto-generated winding surface')
-        regcoil1_phi_mn, regcoil1_out_dict, regcoil1_qp, _ = quadcoil(
+        regcoil1_out_dict, regcoil1_qp, regcoil1_phi_mn, _ = quadcoil(
             nfp=cp.nfp,
             stellsym=cp.stellsym,
             mpol=cp.mpol,
@@ -80,7 +85,7 @@ class QuadcoilKTest(unittest.TestCase):
 
         # Then, test with REGCOIL, given winding surface.
         print('Testing REGCOIL, with known winding surface')
-        regcoil2_phi_mn, regcoil2_out_dict, regcoil2_qp, _ = quadcoil(
+        regcoil2_out_dict, regcoil2_qp, regcoil2_phi_mn, _ = quadcoil(
             nfp=cp.nfp,
             stellsym=cp.stellsym,
             mpol=cp.mpol,
@@ -111,6 +116,7 @@ class QuadcoilKTest(unittest.TestCase):
         print('f_K:')
         compare(regcoil2_out_dict['f_K']['value'], regcoil2_f_K_ans, 1e-3)
 
+    @unittest.skipIf(not CPF_AVAILABLE, "Skipping gradient vs regcoil test, simsopt.field.CurrentPotentialFourier unavailable.")
     def test_taylor(self):
         print('Taylor test, w.r.t. plasma_dof[0]')
         plasma_dof_orig = plasma_surface.get_dofs()
@@ -130,7 +136,7 @@ class QuadcoilKTest(unittest.TestCase):
             plasma_dof_i[0] *= (1 + i)
             # Run QUADCOIL first
             time1 = time.time()
-            regcoili_phi_mn, regcoili_out_dict, regcoili_qp, _ = quadcoil(
+            regcoili_out_dict, regcoili_qp, regcoili_phi_mn, _ = quadcoil(
                 nfp=cp.nfp,
                 stellsym=cp.stellsym,
                 mpol=cp.mpol,

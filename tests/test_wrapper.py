@@ -4,8 +4,12 @@ from quadcoil.objective import f_B, f_K, K_dot_grad_K, f_B_normalized_by_Bnormal
 import jax.numpy as jnp
 import numpy as np
 from simsopt import load
-from simsopt.field import CurrentPotentialFourier, CurrentPotentialSolve
 from load_test_data import load_data, compare
+try:
+    from simsopt.field import CurrentPotentialFourier, CurrentPotentialSolve
+    CPF_AVAILABLE = True
+except ImportError:
+    CPF_AVAILABLE = False
 
 winding_surface, plasma_surface, cp, cpst, qp = load_data()
     
@@ -22,7 +26,7 @@ class QuadcoilWrapperTest(unittest.TestCase):
     - K_theta
     The surface current K along the theta direction
     """
-
+    @unittest.skipIf(not CPF_AVAILABLE, "Skipping objective wrapper test, simsopt.field.CurrentPotentialFourier unavailable.")
     def test_get_objective(self):
         K_func = get_objective('K')
         K_test = K_func(qp, cp.get_dofs())
@@ -44,6 +48,7 @@ class QuadcoilWrapperTest(unittest.TestCase):
         result = big_fn(0, 0)  # Call with dummy arguments
         self.assertTrue(result.shape[0]==104)
 
+    @unittest.skipIf(not CPF_AVAILABLE, "Skipping constraint parser test, simsopt.field.CurrentPotentialFourier unavailable.")
     def test_parse_constraints(self):
         # We test the constraints using f_K and K_dot_grad_K
         f_K_ans = f_K(qp, cp.get_dofs())
@@ -75,6 +80,7 @@ class QuadcoilWrapperTest(unittest.TestCase):
         self.assertTrue(compare(h_eq_test_val[0], -pert_f_K/unit_f_K))
         self.assertTrue(compare(h_eq_test_val[1:], -(pert_KK/unit_KK).ravel()))
     
+    @unittest.skipIf(not CPF_AVAILABLE, "Skipping objective parser test, simsopt.field.CurrentPotentialFourier unavailable.")
     def test_parse_objectives(self):
         self.assertTrue(compare(parse_objectives('f_B')(qp, cp.get_dofs()), f_B_normalized_by_Bnormal_IG(qp, cp.get_dofs())))
         self.assertTrue(compare(

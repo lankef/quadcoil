@@ -7,10 +7,10 @@ Tutorial I: running QUADCOIL
 2. Setting up and solving the QUADCOIL problem.
 3. Evaluating the coil metrics and their derivative.
 
-QUADCOIL can be run by simply importing and calling ``quadcoil.quadcoil()``:
+QUADCOIL can be run by simply importing and calling ``quadcoil.quadcoil()``. The simplest demo case is:
 
 .. code-block:: python
-
+    # SWAP WITH A REGCOIL PAGE
     ''' An example QUADCOIL call '''
     # Disabling 64 bit variable is highly recommended for 
     # the default tolerance but not necessary. Offers 
@@ -61,7 +61,7 @@ QUADCOIL can be run by simply importing and calling ``quadcoil.quadcoil()``:
         # - Metrics to study
         metric_name=('f_B', 'f_K'),
         # - Solver options
-        a_init=1.,
+        c_init=1.,
         c_growth_rate=1.1,
         fstop_outer=1e-7, 
         xstop_outer=1e-7, 
@@ -395,7 +395,7 @@ The augmented Lagrangian solver can be fine-tuned for a specific problem if the 
      - Type
      - Default
      - Definition
-   * - ``a_init``
+   * - ``c_init``
      - ``float``, traced
      - ``1.``
      - The *c* factor. Please see *Constrained Optimization and Lagrange* *Multiplier Methods*, Chapter 3.
