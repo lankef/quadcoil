@@ -1,5 +1,7 @@
 from quadcoil import norm_helper, project_arr_cylindrical
 from jax import jit
+# For calculating normalization constant
+from quadcoil.objective import K
 
 @jit
 def K_dot_grad_K(qp, cp_mn):
@@ -44,12 +46,15 @@ def K_dot_grad_K(qp, cp_mn):
     term_b = ((trig_diff_m_i_n_i@partial_theta) @ cp_mn + I)[:, :, None] * Kdash1
     K_dot_grad_K = (term_a-term_b) * inv_normN_prime_2d[:, :, None]
     return(K_dot_grad_K)
+K_dot_grad_K_desc_unit = lambda scales: K_desc_unit(scales)**2 / scales["a"]
 
 @jit
 def K_dot_grad_K_cyl(qp, cp_mn):
     KK_ans = K_dot_grad_K(qp, cp_mn)
     return project_arr_cylindrical(qp.eval_surface.gamma(), KK_ans)
+K_dot_grad_K_cyl_desc_unit = lambda scales: K_dot_grad_K_desc_unit(scales)
 
 @jit
 def f_max_K_dot_grad_K_cyl(qp, cp_mn):
     return jnp.max(jnp.abs(K_dot_grad_K_cyl(qp, cp_mn)))
+f_max_K_dot_grad_K_cyl_desc_unit = lambda scales: K_dot_grad_K_desc_unit(scales)

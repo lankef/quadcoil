@@ -32,6 +32,8 @@ class QuadcoilWrapperTest(unittest.TestCase):
         K_test = K_func(qp, cp.get_dofs())
         K_ans = cp.K()[:len(cp.winding_surface.quadpoints_phi)//cp.nfp]
         self.assertTrue(compare(K_test, K_ans))
+        # Testing if the desc units is properly attached to at least one function
+        self.assertTrue(get_objective('f_max_Bnormal2_desc_unit')({'B': 2})==4)
 
     def test_merge_callables(self):
         def f1(a, b):

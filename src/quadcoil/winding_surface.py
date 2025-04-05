@@ -191,14 +191,15 @@ def polygon_self_intersection(r_pol, z_pol):
     weight = jnp.where(jnp.roll(weight, 1)==0, 0, 1)
     return(weight)
 
-# @partial(jit, static_argnames=[
-#     'nfp',
-#     'stellsym',
-#     'mpol',
-#     'ntor',
-#     'pol_interp',
-#     'lam_tikhonov'
-# ])
+@partial(jit, static_argnames=[
+    'nfp',
+    'stellsym',
+    'mpol',
+    'ntor',
+    'pol_interp',
+    'tor_interp',
+    # 'lam_tikhonov'
+])
 def gen_winding_surface_atan(
         plasma_gamma, d_expand, 
         nfp, stellsym,
@@ -206,7 +207,7 @@ def gen_winding_surface_atan(
         mpol=5, ntor=5,
         pol_interp=2,
         tor_interp=2,
-        lam_tikhonov=0.0,
+        lam_tikhonov=0.05,
     ):
     ''' Create uniform offset '''
     uniform_offset_dofs = gen_winding_surface_offset(

@@ -61,11 +61,11 @@ class QuadcoilKTest(unittest.TestCase):
             net_toroidal_current_amperes=cp.net_toroidal_current_amperes,
             plasma_coil_distance=plasma_surface.minor_radius(),
             objective_name=('f_B', 'f_K'),
-            objective_weight=(1., 0.01),
+            objective_weight=jnp.array([1., 0.01]),
             # Usually we recommend normalizing f_B and f_K to 
             # ~1, but in this case, for testing prupose, not normalizing 
             # is also okay
-            objective_unit=(1., 1.), 
+            objective_unit=jnp.array([1., 1.]), 
             metric_name=('f_B', 'f_K')
         )
         ws1 = regcoil1_qp.winding_surface.to_simsopt()
@@ -101,11 +101,11 @@ class QuadcoilKTest(unittest.TestCase):
             winding_quadpoints_phi=cpst.winding_surface.quadpoints_phi,
             winding_quadpoints_theta=cpst.winding_surface.quadpoints_theta,
             objective_name=('f_B', 'f_K'),
-            objective_weight=(1., 1e-14),
+            objective_weight=jnp.array([1., 1e-14]),
             # Usually we recommend normalizing f_B and f_K to 
             # ~1, but in this case, for testing prupose, not normalizing 
             # is also okay
-            objective_unit=(1., 1.), 
+            objective_unit=jnp.array([1., 1.]),
             metric_name=('f_B', 'f_K')
         )
         regcoil2_phi_mn_ans, regcoil2_f_B_ans, regcoil2_f_K_ans = cpst.solve_tikhonov(lam=1e-14)
@@ -148,11 +148,11 @@ class QuadcoilKTest(unittest.TestCase):
                 net_toroidal_current_amperes=cp.net_toroidal_current_amperes,
                 plasma_coil_distance=plasma_surface.minor_radius(),
                 objective_name=('f_B', 'f_K'),
-                objective_weight=(1., 0.01),
+                objective_weight=jnp.array([1., 0.01]),
                 # Usually we recommend normalizing f_B and f_K to 
                 # ~1, but in this case, for testing prupose, not normalizing 
                 # is also okay
-                objective_unit=(1., 1.), 
+                objective_unit=jnp.array([1., 1.]), 
                 metric_name=('f_B', 'f_K')
             )
             block_until_ready(regcoili_phi_mn)

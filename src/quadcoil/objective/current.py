@@ -2,6 +2,7 @@ import jax.numpy as jnp
 from quadcoil import sin_or_cos
 from jax import jit
 from functools import partial
+from scipy.constants import mu_0
 
 @partial(jit, static_argnames=[
     'winding_surface_mode',
@@ -44,10 +45,12 @@ def K(qp, cp_mn, winding_surface_mode=False):
         - dg1 * I
     )
     return b_K@cp_mn + c_K
+K_desc_unit = lambda scales: scales["B"] / mu_0 # based on infinite solenoid: B = mu_0 K_pol.
 
 @jit
 def K2(qp, cp_mn):
     return(jnp.sum(K(qp, cp_mn)**2, axis=-1))
+K2_desc_unit = lambda scales: K_desc_unit(scales)**2
 
 @jit
 def K_theta(qp, cp_mn):
@@ -88,14 +91,10 @@ def K_theta(qp, cp_mn):
     A_K_theta = K_theta
     b_K_theta = qp.net_poloidal_current_amperes*jnp.ones((K_theta.shape[0], K_theta.shape[1]))
     return A_K_theta @ cp_mn + b_K_theta
-
-# @jit
-# def signed_K_theta2(qp, cp_mn):
-#     # signed K_theta. Maybe it'll behave better than K_theta?
-#     Kt = K_theta(qp, cp_mn)
-#     return Kt**2 * jnp.sign(Kt)
+K_theta_desc_unit = lambda scales: K_desc_unit(scales)
 
 @jit 
 def f_K(qp, cp_mn):
     K2_val = K2(qp, cp_mn)
     return qp.eval_surface.integrate(K2_val/2)*qp.nfp
+f_K_desc_unit = lambda scales: K_desc_unit(scales)**2 * scales["R0"] * scales["a"]

@@ -1,8 +1,10 @@
 import jax.numpy as jnp
+import numpy as numpy
 from functools import partial, lru_cache
 from jax import jit, tree_util
 from jax.scipy.special import factorial
 from .math_utils import norm_helper
+
 
 @tree_util.register_pytree_node_class
 class SurfaceRZFourierJAX:
@@ -35,18 +37,22 @@ class SurfaceRZFourierJAX:
 
     def from_desc(desc_surf, quadpoints_phi, quadpoints_theta):
         try:
-            from desc.vmec_utils import ptolemy_identity_fwd, ptolemy_identity_rev
+            from desc.vmec_utils import ptolemy_identity_rev
         except:
-            raise RuntimeError('desc.ptolemy_identity_rev needs to be available for transform a DESC surface to a SurfaceRZFourier')
+            raise ModuleNotFoundError('')
         # mm, nn is the same as mc, nc from make_rzfourier_mc_ms_nc_ns
         # ms, ns are just mc, nc with the first zero removed.
         # R modes
+        # R_basis_modes[:,1] is desc_surf.R_basis.modes[:,1]
+        # ptolemy_identity_rev has mutable shape, but there are only 3 possibilities:
+        # all sin, all cos, and sin + cos.
+        # These possibilities are known before-hand from stellarator symmetry.
         mm, nn, rs_raw, rc_raw = ptolemy_identity_rev(desc_surf.R_basis.modes[:,1], desc_surf.R_basis.modes[:,2], desc_surf.R_lmn)
         # Z modes
-        _, _, zs_raw, zc_raw = ptolemy_identity_rev(desc_surf.Z_basis.modes[:,1], desc_surf.Z_basis.modes[:,2], desc_surf.Z_lmn)
+        mm, nn, zs_raw, zc_raw = ptolemy_identity_rev(desc_surf.Z_basis.modes[:,1], desc_surf.Z_basis.modes[:,2], desc_surf.Z_lmn)
         # Loading basic properties
-        mpol = jnp.max(mm)
-        ntor = jnp.max(nn)
+        mpol = desc_surf.M
+        ntor = desc_surf.N
         stellsym = desc_surf.sym
         nfp = desc_surf.NFP
         # Stellsym SurfaceRZFourier's dofs consists of 
@@ -463,3 +469,4 @@ def dof_to_gamma(
             ntor=ntor
         ) @ dofs
     )
+

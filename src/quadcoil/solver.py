@@ -124,10 +124,10 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt):
         err = otu.tree_l2_norm(grad)
         return (iter_num == 0) | (
             (iter_num < maxiter) 
-            & (err >= gtol)
-            & (dx >= xstop)
-            & (du >= xstop)
-            & (df/jnp.abs(value) >= fstop)
+            & (err > gtol)
+            & (dx > xstop)
+            & (du > xstop)
+            & (df/jnp.abs(value) > fstop)
         )
     init_carry = (
         init_params, 
@@ -167,7 +167,7 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt):
 #     'xstop_inner',
 #     'gtol_inner',
 #     'maxiter_inner',
-#     'maxiter_outer',
+#     'maxiter_tot',
 #     # 'scan_mode',
 # ])
 def solve_constrained(
@@ -188,8 +188,8 @@ def solve_constrained(
         fstop_inner=1e-7,
         xstop_inner=1e-7,
         gtol_inner=1e-7,
-        maxiter_inner=1500,
-        maxiter_outer=50,
+        maxiter_tot=10000,
+        maxiter_inner=500,
         # # Uses jax.lax.scan instead of while_loop.
         # # Enables history and forward diff but disables 
         # # convergence test.
@@ -272,10 +272,8 @@ def solve_constrained(
     gtol_inner : float, optional, default=1e-7
         (Traced) Gradient tolerance of the inner LBFGS 
         iteration. Terminates when is satisfied. 
-    maxiter_outer: int, optional, default=50
+    maxiter_tot: int, optional, default=50
         (Static) The maximum of the outer iteration.
-    maxiter_inner: int, optional, default=1500
-        (Static) The maximum of the inner iteration.
 
     Returns
     -------
@@ -285,7 +283,7 @@ def solve_constrained(
         .. code-block:: python
         
             init_dict = {
-                'outer_niter' : int, # The outer iteration number
+                'tot_niter' : int, # The outer iteration number
                 'outer_dx' : float, # The L2 norm of the change in x between the last 2 outer iterations
                 'outer_df' : float, # The L2 norm of the change in f between the last 2 outer iterations
                 'outer_dg' : float, # The L2 norm of the change in g between the last 2 outer iterations
@@ -314,7 +312,7 @@ def solve_constrained(
         x_k = dict_in['inner_fin_x']
         dx_outer = dict_in['outer_dx']
         grad_f_k = dict_in['inner_fin_grad_f']
-        niter_outer = dict_in['outer_niter']
+        tot_niter = dict_in['tot_niter']
         df_outer = dict_in['outer_df']
         dg_outer = dict_in['outer_dg']
         dh_outer = dict_in['outer_dh']
@@ -323,9 +321,9 @@ def solve_constrained(
         h_k_mag = jnp.max(jnp.abs(dict_in['inner_fin_h']))
         # This is the convergence condition (True when not converged yet)
         return(
-            (niter_outer == 0) | (
+            (tot_niter == 0) | (
                 # Stop if max iter is exceeded
-                (niter_outer < maxiter_outer) 
+                (tot_niter < maxiter_tot) 
                 # Only stop if reduction in all of f, g, or h
                 # falls below the criterion
                 & (
@@ -380,7 +378,7 @@ def solve_constrained(
         g_k = g_ineq(x_k)
         h_k = h_eq(x_k)
         dict_out = {
-            'outer_niter': dict_in['outer_niter']+1,
+            'tot_niter': dict_in['tot_niter']+niter_inner_k,
             'outer_dx': jnp.linalg.norm(x_k - x_km1),
             'outer_df': jnp.max(jnp.abs(f_k - f_km1)),
             'outer_dg': jnp.max(jnp.abs(g_k - g_km1)),
@@ -401,7 +399,7 @@ def solve_constrained(
         }
         return(dict_out)
     init_dict = {
-        'outer_niter': 0,       
+        'tot_niter': 0,       
         # Changes in x between the kth and k-1th iteration
         'outer_dx': 0.,
         # Changes in f, g, h between the kth and k-1th iteration

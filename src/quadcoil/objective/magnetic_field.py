@@ -7,6 +7,8 @@ from quadcoil.objective import K
 def winding_surface_B(qp, cp_mn):
     # A port of simsoptpp/winding_surface.cpp
     # Array WindingSurfaceB(Array& points, Array& ws_points, Array& ws_normal, Array& K)
+    # NOTE: Bnormal_plasma is not necessarily stellarator 
+    # symmetric even for stellarator symmetric equilibria.
     gamma = qp.plasma_surface.gamma() # The shapes will be used later
     points = gamma.reshape((-1, 3))
     num_points = points.shape[0]
@@ -30,6 +32,7 @@ def winding_surface_B(qp, cp_mn):
         return B_i
     B = vmap(compute_B)(points) * fak
     return B.reshape(gamma.shape) / nphi / ntheta
+winding_surface_B_desc_unit = lambda scales: scales["B"]
 
 @jit 
 def Bnormal(qp, cp_mn):
@@ -38,12 +41,14 @@ def Bnormal(qp, cp_mn):
     unitnormal_plasma = qp.plasma_surface.unitnormal()
     Bnormal_winding_surface = jnp.sum(unitnormal_plasma * winding_surface_B(qp, cp_mn) , axis=-1)
     return Bnormal_winding_surface + qp.Bnormal_plasma
+Bnormal_desc_unit = lambda scales: scales["B"]
 
 @jit 
 def f_B(qp, cp_mn):
     # The nescoil objective.
     Bnormal_val = Bnormal(qp, cp_mn)
     return qp.plasma_surface.integrate(Bnormal_val**2/2) * qp.nfp
+f_B_desc_unit = lambda scales: scales["B"]**2 * scales["R0"] * scales["a"]
 
 @jit
 def f_B_normalized_by_Bnormal_IG(qp, cp_mn):
@@ -54,12 +59,15 @@ def f_B_normalized_by_Bnormal_IG(qp, cp_mn):
     f_B_with_unit = f_B(qp, cp_mn)
     f_B_IG = f_B(qp, jnp.zeros_like(cp_mn))
     return(f_B_with_unit / f_B_IG)
+f_B_normalized_by_Bnormal_IG_desc_unit = lambda scales: 1.
 
 @jit 
 def f_max_Bnormal_abs(qp, cp_mn):
     return jnp.max(jnp.abs(Bnormal))
+f_max_Bnormal_abs_desc_unit = lambda scales: scales["B"]
 
 @jit 
 def f_max_Bnormal2(qp, cp_mn):
     return jnp.max(Bnormal**2)
+f_max_Bnormal2_desc_unit = lambda scales: scales["B"]**2
     

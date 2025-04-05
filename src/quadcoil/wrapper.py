@@ -175,6 +175,14 @@ def parse_constraints(
     scaled_g_ineq_terms = []
     scaled_h_eq_terms = []
     for i in range(n_cons_total):
+        # Catch empty constraints! When constraint name is an
+        # empty string, the corresponding elements in 
+        # constraint_type, constraint_value, constraint_unit
+        # will all be ignored. We implemented this special behavior 
+        # because DESC.objective.objective_funs._Objective
+        # does not permit empty tuples, static or traced.
+        if not constraint_name[i]:
+            continue
         cons_func_i = get_objective(constraint_name[i])
         cons_type_i = constraint_type[i]
         cons_val_i = constraint_value[i]
