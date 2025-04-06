@@ -317,8 +317,6 @@ def solve_constrained(
         dg_outer = dict_in['outer_dg']
         dh_outer = dict_in['outer_dh']
         f_k = dict_in['inner_fin_f']
-        g_k_mag = jnp.max(jnp.abs(dict_in['inner_fin_g']))
-        h_k_mag = jnp.max(jnp.abs(dict_in['inner_fin_h']))
         # This is the convergence condition (True when not converged yet)
         return(
             (tot_niter == 0) | (
@@ -327,9 +325,9 @@ def solve_constrained(
                 # Only stop if reduction in all of f, g, or h
                 # falls below the criterion
                 & (
-                    (jnp.where(f_k>0, df_outer/jnp.abs(f_k), 0) >= fstop_outer)
-                    | (jnp.where(g_k_mag>0, dg_outer/g_k_mag, 0) >= fstop_outer)
-                    | (jnp.where(h_k_mag>0, dh_outer/h_k_mag, 0) >= fstop_outer)
+                    (df_outer >= fstop_outer)
+                    | (dg_outer >= fstop_outer)
+                    | (dh_outer >= fstop_outer)
                 )
                 # Stop if the iteration convergence 
                 # rate falls below the stopping criterion

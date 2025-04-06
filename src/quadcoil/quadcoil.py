@@ -42,7 +42,7 @@ QUADCOIL_STATIC_ARGNAMES=[
     'verbose',
 ]
 
-@partial(jit, static_argnames=QUADCOIL_STATIC_ARGNAMES)
+# @partial(jit, static_argnames=QUADCOIL_STATIC_ARGNAMES)
 def quadcoil(
     nfp:int,
     stellsym:bool,
