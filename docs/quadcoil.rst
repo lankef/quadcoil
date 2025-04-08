@@ -8,6 +8,7 @@ Subpackages
    :maxdepth: 4
 
    quadcoil.objective
+   quadcoil.io
 
 Submodules
 ----------
