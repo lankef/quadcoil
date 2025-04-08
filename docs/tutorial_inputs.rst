@@ -11,6 +11,7 @@ QUADCOIL can be run by simply importing and calling ``quadcoil.quadcoil()``.
 A minimal example can be found in ``examples/simple_example.ipynb``:
 
 .. code-block:: python
+
     from quadcoil import quadcoil
     from simsopt import load
 
@@ -193,10 +194,6 @@ QUADCOIL can automatically generate winding surfaces when used as an equilibrium
      - ``callable``, static. Must have the correct signatures
      - ``gen_winding_surface_atan``
      - The winding surface generator.
-   * - ``winding_surface_generator_args``
-     - ``callable``
-     - ``{'pol_interp': 1, 'lam_tikhonov': 0.05}``
-     - Arguments for the winding surface generator.
 
 Known winding surface
 ~~~~~~~~~~~~~~~~~~~~~
@@ -405,13 +402,17 @@ The augmented Lagrangian solver can be fine-tuned for a specific problem if the 
      - ``float``, traced
      - ``1e-7``
      - Gradient tolerance of the inner LBFGS iteration.
-   * - ``maxiter_outer``
+   * - ``maxiter_total``
      - ``int``, static
      - ``50``
-     - The maximum number of outer iterations permitted.
+     - The maximum number of total LBFGS iterations permitted, summed across all outer iterations.
    * - ``maxiter_inner``
      - ``int``, static
      - ``500``
      - The maximum number of inner iterations permitted.
+   * - ⭐ ``value_only``
+     - ``bool``, static
+     - ``False``
+     - When ``True``, skip gradient calculations.
 
 Thus far, we have successfully run an instance of QUADCOIL. The next section will explain how to interpret the outputs.

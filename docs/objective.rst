@@ -172,7 +172,7 @@ These objectives are related to dipole optimization:
      - Scalar
      - The maximum dipole density on the winding surface.
    * - ``'f_l1_Phi'``
-     - :math:`\sum_\text{WS}\|\Phi_{sv}\|`
+     - :math:`\int_\text{WS}dA\|\Phi_{sv}\|`
      - Scalar
      - The sum of the absolute values of dipole density over the winding surface for L1 sparsity regularization.
    * - ``'f_max_Phi2'``

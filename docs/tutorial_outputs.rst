@@ -85,6 +85,9 @@ The keys in the third level will change based on whether
 multi-objective optimization is enabled, constraints are present, 
 and whether the winding surface is provided.
 
+Setting ``value_only=True`` when running ``quadcoil.quadcoil`` will skip gradient calculations.
+In this case, ``out_dict`` will not have the ``'grad'`` layer.
+
 ``qp`` - Problem configurations
 ---------------------------------------------------------------------
 ``qp : QuadcoilParams`` is an objects that contains information on the plasma boundary, 
