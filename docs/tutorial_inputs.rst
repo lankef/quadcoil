@@ -11,6 +11,7 @@ QUADCOIL can be run by simply importing and calling ``quadcoil.quadcoil()``.
 A minimal example can be found in ``examples/simple_example.ipynb``:
 
 .. code-block:: python
+  
     from quadcoil import quadcoil
     from simsopt import load
 

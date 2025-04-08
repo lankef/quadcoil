@@ -31,7 +31,7 @@ and then run:
    pip install .
 
 Validating the installation
-------------------------
+------------------------------
 
 The installation can be validated by running the example notebooks in ``examples``. 
 The unit tests requires Simsopt's `regcoil` branch, which is not completely merged into
