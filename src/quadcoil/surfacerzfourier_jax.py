@@ -3,16 +3,19 @@ import numpy as numpy
 from functools import partial, lru_cache
 from jax import jit, tree_util
 from jax.scipy.special import factorial
-from .math_utils import norm_helper
+from .math_utils import norm_helper, is_ndarray
 
 
 @tree_util.register_pytree_node_class
 class SurfaceRZFourierJAX:
     def __init__(self, nfp: int, stellsym: bool, mpol: int, ntor: int, 
                  quadpoints_phi: jnp.ndarray, quadpoints_theta: jnp.ndarray, dofs: jnp.ndarray):
-        if quadpoints_phi.ndim != 1 or quadpoints_theta.ndim != 1 or dofs.ndim != 1:
-            raise ValueError('quadpoints_phi, quadpoints_theta, dofs must all be 1D arrays.')
-        
+        if not is_ndarray(quadpoints_phi, 1):
+            raise TypeError('quadpoints_phi has incorrect type or shape: ' + str(type(quadpoints_phi)))    
+        if not is_ndarray(quadpoints_theta, 1):
+            raise TypeError('quadpoints_phi has incorrect type or shape: ' + str(type(quadpoints_theta)))    
+        if not is_ndarray(dofs, 1):
+            raise TypeError('quadpoints_phi has incorrect type or shape: ' + str(type(dofs)))    
         self.nfp = nfp
         self.stellsym = stellsym
         self.mpol = mpol

@@ -1,6 +1,9 @@
 import jax.numpy as jnp
+import numpy as np # Don't panic, it's for type checking
 from jax import jit
 
+def is_ndarray(arr, n=1):
+    return isinstance(arr, (np.ndarray, jnp.ndarray)) and arr.ndim == 1
 
 def sin_or_cos(x, mode):
     r'''

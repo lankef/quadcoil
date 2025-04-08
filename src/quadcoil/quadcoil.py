@@ -2,16 +2,13 @@ from quadcoil import (
     parse_objectives, parse_constraints, get_objective,
     gen_winding_surface_atan, 
     SurfaceRZFourierJAX, QuadcoilParams, 
-    solve_constrained
+    solve_constrained,
+    is_ndarray
 )
 from functools import partial
 from jax import jacrev, jvp, jit
 import jax
 import jax.numpy as jnp
-import numpy as np
-
-def is_ndarray(arr, n=1):
-    return isinstance(arr, (np.ndarray, jnp.ndarray)) and arr.ndim == 1
 
 # The list of all static arguments of 
 # quadcoil. Also used in the DESC interface.
@@ -41,8 +38,7 @@ QUADCOIL_STATIC_ARGNAMES=[
     'value_only',
     'verbose',
 ]
-
-# @partial(jit, static_argnames=QUADCOIL_STATIC_ARGNAMES)
+@partial(jit, static_argnames=QUADCOIL_STATIC_ARGNAMES)
 def quadcoil(
     nfp:int,
     stellsym:bool,
@@ -99,13 +95,13 @@ def quadcoil(
     # - Solver options
     c_init:float=1.,
     c_growth_rate:float=1.2,
-    fstop_outer:float=1e-7, # convergence rate tolerance
-    xstop_outer:float=1e-7, # convergence rate tolerance
-    gtol_outer:float=1e-7, # gradient tolerance
-    ctol_outer:float=1e-7, # constraint tolerance
-    fstop_inner:float=1e-7,
+    fstop_outer:float=1e-10, # convergence rate tolerance
+    xstop_outer:float=1e-10, # convergence rate tolerance
+    gtol_outer:float=1e-10, # gradient tolerance
+    ctol_outer:float=1e-10, # constraint tolerance
+    fstop_inner:float=1e-10,
     xstop_inner:float=0.,
-    gtol_inner:float=1e-7,
+    gtol_inner:float=1e-10,
     maxiter_tot:int=10000,
     maxiter_inner:int=500,
     value_only=False,
@@ -186,19 +182,19 @@ def quadcoil(
         (Traced) The initial :math:`c` factor. Please see *Constrained Optimization and Lagrange Multiplier Methods* Chapter 3.
     c_growth_rate : float, optional, default=1.2
         (Traced) The growth rate of the :math:`c` factor.
-    fstop_outer : float, optional, default=1e-7
+    fstop_outer : float, optional, default=1e-10
         (Traced) Constraint tolerance of the outer augmented Lagrangian loop. Terminates when any 3 of the outer conditions is satisfied.
-    ctol_outer : float, optional, default=1e-7
+    ctol_outer : float, optional, default=1e-10
         (Traced) Constraint tolerance of the outer augmented Lagrangian loop. Terminates when any 3 of the outer conditions is satisfied.
-    xstop_outer : float, optional, default=1e-7
+    xstop_outer : float, optional, default=1e-10
         (Traced) Convergence rate tolerance of the outer augmented Lagrangian loop. Terminates when any 3 of the outer conditions is satisfied.
-    gtol_outer : float, optional, default=1e-7
+    gtol_outer : float, optional, default=1e-10
         (Traced) Gradient tolerance of the outer augmented Lagrangian loop. Terminates when any is satisfied.
-    fstop_inner : float, optional, default=1e-7
+    fstop_inner : float, optional, default=1e-10
         (Traced) Gradient tolerance of the inner LBFGS iteration. Terminates when any is satisfied.
     xstop_inner : float, optional, default=0
         (Traced) Gradient tolerance of the inner LBFGS iteration. Terminates when any is satisfied.
-    gtol_inner : float, optional, default=1e-7
+    gtol_inner : float, optional, default=1e-10
         (Traced) Gradient tolerance of the inner LBFGS iteration. Terminates when any is satisfied.
     maxiter_toter : int, optional, default=50
         (Static) The maximum of the outer iteration.
@@ -390,11 +386,12 @@ def quadcoil(
             )
         if Bnormal_plasma is None:
             Bnormal_plasma_temp = jnp.zeros((
-                len(plasma_surface.quadpoints_phi), 
-                len(plasma_surface.quadpoints_theta)
+                len(plasma_quadpoints_phi), 
+                len(plasma_quadpoints_theta)
             ))
         else:
             Bnormal_plasma_temp = y_dict['Bnormal_plasma']
+        
         qp_temp = QuadcoilParams(
             plasma_surface=plasma_surface, 
             winding_surface=winding_surface, 

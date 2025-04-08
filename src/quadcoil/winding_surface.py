@@ -1,19 +1,21 @@
 import jax.numpy as jnp
+import jax
 # import matplotlib.pyplot as plt
 from jax import jit, lax, vmap
 from jax.lax import scan
 from functools import partial
 from .surfacerzfourier_jax import dof_to_rz_op, SurfaceRZFourierJAX
 import lineax as lx
+import equinox as eqx
 
-# @partial(jit, static_argnames=['nfp', 'stellsym', 'mpol', 'ntor', 'lam_tikhonov', 'lam_gaussian',])
+# @partial(jit, static_argnames=['nfp', 'stellsym', 'mpol', 'ntor', 'lam_tikhonov',])
 def fit_surfacerzfourier(
         phi_grid, theta_grid, 
         r_fit, z_fit, 
         nfp:int, stellsym:bool, 
         mpol:int=5, ntor:int=5, 
-        lam_tikhonov=0., lam_gaussian=0.,
-        custom_weight=1,):
+        lam_tikhonov=0., 
+        custom_weight=None,):
     # Fits r and z with a surface
 
     A_lstsq, m_2_n_2 = dof_to_rz_op(
@@ -31,23 +33,37 @@ def fit_surfacerzfourier(
     # weight = jacobian # 
     max_r_slice = jnp.max(r_fit, axis=1)[:, None]
     min_r_slice = jnp.min(r_fit, axis=1)[:, None]
-    weight = jnp.exp(-(lam_gaussian * (r_fit-min_r_slice)/(max_r_slice-min_r_slice))**2) * custom_weight
     # A and b of the lstsq problem.
     # A_lstsq is a function of phi_grid and theta_grid
     # b_lstsq is differentiable.
     # A_lstsq has shape: [nphi, ntheta, 2(rz), ndof]
     # b_lstsq has shape: [nphi, ntheta, 2(rz)]
-    A_lstsq = A_lstsq * weight[:, :, None, None]
-    b_lstsq = b_lstsq * weight[:, :, None]
+    if custom_weight is not None:
+        if custom_weight.shape != A_lstsq.shape[:2]:
+            raise ValueError(
+                'custom_weight must have the shape ' 
+                + str(A_lstsq.shape[:2]) 
+                + ', but it has shape ' 
+                + str(custom_weight.shape)
+            )
+        A_lstsq = A_lstsq * custom_weight[:, :, None, None]
+        b_lstsq = b_lstsq * custom_weight[:, :, None]
     A_lstsq = A_lstsq.reshape(-1, A_lstsq.shape[-1])
     b_lstsq = b_lstsq.flatten()
 
     # tikhonov regularization for higher harmonics
-    lam = lam_tikhonov * jnp.average(A_lstsq.T.dot(b_lstsq)) * jnp.diag(m_2_n_2)
+    lam = lam_tikhonov * jnp.diag(m_2_n_2)
     
     # The lineax call fulfills the same purpose as the following:
     # dofs_expand, resid, rank, s = jnp.linalg.lstsq(A_lstsq.T.dot(A_lstsq) + lam, A_lstsq.T.dot(b_lstsq))
     # but is faster and more robust to gradients.
+    # jax.debug.print('A_lstsq{x}', x=A_lstsq)
+    # jax.debug.print('b_lstsq{x}', x=b_lstsq)
+    # jax.debug.print('A_lstsq.T.dot(A_lstsq) + lam: {x}', x=A_lstsq.T.dot(A_lstsq) + lam)
+    # jax.debug.print('A_lstsq.T.dot(b_lstsq){x}', x=A_lstsq.T.dot(b_lstsq))
+    # TODO: Somehow this print statement is holding the 
+    # jax.debug.print("A_lstsq.T.dot(A_lstsq) + lam: {x}", x=jnp.all(jnp.isfinite(A_lstsq.T.dot(A_lstsq) + lam)))
+    # jax.debug.print("A_lstsq.T.dot(b_lstsq): {x}", x=jnp.all(jnp.isfinite(A_lstsq.T.dot(b_lstsq))))
     operator = lx.MatrixLinearOperator(A_lstsq.T.dot(A_lstsq) + lam)
     # solver = lx.QR()  # or lx.AutoLinearSolver(well_posed=None)
     solver = lx.AutoLinearSolver(well_posed=False)
@@ -115,7 +131,7 @@ def gen_winding_surface_offset(
         r_fit=r_expand,
         z_fit=z_expand,
         nfp=nfp, stellsym=stellsym,
-        lam_tikhonov=0., lam_gaussian=0.,
+        lam_tikhonov=0., 
     )
 
     return(dofs_expand)
@@ -207,7 +223,7 @@ def gen_winding_surface_atan(
         mpol=5, ntor=5,
         pol_interp=2,
         tor_interp=2,
-        lam_tikhonov=0.05,
+        lam_tikhonov=1e-5,
     ):
     ''' Create uniform offset '''
     uniform_offset_dofs = gen_winding_surface_offset(
@@ -262,7 +278,7 @@ def gen_winding_surface_atan(
         r_fit=r_expand,
         z_fit=z_expand,
         nfp=nfp, stellsym=stellsym,
-        lam_tikhonov=lam_tikhonov, lam_gaussian=0.,
+        lam_tikhonov=lam_tikhonov,
         custom_weight=weight_remove_invalid,
     )
     return(dofs_expand)
