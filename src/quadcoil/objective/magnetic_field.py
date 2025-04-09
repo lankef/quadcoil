@@ -63,11 +63,11 @@ f_B_normalized_by_Bnormal_IG_desc_unit = lambda scales: 1.
 
 @jit 
 def f_max_Bnormal_abs(qp, cp_mn):
-    return jnp.max(jnp.abs(Bnormal))
+    return jnp.max(jnp.abs(Bnormal(qp, cp_mn)))
 f_max_Bnormal_abs_desc_unit = lambda scales: scales["B"]
 
 @jit 
 def f_max_Bnormal2(qp, cp_mn):
-    return jnp.max(Bnormal**2)
+    return jnp.max(Bnormal(qp, cp_mn)**2)
 f_max_Bnormal2_desc_unit = lambda scales: scales["B"]**2
     

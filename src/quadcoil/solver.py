@@ -172,6 +172,7 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt):
 # ])
 def solve_constrained(
         x_init,
+        x_unit_init,
         f_obj,
         run_opt=run_opt_lbfgs,
         # No constraints by default
@@ -226,6 +227,8 @@ def solve_constrained(
     
     x_init : ndarray, shape (Nx,)
         The initial condition.
+    x_unit_init : ndarray, shape (Nx,)
+        The initial x scale. This scaling factor ensures that x~1. Will be updated after every outer iteration.
     f_obj : callable
         The objective function.
     run_opt : callable, optional, default=run_opt_lbfgs
@@ -284,7 +287,7 @@ def solve_constrained(
         
             init_dict = {
                 'tot_niter' : int, # The outer iteration number
-                'outer_dx' : float, # The L2 norm of the change in x between the last 2 outer iterations
+                'outer_dx_scaled' : float, # The L2 norm of the change in x between the last 2 outer iterations
                 'outer_df' : float, # The L2 norm of the change in f between the last 2 outer iterations
                 'outer_dg' : float, # The L2 norm of the change in g between the last 2 outer iterations
                 'outer_dh' : float, # The L2 norm of the change in h between the last 2 outer iterations
@@ -298,7 +301,7 @@ def solve_constrained(
                 'inner_fin_lam' : ndarray, # The final value of lambda
                 'inner_fin_mu' : ndarray, # The final value of mu
                 'inner_fin_niter' : int, # The number of L-BFGS iterations in the last step
-                'inner_fin_dx' : float, # The L2 norm of the change in x between the last 2 inner L-BFGS iteration
+                'inner_fin_dx_scaled' : float, # The L2 norm of the change in x between the last 2 inner L-BFGS iteration
                 'inner_fin_du' : float, # The L2 norm of the change in update between the last 2 inner L-BFGS iteration
                 'inner_fin_dl' : float, # The L2 norm of the change in f between the last 2 inner L-BFGS iteration
             }
@@ -310,13 +313,13 @@ def solve_constrained(
     # @jit
     def outer_convergence_criterion(dict_in):
         x_k = dict_in['inner_fin_x']
-        dx_outer = dict_in['outer_dx']
+        dx_outer = dict_in['outer_dx_scaled']
         grad_f_k = dict_in['inner_fin_grad_f']
         tot_niter = dict_in['tot_niter']
         df_outer = dict_in['outer_df']
         dg_outer = dict_in['outer_dg']
         dh_outer = dict_in['outer_dh']
-        f_k = dict_in['inner_fin_f']
+        # f_k = dict_in['inner_fin_f']
         # This is the convergence condition (True when not converged yet)
         return(
             (tot_niter == 0) | (
@@ -354,21 +357,23 @@ def solve_constrained(
         f_km1 = dict_in['inner_fin_f']
         g_km1 = dict_in['inner_fin_g']
         h_km1 = dict_in['inner_fin_h']
+        x_unit = dict_in['x_unit']
 
         l_k = lambda x: (
-            f_obj(x) 
-            + lam_k@h_eq(x) 
+            f_obj(x * x_unit) 
+            + lam_k@h_eq(x * x_unit) 
             + c_k/2 * (
-                jnp.sum(h_eq(x)**2) 
-                + jnp.sum(gplus(x, mu_k, c_k)**2)
+                jnp.sum(h_eq(x * x_unit)**2) 
+                + jnp.sum(gplus(x * x_unit, mu_k, c_k)**2)
             )
         ) 
         # Eq (10) on p160 of Constrained Optimization and Multiplier Method
         # Solving a stage of the problem
         
-        # x, count, dx, du, df,
-        x_k, val_l_k, grad_l_k, niter_inner_k, dx_k, du_k, dL_k = run_opt(x_km1, l_k, maxiter_inner, fstop_inner, xstop_inner, gtol_inner)
-
+        # scaled x, count, dx, du, df,
+        x_k_scaled, val_l_k, _, niter_inner_k, dx_k, du_k, dL_k = run_opt(x_km1/x_unit, l_k, maxiter_inner, fstop_inner, xstop_inner, gtol_inner)
+        # recover x with unit
+        x_k = x_k_scaled * x_unit
         lam_k_first_order = lam_k + c_k * h_eq(x_k)
         mu_k_first_order = mu_k + c_k * gplus(x_k, mu_k, c_k)
         
@@ -377,7 +382,7 @@ def solve_constrained(
         h_k = h_eq(x_k)
         dict_out = {
             'tot_niter': dict_in['tot_niter']+niter_inner_k,
-            'outer_dx': jnp.linalg.norm(x_k - x_km1),
+            'outer_dx_scaled': jnp.linalg.norm((x_k - x_km1)/x_unit),
             'outer_df': jnp.max(jnp.abs(f_k - f_km1)),
             'outer_dg': jnp.max(jnp.abs(g_k - g_km1)),
             'outer_dh': jnp.max(jnp.abs(h_k - h_km1)),
@@ -391,15 +396,17 @@ def solve_constrained(
             'inner_fin_lam': lam_k_first_order,
             'inner_fin_mu': mu_k_first_order,
             'inner_fin_niter': niter_inner_k,
-            'inner_fin_dx': dx_k,
+            'inner_fin_dx_scaled': dx_k,
             'inner_fin_du': du_k,
             'inner_fin_dl': dL_k,
+            # The scaling factor for the next iteration
+            'x_unit': jnp.average(jnp.abs(x_k)),
         }
         return(dict_out)
     init_dict = {
         'tot_niter': 0,       
         # Changes in x between the kth and k-1th iteration
-        'outer_dx': 0.,
+        'outer_dx_scaled': 0.,
         # Changes in f, g, h between the kth and k-1th iteration
         'outer_df': 0., 
         'outer_dg': 0.,
@@ -407,6 +414,7 @@ def solve_constrained(
         'inner_fin_f': f_obj(x_init), # Value of f, g, h after the kth iteration
         'inner_fin_g': g_ineq(x_init),
         'inner_fin_h': h_eq(x_init),
+        'x_unit': x_unit_init,
         'inner_fin_x': x_init,
         'inner_fin_l': 0.,
         'inner_fin_grad_f': 0.,
@@ -414,7 +422,7 @@ def solve_constrained(
         'inner_fin_lam': lam_init,
         'inner_fin_mu': mu_init,
         'inner_fin_niter': 0,
-        'inner_fin_dx': 0.,
+        'inner_fin_dx_scaled': 0.,
         'inner_fin_du': 0.,
         'inner_fin_dl': 0.,
     }

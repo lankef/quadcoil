@@ -57,13 +57,6 @@ def fit_surfacerzfourier(
     # The lineax call fulfills the same purpose as the following:
     # dofs_expand, resid, rank, s = jnp.linalg.lstsq(A_lstsq.T.dot(A_lstsq) + lam, A_lstsq.T.dot(b_lstsq))
     # but is faster and more robust to gradients.
-    # jax.debug.print('A_lstsq{x}', x=A_lstsq)
-    # jax.debug.print('b_lstsq{x}', x=b_lstsq)
-    # jax.debug.print('A_lstsq.T.dot(A_lstsq) + lam: {x}', x=A_lstsq.T.dot(A_lstsq) + lam)
-    # jax.debug.print('A_lstsq.T.dot(b_lstsq){x}', x=A_lstsq.T.dot(b_lstsq))
-    # TODO: Somehow this print statement is holding the 
-    # jax.debug.print("A_lstsq.T.dot(A_lstsq) + lam: {x}", x=jnp.all(jnp.isfinite(A_lstsq.T.dot(A_lstsq) + lam)))
-    # jax.debug.print("A_lstsq.T.dot(b_lstsq): {x}", x=jnp.all(jnp.isfinite(A_lstsq.T.dot(b_lstsq))))
     operator = lx.MatrixLinearOperator(A_lstsq.T.dot(A_lstsq) + lam)
     # solver = lx.QR()  # or lx.AutoLinearSolver(well_posed=None)
     solver = lx.AutoLinearSolver(well_posed=False)

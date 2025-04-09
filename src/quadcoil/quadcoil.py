@@ -6,6 +6,7 @@ from quadcoil import (
     is_ndarray
 )
 from functools import partial
+from quadcoil.objective import Bnormal
 from jax import jacrev, jvp, jit
 import jax
 import jax.numpy as jnp
@@ -103,7 +104,7 @@ def quadcoil(
     xstop_inner:float=0.,
     gtol_inner:float=1e-10,
     maxiter_tot:int=10000,
-    maxiter_inner:int=500,
+    maxiter_inner:int=2000,
     value_only=False,
     verbose=False,
 ):
@@ -205,10 +206,6 @@ def quadcoil(
     verbose : bool, optional, default=False
         (Static) Print things when ``True``.
     '''
-    if verbose:
-        jax.debug.print('Running QUADCOIL in verbose mode.')
-        jax.debug.print('')
-        jax.debug.print('----- Initializing ----- ')
     # ----- Default parameters -----
     if plasma_quadpoints_phi is None:
         plasma_quadpoints_phi = jnp.linspace(0, 1/nfp, 32, endpoint=False)
@@ -231,28 +228,7 @@ def quadcoil(
          raise ValueError('At least one of plasma_coil_distance and winding_dofs must be provided.')
     if plasma_coil_distance is not None and winding_dofs is not None:
          raise ValueError('Only one of plasma_coil_distance and winding_dofs can be provided.')
-    # cp_mn need to be normalized to ~1 for the optimizer to behave well.
-    # by default we do this using the net poloidal/toroidal current.
-    if cp_mn_unit is None:
-        # Scaling current potential dofs to ~1
-        # Phi has the unit of Ampere (magnetic dipole density)
-        # One potential choice of normalizing constant is the total net current.
-        # We assume the current potential is on the same order with it.
-        total_current = jnp.linalg.norm(jnp.array([
-            net_poloidal_current_amperes,
-            net_toroidal_current_amperes
-        ]))
-        if Bnormal_plasma is None:
-            cp_mn_unit = total_current
-        else:
-            # Another choice is based on the Bnormal_plasma. 
-            # B/mu0 * len has the unit of A.
-            # Here, the first component of plasma_dofs
-            # is close to the major radius. 
-            # This is useful when the net currents are zero. 
-            Bnormal_factor = jnp.max(jnp.abs(Bnormal_plasma * 1e7 * plasma_coil_distance))
-            # Always select total_current unless it is zero.
-            cp_mn_unit = jnp.where(total_current > 0, total_current, Bnormal_factor)
+    
     # ----- Type checking -----
     if not isinstance(objective_name, str):
         if not isinstance(objective_name, tuple):
@@ -316,35 +292,63 @@ def quadcoil(
     
     # ----- Printing inputs -----
     if verbose:
-        jax.debug.print('Evaluation phi quadpoint num: {x}', x=len(quadpoints_phi))
-        jax.debug.print('Evaluation theta quadpoint num: {x}', x=len(quadpoints_theta))
-        jax.debug.print('Plasma phi quadpoint num: {x}', x=len(plasma_quadpoints_phi))
-        jax.debug.print('Plasma theta quadpoint num: {x}', x=len(plasma_quadpoints_theta))
-        jax.debug.print('Winding phi quadpoint num: {x}', x=len(winding_quadpoints_phi))
-        jax.debug.print('Winding theta quadpoint num: {x}', x=len(winding_quadpoints_theta))
-        jax.debug.print('Net poloidal current (A): {x}', x=net_poloidal_current_amperes)
-        jax.debug.print('Net toroidal current (A): {x}', x=net_toroidal_current_amperes)
-        jax.debug.print('Constraint names: {x}', x=constraint_name)
-        jax.debug.print('Constraint types: {x}', x=constraint_type)
-        jax.debug.print('Constraint units: {x}', x=constraint_unit)
-        jax.debug.print('Constraint values: {x}', x=constraint_value)
-        jax.debug.print('Objective names: {x}', x=objective_name)
-        jax.debug.print('Objective units: {x}', x=objective_unit)
-        jax.debug.print('Objective weights: {x}', x=objective_weight)
-        jax.debug.print('Numerical parameters:')
-        jax.debug.print('    c_init: {x}', x=c_init)
-        jax.debug.print('    c_growth_rate: {x}', x=c_growth_rate)
-        jax.debug.print('    fstop_outer: {x}', x=fstop_outer)
-        jax.debug.print('    xstop_outer: {x}', x=xstop_outer)
-        jax.debug.print('    gtol_outer: {x}', x=gtol_outer)
-        jax.debug.print('    ctol_outer: {x}', x=ctol_outer)
-        jax.debug.print('    fstop_inner: {x}', x=fstop_inner)
-        jax.debug.print('    xstop_inner: {x}', x=xstop_inner)
-        jax.debug.print('    gtol_inner: {x}', x=gtol_inner)
-        jax.debug.print('    maxiter_tot: {x}', x=maxiter_tot)
-        jax.debug.print('    maxiter_inner: {x}', x=maxiter_inner)
-        jax.debug.print('')
-        jax.debug.print('----- Solving ----- ')
+        jax.debug.print(
+            'Running QUADCOIL in verbose mode \n\n'\
+            '----- Input summary ----- \n'\
+            'Evaluation phi quadpoint num: {n_quadpoints_phi}\n'\
+            'Evaluation theta quadpoint num: {n_quadpoints_theta}\n'\
+            'Plasma phi quadpoint num: {n_plasma_quadpoints_phi}\n'\
+            'Plasma theta quadpoint num: {n_plasma_quadpoints_theta}\n'\
+            'Winding phi quadpoint num: {n_winding_quadpoints_phi}\n'\
+            'Winding theta quadpoint num: {n_winding_quadpoints_theta}\n'\
+            'Net poloidal current (A): {net_poloidal_current_amperes}\n'\
+            'Net toroidal current (A): {net_toroidal_current_amperes}\n'\
+            'Constraint names: {constraint_name}\n'\
+            'Constraint types: {constraint_type}\n'\
+            'Constraint units: {constraint_unit}\n'\
+            'Constraint values: {constraint_value}\n'\
+            'Objective names: {objective_name}\n'\
+            'Objective units: {objective_unit}\n'\
+            'Objective weights: {objective_weight}\n'\
+            'Numerical parameters:\n'\
+            '    c_init: {c_init}\n'\
+            '    c_growth_rate: {c_growth_rate}\n'\
+            '    fstop_outer: {fstop_outer}\n'\
+            '    xstop_outer: {xstop_outer}\n'\
+            '    gtol_outer: {gtol_outer}\n'\
+            '    ctol_outer: {ctol_outer}\n'\
+            '    fstop_inner: {fstop_inner}\n'\
+            '    xstop_inner: {xstop_inner}\n'\
+            '    gtol_inner: {gtol_inner}\n'\
+            '    maxiter_tot: {maxiter_tot}\n'\
+            '    maxiter_inner: {maxiter_inner}',
+            n_quadpoints_phi=len(quadpoints_phi),
+            n_quadpoints_theta=len(quadpoints_theta),
+            n_plasma_quadpoints_phi=len(plasma_quadpoints_phi),
+            n_plasma_quadpoints_theta=len(plasma_quadpoints_theta),
+            n_winding_quadpoints_phi=len(winding_quadpoints_phi),
+            n_winding_quadpoints_theta=len(winding_quadpoints_theta),
+            net_poloidal_current_amperes=net_poloidal_current_amperes,
+            net_toroidal_current_amperes=net_toroidal_current_amperes,
+            constraint_name=constraint_name,
+            constraint_type=constraint_type,
+            constraint_unit=constraint_unit,
+            constraint_value=constraint_value,
+            objective_name=objective_name,
+            objective_unit=objective_unit,
+            objective_weight=objective_weight,
+            c_init=c_init,
+            c_growth_rate=c_growth_rate,
+            fstop_outer=fstop_outer,
+            xstop_outer=xstop_outer,
+            gtol_outer=gtol_outer,
+            ctol_outer=ctol_outer,
+            fstop_inner=fstop_inner,
+            xstop_inner=xstop_inner,
+            gtol_inner=gtol_inner,
+            maxiter_tot=maxiter_tot,
+            maxiter_inner=maxiter_inner,
+        )
     
     # ----- Helper functions -----
     def y_to_qp(y_dict):
@@ -405,6 +409,31 @@ def quadcoil(
         )
         return qp_temp
     
+    # ----- Creating init parameters -----
+    qp = y_to_qp(y_dict_current) 
+
+    # ----- Initial state for x -----
+    if x_init is None:
+        x_init = jnp.zeros(qp.ndofs)
+    
+    # ----- Normalization -----
+    # cp_mn need to be normalized to ~1 for the optimizer to behave well.
+    # by default we do this using the net poloidal/toroidal current.
+    if cp_mn_unit is None:
+        # Scaling current potential dofs to ~1
+        # By default, we use the Bnormal value when 
+        # phi=0 to generate this scaling factor.
+        B_normal_estimate = jnp.average(jnp.abs(Bnormal(qp, jnp.zeros(qp.ndofs)))) # Unit: T
+        if plasma_coil_distance is not None:
+            cp_mn_unit = B_normal_estimate * 1e7 * plasma_coil_distance
+        else:
+            # The minor radius can be estimated from the 
+            # n=0, m=1 rc mode of the surface.
+            plasma_minor = plasma_dofs[plasma_ntor*2 + 1]
+            winding_minor = winding_dofs[winding_ntor*2 + 1]
+            cp_mn_unit = B_normal_estimate * 1e7 * jnp.abs(plasma_minor - winding_minor)
+
+    # ----- Objective function generator -----
     # A function that handles the parameter-dependence
     # of all objective functions. 
     # Maps parameters (dict) -> f, g, h, (callables, x -> scalar, arr, arr)
@@ -416,7 +445,6 @@ def quadcoil(
             constraint_type=constraint_type,
             constraint_unit=constraint_unit,
             constraint_value=constraint_value,
-            cp_mn_unit=cp_mn_unit,
         ):  
         qp_temp = y_to_qp(y_dict)
         f_obj = parse_objectives(
@@ -431,22 +459,16 @@ def quadcoil(
             constraint_value=constraint_value,
         )
         # Scaling cp_mn to ~1 to make the optimizer behave better
-        scaled_f_obj = lambda x: f_obj(qp_temp, x * cp_mn_unit)
-        scaled_g_ineq = lambda x: g_ineq(qp_temp, x * cp_mn_unit)
-        scaled_h_eq = lambda x: h_eq(qp_temp, x * cp_mn_unit)
+        f_obj_x = lambda x: f_obj(qp_temp, x)
+        g_ineq_x = lambda x: g_ineq(qp_temp, x)
+        h_eq_x = lambda x: h_eq(qp_temp, x)
         
-        return scaled_f_obj, scaled_g_ineq, scaled_h_eq
+        return f_obj_x, g_ineq_x, h_eq_x
     
     # ----- Initializing solver and values -----
-
-    qp = y_to_qp(y_dict_current)
-    if x_init is None:
-        x_init_scaled = jnp.zeros(qp.ndofs)
-    else:
-        x_init_scaled = x_init / cp_mn_unit
     f_obj, g_ineq, h_eq = f_g_ineq_h_eq_from_y(y_dict_current)
-    mu_init = jnp.zeros_like(g_ineq(x_init_scaled))
-    lam_init = jnp.zeros_like(h_eq(x_init_scaled))
+    mu_init = jnp.zeros_like(g_ineq(x_init))
+    lam_init = jnp.zeros_like(h_eq(x_init))
 
     # ----- Solving QUADCOIL -----
     
@@ -454,7 +476,8 @@ def quadcoil(
     # and the last augmented lagrangian objective function for 
     # implicit differentiation.
     solve_results = solve_constrained(
-        x_init=x_init_scaled,
+        x_init=x_init,
+        x_unit_init=cp_mn_unit,
         f_obj=f_obj,
         lam_init=lam_init,
         mu_init=mu_init,
@@ -473,28 +496,58 @@ def quadcoil(
         maxiter_inner=maxiter_inner,
     )
     # The optimum, unit-less.
-    x_k = solve_results['inner_fin_x']
-    cp_mn = x_k * cp_mn_unit
+    cp_mn = solve_results['inner_fin_x']
+    if verbose:       
+        jax.debug.print(
+            '''
+----- Solver status summary -----
+Final value of objective f: {f}
+Final Max current potential (dipole density): {max_cp} (A)
+Final Avg current potential (dipole density): {avg_cp} (A)
+* Total L-BFGS iteration number: {niter}
+    Init value of phi scaling constant:  {x_unit_init}(A)
+    Final value of phi scaling constant: {x_unit}(A)
+    Final value of grad f: {grad_f}
+    Final value of constraint g: {g}
+    Final value of constraint h: {h}
+    Outer convergence rate in x (scaled): {dx}
+    Outer convergence rate in f, g, h: {df}, {dg}, {dh}
+* Last inner L_BFGS iteration number: {inner_niter}
+    Inner convergence rate in x (scaled): {inner_dx}, {inner_du}
+    Inner convergence rate in l: {dl}
+            ''',
+            f=jax.block_until_ready(solve_results['inner_fin_f']),
+            niter=jax.block_until_ready(solve_results['tot_niter']),
+            grad_f=jax.block_until_ready(solve_results['inner_fin_grad_f']),
+            g=jax.block_until_ready(solve_results['inner_fin_g']),
+            h=jax.block_until_ready(solve_results['inner_fin_h']),
+            x_unit_init=cp_mn_unit,
+            x_unit=jax.block_until_ready(solve_results['x_unit']),
+            dx=jax.block_until_ready(solve_results['outer_dx_scaled']),
+            df=jax.block_until_ready(solve_results['outer_df']),
+            dg=jax.block_until_ready(solve_results['outer_dg']),
+            dh=jax.block_until_ready(solve_results['outer_dh']),
+            inner_niter=jax.block_until_ready(solve_results['inner_fin_niter']),
+            inner_dx=jax.block_until_ready(solve_results['inner_fin_dx_scaled']),
+            inner_du=jax.block_until_ready(solve_results['inner_fin_du']),
+            dl=jax.block_until_ready(solve_results['inner_fin_dl']),
+            max_cp=jnp.max(jnp.abs(cp_mn)),
+            avg_cp=jnp.average(jnp.abs(cp_mn)),
+        )
     
     # ----- Calculating metrics and gradients
     if value_only: 
-        if verbose:
-            jax.debug.print('')
-            jax.debug.print('----- Calculating metrics only ----- ')
         out_dict = {}
         for metric_name_i in metric_name:
             f_metric_with_unit = get_objective(metric_name_i)
             f_metric = lambda x, y: f_metric_with_unit(y_to_qp(y), x * cp_mn_unit)
-            metric_result_i = f_metric(x_k, y_dict_current)
+            metric_result_i = f_metric(cp_mn, y_dict_current)
             out_dict[metric_name_i] = {
                 'value': metric_result_i
             }
             if verbose:
                 jax.debug.print('Metric evaluated. {x} = {y}', x=metric_name_i, y=metric_result_i)
         return out_dict, qp, cp_mn, solve_results
-    if verbose:
-        jax.debug.print('')
-        jax.debug.print('----- Calculating metrics and gradients ----- ')
     
     ''' Recover the l_k in the last iteration for dx_k/dy '''
 
@@ -518,18 +571,17 @@ def quadcoil(
     nabla_x_l_k = jacrev(l_k, argnums=0)
     nabla_y_l_k = jacrev(l_k, argnums=1)
     nabla_y_l_k_for_hess = lambda x: nabla_y_l_k(x, y_dict_current)
-    hess_l_k = jacrev(nabla_x_l_k)(x_k, y_dict_current)
+    hess_l_k = jacrev(nabla_x_l_k)(cp_mn, y_dict_current)
     out_dict = {}
     for metric_name_i in metric_name:
-        f_metric_with_unit = get_objective(metric_name_i)
-        f_metric = lambda x, y: f_metric_with_unit(y_to_qp(y), x * cp_mn_unit)
-        nabla_x_f = jacrev(f_metric, argnums=0)(x_k, y_dict_current)
-        nabla_y_f = jacrev(f_metric, argnums=1)(x_k, y_dict_current)
+        f_metric = lambda x, y: get_objective(metric_name_i)(y_to_qp(y), x)
+        nabla_x_f = jacrev(f_metric, argnums=0)(cp_mn, y_dict_current)
+        nabla_y_f = jacrev(f_metric, argnums=1)(cp_mn, y_dict_current)
         vihp = jnp.linalg.solve(hess_l_k, nabla_x_f)
         # Now we calculate df/dy using vjp
         # \nabla_{x_k} f [-H(l_k, x_k)^-1 \nabla_{x_k}\nabla_{y} l_k]
         # Primal and tangent must be the same shape
-        _, dfdy1 = jvp(nabla_y_l_k_for_hess, primals=[x_k], tangents=[vihp])
+        _, dfdy1 = jvp(nabla_y_l_k_for_hess, primals=[cp_mn], tangents=[vihp])
         # \nabla_{y} f
         dfdy2 = nabla_y_f
         # This was -dfdy1 + dfdy2 in the old code where
@@ -539,7 +591,7 @@ def quadcoil(
         for key in dfdy1.keys():
             if dfdy1[key] is not None and dfdy2[key] is not None:
                 dfdy['df_d' + key] = -jnp.array(dfdy1[key]) + jnp.array(dfdy2[key])
-        metric_result_i = f_metric(x_k, y_dict_current)
+        metric_result_i = f_metric(cp_mn, y_dict_current)
         if verbose:
             jax.debug.print('Metric evaluated. {x} = {y}', x=metric_name_i, y=metric_result_i)
         out_dict[metric_name_i] = {
