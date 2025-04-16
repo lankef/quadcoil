@@ -2,7 +2,7 @@ from quadcoil import (
     parse_objectives, parse_constraints, get_objective,
     gen_winding_surface_atan, 
     SurfaceRZFourierJAX, QuadcoilParams, 
-    solve_constrained,
+    solve_constrained, run_opt_lbfgs,
     is_ndarray
 )
 from functools import partial
@@ -95,14 +95,15 @@ def quadcoil(
 
     # - Solver options
     c_init:float=1.,
-    c_growth_rate:float=1.2,
-    fstop_outer:float=1e-10, # convergence rate tolerance
-    xstop_outer:float=1e-10, # convergence rate tolerance
-    gtol_outer:float=1e-10, # gradient tolerance
-    ctol_outer:float=1e-10, # constraint tolerance
-    fstop_inner:float=1e-10,
+    c_growth_rate:float=1.5,
+    grad_l_stop_outer:float=1e-7, # convergence rate tolerance
+    xstop_outer:float=0., # convergence rate tolerance
+    gtol_outer:float=1e-7, # gradient tolerance
+    ctol_outer:float=1e-7, # constraint tolerance
+    fstop_inner:float=0,
     xstop_inner:float=0.,
-    gtol_inner:float=1e-10,
+    gtol_inner:float=0.1,
+    gtol_inner_fin:float=1e-7,
     maxiter_tot:int=10000,
     maxiter_inner:int=2000,
     value_only=False,
@@ -183,28 +184,37 @@ def quadcoil(
         (Traced) The initial :math:`c` factor. Please see *Constrained Optimization and Lagrange Multiplier Methods* Chapter 3.
     c_growth_rate : float, optional, default=1.2
         (Traced) The growth rate of the :math:`c` factor.
-    fstop_outer : float, optional, default=1e-10
-        (Traced) Constraint tolerance of the outer augmented Lagrangian loop. Terminates when any 3 of the outer conditions is satisfied.
-    ctol_outer : float, optional, default=1e-10
-        (Traced) Constraint tolerance of the outer augmented Lagrangian loop. Terminates when any 3 of the outer conditions is satisfied.
-    xstop_outer : float, optional, default=1e-10
-        (Traced) Convergence rate tolerance of the outer augmented Lagrangian loop. Terminates when any 3 of the outer conditions is satisfied.
-    gtol_outer : float, optional, default=1e-10
-        (Traced) Gradient tolerance of the outer augmented Lagrangian loop. Terminates when any is satisfied.
-    fstop_inner : float, optional, default=1e-10
-        (Traced) Gradient tolerance of the inner LBFGS iteration. Terminates when any is satisfied.
+    grad_l_stop_outer : float, optional, default=1e-7
+        (Traced) Terminates when the improvement in the Lagrangian's gradient,
+        :math:`\nabla L`, falls below this.  
+    xstop_outer : float, optional, default=1e-7
+        (Traced) ``x`` convergence rate of the outer augmented 
+        Lagrangian loop. Terminates when ``dx`` falls below this. 
+    gtol_outer : float, optional, default=1e-7
+        (Traced) Tolerance of the :math:`\nabla L` KKT condition in
+        the outer augmented Lagrangian loop. 
+    ctol_outer : float, optional, default=1e-7
+        (Traced) Tolerance of the constraint KKT conditions in the outer
+        Lagrangian loop. 
+    fstop_inner : float, optional, default=1e-7
+        (Traced) ``f`` convergence rate of the inner LBFGS 
+        Lagrangian loop. Terminates when ``df`` falls below this. 
     xstop_inner : float, optional, default=0
-        (Traced) Gradient tolerance of the inner LBFGS iteration. Terminates when any is satisfied.
-    gtol_inner : float, optional, default=1e-10
-        (Traced) Gradient tolerance of the inner LBFGS iteration. Terminates when any is satisfied.
+        (Traced) ``x`` convergence rate of the outer augmented 
+        Lagrangian loop. Terminates when ``dx`` falls below this. 
+    gtol_inner : float, optional, default=0.1
+        (Traced) Gradient tolerance of the inner LBFGS iteration, normalized by the starting gradient.
+    gtol_inner_fin : float, optional, default=1e-7
+        (Traced) Gradient tolerance of the final inner LBFGS iteration, normalized by the starting gradient.
     maxiter_toter : int, optional, default=50
         (Static) The maximum of the outer iteration.
     maxiter_tot : int, optional, default=500
         (Static) The maximum of the inner iteration.
     value_only : bool, optional, default=False
         (Static) When ``True``, skip gradient calculations.
-    verbose : bool, optional, default=False
-        (Static) Print things when ``True``.
+    verbose : int, optional, default=False
+        (Static) Print general info when ``verbose==1``. 
+        Print inside the outer iteration loop, too, when ``verbose==2``.
     '''
     # ----- Default parameters -----
     if plasma_quadpoints_phi is None:
@@ -277,21 +287,21 @@ def quadcoil(
     # Only differentiate wrt normal field when 
     # it's not zero.
     if Bnormal_plasma is not None:
-        if verbose:
+        if verbose>0:
             jax.debug.print('Maximum Bnormal_plasma: {x}', x=jnp.max(jnp.abs(Bnormal_plasma)))
         y_dict_current['Bnormal_plasma'] = Bnormal_plasma
     # Include winding dofs when it's provided.
     if plasma_coil_distance is None:
-        if verbose:
+        if verbose>0:
             jax.debug.print('Using custom winding surface.')
         y_dict_current['winding_dofs'] = winding_dofs
     else:
-        if verbose:
+        if verbose>0:
             jax.debug.print('Plasma-coil distance (m): {x}', x=plasma_coil_distance)
         y_dict_current['plasma_coil_distance'] = plasma_coil_distance
     
     # ----- Printing inputs -----
-    if verbose:
+    if verbose>0:
         jax.debug.print(
             'Running QUADCOIL in verbose mode \n\n'\
             '----- Input summary ----- \n'\
@@ -313,13 +323,14 @@ def quadcoil(
             'Numerical parameters:\n'\
             '    c_init: {c_init}\n'\
             '    c_growth_rate: {c_growth_rate}\n'\
-            '    fstop_outer: {fstop_outer}\n'\
+            '    grad_l_stop_outer: {grad_l_stop_outer}\n'\
             '    xstop_outer: {xstop_outer}\n'\
             '    gtol_outer: {gtol_outer}\n'\
             '    ctol_outer: {ctol_outer}\n'\
             '    fstop_inner: {fstop_inner}\n'\
             '    xstop_inner: {xstop_inner}\n'\
             '    gtol_inner: {gtol_inner}\n'\
+            '    gtol_inner_fin: {gtol_inner_fin}\n'\
             '    maxiter_tot: {maxiter_tot}\n'\
             '    maxiter_inner: {maxiter_inner}',
             n_quadpoints_phi=len(quadpoints_phi),
@@ -339,13 +350,14 @@ def quadcoil(
             objective_weight=objective_weight,
             c_init=c_init,
             c_growth_rate=c_growth_rate,
-            fstop_outer=fstop_outer,
+            grad_l_stop_outer=grad_l_stop_outer,
             xstop_outer=xstop_outer,
             gtol_outer=gtol_outer,
             ctol_outer=ctol_outer,
             fstop_inner=fstop_inner,
             xstop_inner=xstop_inner,
             gtol_inner=gtol_inner,
+            gtol_inner_fin=gtol_inner_fin,
             maxiter_tot=maxiter_tot,
             maxiter_inner=maxiter_inner,
         )
@@ -425,7 +437,7 @@ def quadcoil(
         # phi=0 to generate this scaling factor.
         B_normal_estimate = jnp.average(jnp.abs(Bnormal(qp, jnp.zeros(qp.ndofs)))) # Unit: T
         if plasma_coil_distance is not None:
-            cp_mn_unit = B_normal_estimate * 1e7 * plasma_coil_distance
+            cp_mn_unit = B_normal_estimate * 1e7 * jnp.abs(plasma_coil_distance)
         else:
             # The minor radius can be estimated from the 
             # n=0, m=1 rc mode of the surface.
@@ -452,7 +464,7 @@ def quadcoil(
             objective_unit=objective_unit,
             objective_weight=y_dict['objective_weight'], 
         )
-        g_ineq, h_eq = parse_constraints(
+        g_ineq, h_eq, g_num, h_num = parse_constraints(
             constraint_name=constraint_name,
             constraint_type=constraint_type,
             constraint_unit=constraint_unit,
@@ -463,18 +475,21 @@ def quadcoil(
         g_ineq_x = lambda x: g_ineq(qp_temp, x)
         h_eq_x = lambda x: h_eq(qp_temp, x)
         
-        return f_obj_x, g_ineq_x, h_eq_x
+        return f_obj_x, g_ineq_x, h_eq_x, g_num, h_num
     
     # ----- Initializing solver and values -----
-    f_obj, g_ineq, h_eq = f_g_ineq_h_eq_from_y(y_dict_current)
+    f_obj, g_ineq, h_eq, g_num, h_num = f_g_ineq_h_eq_from_y(y_dict_current)
     mu_init = jnp.zeros_like(g_ineq(x_init))
     lam_init = jnp.zeros_like(h_eq(x_init))
-
+    unconstrained = g_num == 0 and h_num == 0
     # ----- Solving QUADCOIL -----
     
     # A dictionary containing augmented lagrangian info
     # and the last augmented lagrangian objective function for 
     # implicit differentiation.
+    # When unconstrained, this function instead serves the 
+    # purpose of "zooming in" when iteration step lengths
+    # are small.
     solve_results = solve_constrained(
         x_init=x_init,
         x_unit_init=cp_mn_unit,
@@ -485,37 +500,45 @@ def quadcoil(
         g_ineq=g_ineq,
         c_init=c_init,
         c_growth_rate=c_growth_rate,
-        fstop_outer=fstop_outer,
+        grad_l_stop_outer=grad_l_stop_outer,
         ctol_outer=ctol_outer,
         xstop_outer=xstop_outer,
         gtol_outer=gtol_outer,
         fstop_inner=fstop_inner,
         xstop_inner=xstop_inner,
         gtol_inner=gtol_inner,
+        gtol_inner_fin=gtol_inner_fin,
         maxiter_tot=maxiter_tot,
         maxiter_inner=maxiter_inner,
+        verbose=verbose
     )
     # The optimum, unit-less.
     cp_mn = solve_results['inner_fin_x']
-    if verbose:       
+    if verbose>0:       
         jax.debug.print(
-            '''
------ Solver status summary -----
-Final value of objective f: {f}
-Final Max current potential (dipole density): {max_cp} (A)
-Final Avg current potential (dipole density): {avg_cp} (A)
-* Total L-BFGS iteration number: {niter}
-    Init value of phi scaling constant:  {x_unit_init}(A)
-    Final value of phi scaling constant: {x_unit}(A)
-    Final value of grad f: {grad_f}
-    Final value of constraint g: {g}
-    Final value of constraint h: {h}
-    Outer convergence rate in x (scaled): {dx}
-    Outer convergence rate in f, g, h: {df}, {dg}, {dh}
-* Last inner L_BFGS iteration number: {inner_niter}
-    Inner convergence rate in x (scaled): {inner_dx}, {inner_du}
-    Inner convergence rate in l: {dl}
-            ''',
+            '----- Solver status summary -----\n'\
+            'Final value of objective f: {f}\n'\
+            'Final Max current potential (dipole density): {max_cp} (A)\n'\
+            'Final Avg current potential (dipole density): {avg_cp} (A)\n'\
+            '* Total L-BFGS iteration number: {niter}\n'\
+            '    Init value of phi scaling constant:  {x_unit_init}(A)\n'\
+            '    Final value of phi scaling constant: {x_unit}(A)\n'\
+            '    Final value of grad f: {grad_f}\n'\
+            '    Final value of constraint g: {g}\n'\
+            '    Final value of constraint h: {h}\n'\
+            '    Outer convergence rate in x (scaled): {dx}\n'\
+            '    Outer convergence rate in g, h: {dg}, {dh}\n'\
+            '    L-2 norm of the gradient of the Lagrangian:    {outer_grad_l}\n'\
+            '    Change rate of the gradient of the Lagrangian: {outer_dgrad_l}\n'\
+            '    Outer KKT condition 1: {KKT1}\n'\
+            '    Outer KKT condition 2: {KKT2}\n'\
+            '    Outer KKT condition 3: {KKT3}\n'\
+            '    Outer KKT condition 4: {KKT4}\n'\
+            '    Outer KKT condition 5: {KKT5}\n'\
+            '    Outer KKT condition 6: {KKT6}\n'\
+            '* Last inner L_BFGS iteration number: {inner_niter}\n'\
+            '    Inner convergence rate in x (scaled): {inner_dx}, {inner_du}\n'\
+            '    Inner convergence rate in l: {dl}\n',
             f=jax.block_until_ready(solve_results['inner_fin_f']),
             niter=jax.block_until_ready(solve_results['tot_niter']),
             grad_f=jax.block_until_ready(solve_results['inner_fin_grad_f']),
@@ -523,10 +546,17 @@ Final Avg current potential (dipole density): {avg_cp} (A)
             h=jax.block_until_ready(solve_results['inner_fin_h']),
             x_unit_init=cp_mn_unit,
             x_unit=jax.block_until_ready(solve_results['x_unit']),
-            dx=jax.block_until_ready(solve_results['outer_dx_scaled']),
-            df=jax.block_until_ready(solve_results['outer_df']),
+            dx=jax.block_until_ready(solve_results['outer_dx']),
             dg=jax.block_until_ready(solve_results['outer_dg']),
             dh=jax.block_until_ready(solve_results['outer_dh']),
+            outer_dgrad_l=jax.block_until_ready(solve_results['outer_dgrad_l']),
+            outer_grad_l=jax.block_until_ready(jnp.linalg.norm(solve_results['outer_grad_l'])),
+            KKT1=jax.block_until_ready(solve_results['KKT1']),
+            KKT2=jax.block_until_ready(solve_results['KKT2']),
+            KKT3=jax.block_until_ready(solve_results['KKT3']),
+            KKT4=jax.block_until_ready(solve_results['KKT4']),
+            KKT5=jax.block_until_ready(solve_results['KKT5']),
+            KKT6=jax.block_until_ready(solve_results['KKT6']),
             inner_niter=jax.block_until_ready(solve_results['inner_fin_niter']),
             inner_dx=jax.block_until_ready(solve_results['inner_fin_dx_scaled']),
             inner_du=jax.block_until_ready(solve_results['inner_fin_du']),
@@ -539,13 +569,12 @@ Final Avg current potential (dipole density): {avg_cp} (A)
     if value_only: 
         out_dict = {}
         for metric_name_i in metric_name:
-            f_metric_with_unit = get_objective(metric_name_i)
-            f_metric = lambda x, y: f_metric_with_unit(y_to_qp(y), x * cp_mn_unit)
+            f_metric = lambda x, y: get_objective(metric_name_i)(y_to_qp(y), x)
             metric_result_i = f_metric(cp_mn, y_dict_current)
             out_dict[metric_name_i] = {
                 'value': metric_result_i
             }
-            if verbose:
+            if verbose>0:
                 jax.debug.print('Metric evaluated. {x} = {y}', x=metric_name_i, y=metric_result_i)
         return out_dict, qp, cp_mn, solve_results
     
@@ -553,21 +582,26 @@ Final Avg current potential (dipole density): {avg_cp} (A)
 
     # First, we reproduce the augmented lagrangian objective l_k that 
     # led to the optimum.
-    c_k = solve_results['inner_fin_c']
-    lam_k = solve_results['inner_fin_lam']
-    mu_k = solve_results['inner_fin_mu']
-    # @jit
-    def l_k(x, y): 
-        f_obj, g_ineq, h_eq = f_g_ineq_h_eq_from_y(y)
-        gplus = lambda x, mu, c: jnp.max(jnp.array([g_ineq(x), -mu/c]), axis=0)
-        return(
-            f_obj(x) 
-            + lam_k@h_eq(x) 
-            + c_k/2 * (
-                jnp.sum(h_eq(x)**2) 
-                + jnp.sum(gplus(x, mu_k, c_k)**2)
+    if unconstrained:
+        def l_k(x, y): 
+            f_obj, _, _, _, _ = f_g_ineq_h_eq_from_y(y)
+            return f_obj(x) 
+    else:  
+        c_k = solve_results['inner_fin_c']
+        lam_k = solve_results['inner_fin_lam']
+        mu_k = solve_results['inner_fin_mu']
+        # @jit
+        def l_k(x, y): 
+            f_obj, g_ineq, h_eq, _, _ = f_g_ineq_h_eq_from_y(y)
+            gplus = lambda x, mu, c: jnp.max(jnp.array([g_ineq(x), -mu/c]), axis=0)
+            return(
+                f_obj(x) 
+                + lam_k@h_eq(x) 
+                + c_k/2 * (
+                    jnp.sum(h_eq(x)**2) 
+                    + jnp.sum(gplus(x, mu_k, c_k)**2)
+                )
             )
-        )
     nabla_x_l_k = jacrev(l_k, argnums=0)
     nabla_y_l_k = jacrev(l_k, argnums=1)
     nabla_y_l_k_for_hess = lambda x: nabla_y_l_k(x, y_dict_current)
@@ -591,13 +625,64 @@ Final Avg current potential (dipole density): {avg_cp} (A)
         for key in dfdy1.keys():
             if dfdy1[key] is not None and dfdy2[key] is not None:
                 dfdy['df_d' + key] = -jnp.array(dfdy1[key]) + jnp.array(dfdy2[key])
+                dfdy['df_d' + key + '_1'] = -jnp.array(dfdy1[key])
+                dfdy['df_d' + key + '_vihp'] = vihp
+                dfdy['df_d' + key + '_nabla_x_f'] = nabla_x_f
+                dfdy['df_d' + key + '_nabla_y_f'] = nabla_y_f[key]
+                dfdy['df_d' + key + '_hess_l_k'] = hess_l_k
+                dfdy['df_d' + key + '_2'] = jnp.array(dfdy2[key])
         metric_result_i = f_metric(cp_mn, y_dict_current)
-        if verbose:
+        if verbose>0:
             jax.debug.print('Metric evaluated. {x} = {y}', x=metric_name_i, y=metric_result_i)
+            jax.debug.print('Metric evaluated2. {x} = {y}', x=metric_name_i, y=get_objective(metric_name_i)(qp, cp_mn))
+            
         out_dict[metric_name_i] = {
             'value': metric_result_i, 
             'grad': dfdy
         }
+    # # $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+    # # TESTING IMPLICIT FUNC THM ON THE ACTUAL LAGRANGIAN
+    
+    # # Implicit derivative for l_full
+    # nabla_x_l_full = jacrev(l_full, argnums=0)
+    # nabla_y_l_full = jacrev(l_full, argnums=1)
+    # nabla_y_l_full_for_hess = lambda x: nabla_y_l_full(x, y_dict_current)
+    # hess_l_full = jacrev(nabla_x_l_full)(x_eff, y_dict_current)
+    # # out_dict = {}
+    # # x_eff consists of (x, z, mu, lam)
+    # x_eff = cp_mn
+    # if g_num > 0:
+    #     x_eff = jnp.concatenate([x_eff, jnp.zeros(g_num), mu_k]) # Adding z and mu
+    # if h_num > 0:
+    #     x_eff = jnp.concatenate([x_eff, lam_k]) # Adding lam
+    # for metric_name_i in metric_name:
+    #     f_metric = lambda x, y: get_objective(metric_name_i)(y_to_qp(y), x)
+    #     nabla_x_f = jacrev(f_metric, argnums=0)(x_eff, y_dict_current)
+    #     nabla_y_f = jacrev(f_metric, argnums=1)(x_eff, y_dict_current)
+    #     vihp = jnp.linalg.solve(hess_l_full, nabla_x_f)
+    #     # Now we calculate df/dy using vjp
+    #     # \nabla_{x_k} f [-H(l_full, x_k)^-1 \nabla_{x_k}\nabla_{y} l_full]
+    #     # Primal and tangent must be the same shape
+    #     _, dfdy1 = jvp(nabla_y_l_full_for_hess, primals=[x_eff], tangents=[vihp])
+    #     # \nabla_{y} f
+    #     dfdy2 = nabla_y_f
+    #     # This was -dfdy1 + dfdy2 in the old code where
+    #     # y is an array. Now y is a dict, and 
+    #     # dfdy1, dfdy2 are both dicts.
+    #     dfdy = {}
+    #     for key in dfdy1.keys():
+    #         if dfdy1[key] is not None and dfdy2[key] is not None:
+    #             dfdy['df_d' + key] = -jnp.array(dfdy1[key]) + jnp.array(dfdy2[key])
+    #     metric_result_i = f_metric(x_eff, y_dict_current)
+    #     if verbose>0:
+    #         jax.debug.print('Metric evaluated. {x} = {y}', x=metric_name_i, y=metric_result_i)
+    #         jax.debug.print('Metric evaluated2. {x} = {y}', x=metric_name_i, y=get_objective(metric_name_i)(qp, x_eff))
+    #     out_dict[metric_name_i]['grad2'] = dfdy
+    #     # out_dict[metric_name_i] = {
+    #     #     'value': metric_result_i, 
+    #     #     'grad': dfdy
+    #     # }
+    
     return(out_dict, qp, cp_mn, solve_results)
 
 

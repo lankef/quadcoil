@@ -1,5 +1,6 @@
 from . import objective
 import jax.numpy as jnp
+from jax import jit
 
 def get_objective(func_name: str):
     r'''
@@ -56,7 +57,7 @@ def merge_callables(callables):
             return jnp.zeros(1)
         return jnp.concatenate(outputs, axis=0)
     
-    return merged_fn
+    return jit(merged_fn)
     
 def parse_objectives(objective_name, objective_unit=None, objective_weight=None): 
     r'''
@@ -98,7 +99,7 @@ def parse_objectives(objective_name, objective_unit=None, objective_weight=None)
             if objective_weight is None:
                 objective_weight=1.
             return get_objective(objective_name)(a, b) * objective_weight / objective_unit
-        return(f_tot)
+        return jit(f_tot)
     else:
         if len(objective_name) != len(objective_weight): # or len(objective_name) != len(objective_unit):
             raise ValueError('objective, objective_weight and objective_unit must have the same length.')
@@ -119,13 +120,14 @@ def parse_objectives(objective_name, objective_unit=None, objective_weight=None)
                     objective_unit_i = objective_unit[i]
                 out = out + get_objective(objective_name[i])(a, b) * objective_weight[i] / objective_unit_i
             return out
-        return f_tot
+        return jit(f_tot)
 
 def parse_constraints(
     constraint_name, 
     constraint_type, 
     constraint_unit, 
     constraint_value, 
+    convention='g<=0',
 ):
     r'''
     Parses a series of tuples and arrays specifying the quantities, 
@@ -168,12 +170,16 @@ def parse_constraints(
     ):
         raise ValueError('constraint_name, constraint_type, '\
                          'and constraint_value must have the same length.')
+    if convention not in ['g<=0', 'g>=0']:
+        raise ValueError('Convention must either be \'g<=0\' or \'g>=0\'')
     # Contains a list of callables 
     # that maps (QuadcoilParams, cp_mn)
     # to arrays or scalars
     # that are =0 or <=0 when the constraint is satisfied. 
     scaled_g_ineq_terms = []
     scaled_h_eq_terms = []
+    g_num = 0
+    h_num = 0
     for i in range(n_cons_total):
         # Catch empty constraints! When constraint name is an
         # empty string, the corresponding elements in 
@@ -192,8 +198,11 @@ def parse_constraints(
             sign_i = -1
         else:
             sign_i = 1
+
+        if convention == 'g>=0':
+            sign_i = -sign_i
         # This is the proper way to generate a list of 
-        # callable without running into the objective_weightbda reference 
+        # callable without running into the lambda reference 
         # issue.
         def cons_func_centered_i(
                 a, b, 
@@ -211,8 +220,10 @@ def parse_constraints(
             return sign * (cons_func_i(a, b) - cons_val_i) / cons_unit_i
         # Creating a list of function in h and g.
         if cons_type_i == '==':
+            h_num = h_num + 1  
             scaled_h_eq_terms.append(cons_func_centered_i)
         elif cons_type_i in ['<=', '>=']:
+            g_num = g_num + 1  
             scaled_g_ineq_terms.append(cons_func_centered_i)
         else:
             raise ValueError('Constraint type can only be \"<=\", \">=\", or \"==\"')
@@ -221,4 +232,4 @@ def parse_constraints(
     # callable for both g and h.
     g_ineq = merge_callables(scaled_g_ineq_terms)
     h_eq = merge_callables(scaled_h_eq_terms)
-    return g_ineq, h_eq
+    return g_ineq, h_eq, g_num, h_num

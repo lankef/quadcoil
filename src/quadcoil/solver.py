@@ -2,7 +2,8 @@ import warnings
 import jax.numpy as jnp
 import optax
 import optax.tree_utils as otu
-from jax import jit, vmap, grad
+from jax import jit, vmap, grad, jacrev
+import jax
 from jax.lax import while_loop
 
 lstsq_vmap = vmap(jnp.linalg.lstsq)
@@ -14,7 +15,7 @@ lstsq_vmap = vmap(jnp.linalg.lstsq)
 #         val = body_fun(val)
 #     return val
 
-def run_opt_lbfgs(init_params, fun, maxiter, fstop, xstop, gtol):
+def run_opt_lbfgs(init_params, fun, maxiter, fstop, xstop, gtol, verbose):
     r'''
     A wrapper for performing unconstrained optimization using ``optax.lbfgs``.
     
@@ -53,13 +54,10 @@ def run_opt_lbfgs(init_params, fun, maxiter, fstop, xstop, gtol):
     final_df : float
         The rate of change of f at the optimum.
     '''
-    return run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt=optax.lbfgs())
+    return run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt=optax.lbfgs(), verbose=verbose)
 
-# # Not robust. Does not have the up to date output signature. In here for backup purposes.
-# def run_opt_bfgs(init_params, fun, maxiter, fstop, xstop, gtol): 
-#     return jax.scipy.optimize.minimize(fun=fun, x0=init_params, method='BFGS', tol=gtol, options={'maxiter': maxiter,}).x
 
-def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt):
+def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
     r'''
     A wrapper for performing unconstrained optimization using ``optax.base.GradientTransformationExtraArgs``.
     
@@ -100,7 +98,18 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt):
     final_df : float
         The rate of change of f at the optimum.
     '''
+    init_carry = (
+        init_params, 
+        jnp.zeros_like(init_params),
+        0., 0., 0., 0.,
+        opt.init(init_params)
+    )
+    g0 = grad(fun)(init_params)
+    g0_norm = jnp.linalg.norm(g0)
+    g0_max = jnp.max(jnp.abs(g0))
     value_and_grad_fun = optax.value_and_grad_from_state(fun)
+    if verbose>1:
+        jax.debug.print('INNER: g0_norm: {a}, g0_norm * tol: {b}', a=g0_norm, b=gtol * g0_norm)
     # Carry is params, update, value, dx, du, df, state1
     def step(carry):
         params1, updates1, value1, _, _, _, state1 = carry
@@ -122,19 +131,25 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt):
         iter_num = otu.tree_get(state, 'count')
         grad = otu.tree_get(state, 'grad')
         err = otu.tree_l2_norm(grad)
+        if verbose>2:
+            jax.debug.print(
+                'INNER: L: {l}, dx: {dx}, du: {du}, df: {df}, grad:{g}\n'\
+                '    Stopping criteria - (err > gtol): {a},(dx > xstop or du > xstop): {b},(df > fstop): {c}',
+                a=(err > gtol), #  * g0_norm) # TOLERANCE SCALING! MAY NEED CHANGING!
+                b=((dx > xstop) | (du > xstop)),
+                c=(df > fstop),
+                l=value,
+                dx=dx,
+                du=du,
+                df=df,
+                g=err,
+            )
         return (iter_num == 0) | (
             (iter_num < maxiter) 
-            & (err > gtol)
-            & (dx > xstop)
-            & (du > xstop)
-            & (df/jnp.abs(value) > fstop)
+            & (err > gtol) #  * g0_norm) # TOLERANCE SCALING! MAY NEED CHANGING!
+            & ((dx > xstop) | (du > xstop))
+            & (df > fstop)
         )
-    init_carry = (
-        init_params, 
-        jnp.zeros_like(init_params),
-        0., 0., 0., 0.,
-        opt.init(init_params)
-    )
     final_params, final_updates, final_value, final_dx, final_du, final_df, final_state = while_loop(
         continuing_criterion, step, init_carry
     )
@@ -148,28 +163,6 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt):
         final_df, # Changes in f
     )
 
-# ''' Constrained optimization '''
-
-# A simple augmented Lagrangian implementation
-# This jit flag is temporary, because we want 
-# derivatives wrt f and g's contents too.
-# @partial(jit, static_argnames=[
-#     'f_obj',
-#     'h_eq',
-#     'g_ineq',
-#     'run_opt',
-#     'c_growth_rate',
-#     'fstop_outer',
-#     'ctol_outer',
-#     'xstop_outer',
-#     'gtol_outer',
-#     'fstop_inner',
-#     'xstop_inner',
-#     'gtol_inner',
-#     'maxiter_inner',
-#     'maxiter_tot',
-#     # 'scan_mode',
-# ])
 def solve_constrained(
         x_init,
         x_unit_init,
@@ -182,18 +175,20 @@ def solve_constrained(
         h_eq=lambda x:jnp.zeros(1),
         mu_init=jnp.zeros(1),
         g_ineq=lambda x:jnp.zeros(1),
-        fstop_outer=1e-7, # constraint tolerance
+        grad_l_stop_outer=1e-7, # constraint tolerance
         xstop_outer=1e-7, # convergence rate tolerance
         gtol_outer=1e-7, # gradient tolerance
         ctol_outer=1e-7, # constraint tolerance
         fstop_inner=1e-7,
         xstop_inner=1e-7,
         gtol_inner=1e-7,
+        gtol_inner_fin=1e-7,
         maxiter_tot=10000,
         maxiter_inner=500,
         # # Uses jax.lax.scan instead of while_loop.
         # # Enables history and forward diff but disables 
         # # convergence test.
+        verbose=0,
     ):
     r'''
     Solves the constrained optimization problem:
@@ -254,18 +249,18 @@ def solve_constrained(
         The equality constraint function. 
         Must map ``x`` to an ``ndarray`` with shape ``(Ng)``.
         No constraints by default.
-    fstop_outer : float, optional, default=1e-7
-        (Traced) ``f`` convergence rate of the outer augmented 
-        Lagrangian loop. Terminates when ``df`` falls below this. 
+    grad_l_stop_outer : float, optional, default=1e-7
+        (Traced) Terminates when the improvement in the Lagrangian's gradient,
+        :math:`\nabla L`, falls below this.  
     xstop_outer : float, optional, default=1e-7
         (Traced) ``x`` convergence rate of the outer augmented 
         Lagrangian loop. Terminates when ``dx`` falls below this. 
     gtol_outer : float, optional, default=1e-7
-        (Traced) Gradient tolerance of the outer augmented 
-        Lagrangian loop. Terminates when both tols are satisfied. 
+        (Traced) Tolerance of the :math:`\nabla L` KKT condition in
+        the outer augmented Lagrangian loop. 
     ctol_outer : float, optional, default=1e-7
-        (Traced) Constraint tolerance of the outer augmented 
-        Lagrangian loop. Terminates when both tols are satisfied. 
+        (Traced) Tolerance of the constraint KKT conditions in the outer
+        Lagrangian loop. 
     fstop_inner : float, optional, default=1e-7
         (Traced) ``f`` convergence rate of the inner LBFGS 
         Lagrangian loop. Terminates when ``df`` falls below this. 
@@ -275,8 +270,13 @@ def solve_constrained(
     gtol_inner : float, optional, default=1e-7
         (Traced) Gradient tolerance of the inner LBFGS 
         iteration. Terminates when is satisfied. 
+    gtol_inner_fin : float, optional, default=1e-7
+        (Traced) Gradient tolerance of the inner LBFGS 
+        iteration. Terminates when is satisfied. 
     maxiter_tot: int, optional, default=50
         (Static) The maximum of the outer iteration.
+    verbose: int, optional, default=0
+        (Static) The verbosity. When >1, outputs outer iteration convergence info.
 
     Returns
     -------
@@ -287,15 +287,15 @@ def solve_constrained(
         
             init_dict = {
                 'tot_niter' : int, # The outer iteration number
-                'outer_dx_scaled' : float, # The L2 norm of the change in x between the last 2 outer iterations
-                'outer_df' : float, # The L2 norm of the change in f between the last 2 outer iterations
+                'outer_dx' : float, # The L2 norm of the change in x between the last 2 outer iterations
+                'outer_dgrad_l' : float, # The L2 norm of the change in f between the last 2 outer iterations
                 'outer_dg' : float, # The L2 norm of the change in g between the last 2 outer iterations
                 'outer_dh' : float, # The L2 norm of the change in h between the last 2 outer iterations
                 'inner_fin_f' : float, # The value of f at the optimum
                 'inner_fin_g' : ndarray, # The value of g at the optimum
                 'inner_fin_h' : ndarray, # The value of h at the optimum
                 'inner_fin_x' : ndarray, # The optimum
-                'inner_fin_l' : float, # The value of the augmented Lagrangian objective l_k at the optimum 
+                'inner_fin_l_aug' : float, # The value of the augmented Lagrangian objective l_k at the optimum 
                 'grad_l_k' : ndarray, # The gradient of the augmented Lagrangian objective l_k at the optimum 
                 'inner_fin_c' : float, # The final value of c
                 'inner_fin_lam' : ndarray, # The final value of lambda
@@ -309,16 +309,45 @@ def solve_constrained(
     # Has shape n_cons_ineq
     gplus = lambda x, mu, c: jnp.max(jnp.array([g_ineq(x), -mu/c]), axis=0)
     grad_f = grad(f_obj)
+    grad_g = jacrev(g_ineq)
+    grad_h = jacrev(h_eq)
     # True when non-convergent.
     # @jit
     def outer_convergence_criterion(dict_in):
         x_k = dict_in['inner_fin_x']
-        dx_outer = dict_in['outer_dx_scaled']
-        grad_f_k = dict_in['inner_fin_grad_f']
+        lam_k = dict_in['inner_fin_lam']
+        mu_k = dict_in['inner_fin_mu']
+        grad_l = dict_in['outer_grad_l']
+        dx_outer = dict_in['outer_dx']
         tot_niter = dict_in['tot_niter']
-        df_outer = dict_in['outer_df']
-        dg_outer = dict_in['outer_dg']
-        dh_outer = dict_in['outer_dh']
+        outer_dgrad_l = dict_in['outer_dgrad_l']
+        outer_dg = dict_in['outer_dg']
+        outer_dh = dict_in['outer_dh']
+        KKT1 = dict_in['KKT1']
+        KKT2 = dict_in['KKT2']
+        KKT3 = dict_in['KKT3']
+        KKT4 = dict_in['KKT4']
+        KKT5 = dict_in['KKT5']
+        KKT6 = dict_in['KKT6']
+        jax.debug.print(
+            'OUTER: \n'\
+            '    Iteration: {tot_niter}/{maxiter_tot}\n'\
+            '    Stopping criteria - (outer_dgrad_l >= grad_l_stop_outer):{a}\n'\
+            '    Stopping criteria - (dx_outer >= xstop_outer):           {b}\n'\
+            '    Stopping criteria - KKT conditions:                      {c}\n'\
+            '    KKTs - {KKT1}, {KKT2}, {KKT3}, {KKT4}, {KKT5}, {KKT6}',
+            tot_niter=tot_niter,
+            maxiter_tot=maxiter_tot,
+            a=(outer_dgrad_l >= grad_l_stop_outer),
+            b=(dx_outer >= xstop_outer),
+            c=(KKT1 | KKT2 | KKT3 | KKT4 | KKT5 | KKT6),
+            KKT1=KKT1,
+            KKT2=KKT2,
+            KKT3=KKT3,
+            KKT4=KKT4,
+            KKT5=KKT5,
+            KKT6=KKT6,
+        )
         # f_k = dict_in['inner_fin_f']
         # This is the convergence condition (True when not converged yet)
         return(
@@ -328,28 +357,33 @@ def solve_constrained(
                 # Only stop if reduction in all of f, g, or h
                 # falls below the criterion
                 & (
-                    (df_outer >= fstop_outer)
-                    | (dg_outer >= fstop_outer)
-                    | (dh_outer >= fstop_outer)
+                    (outer_dgrad_l >= grad_l_stop_outer)
+                    # | (outer_dg >= grad_l_stop_outer)
+                    # | (outer_dh >= grad_l_stop_outer)
                 )
                 # Stop if the iteration convergence 
                 # rate falls below the stopping criterion
                 & (dx_outer >= xstop_outer)
-                # If no other stopping criteria are triggered,
-                # only stop when both gradient and tolerance 
-                # tlerance are reached.
+                # KKT criterion, P321 of Nocedal
                 & (
-                    (grad_f_k >= gtol_outer)
-                    | jnp.any(h_eq(x_k) >= ctol_outer)
-                    | jnp.any(h_eq(x_k) <= -ctol_outer)
-                    | jnp.any(g_ineq(x_k) >= ctol_outer)
+                    KKT1 
+                    | KKT2 
+                    | KKT3 
+                    | KKT4 
+                    | KKT5 
+                    | KKT6
                 )
             )
         )
 
     # Recursion
     # @jit
-    def body_fun_augmented_lagrangian(dict_in, x_dummy=None):
+    def body_fun_augmented_lagrangian(
+        dict_in, 
+        gtol_inner=gtol_inner, 
+        fstop_inner=fstop_inner, 
+        xstop_inner=xstop_inner
+    ):
         x_km1 = dict_in['inner_fin_x']
         c_k = dict_in['inner_fin_c']
         lam_k = dict_in['inner_fin_lam']
@@ -358,43 +392,102 @@ def solve_constrained(
         g_km1 = dict_in['inner_fin_g']
         h_km1 = dict_in['inner_fin_h']
         x_unit = dict_in['x_unit']
-
+        grad_l_val_km1 = dict_in['outer_grad_l']
+        # Eq (10) on p160 of Constrained Optimization and Multiplier Method
         l_k = lambda x: (
-            f_obj(x * x_unit) 
-            + lam_k@h_eq(x * x_unit) 
+            f_obj(x*x_unit) 
+            + lam_k@h_eq(x*x_unit) 
             + c_k/2 * (
-                jnp.sum(h_eq(x * x_unit)**2) 
-                + jnp.sum(gplus(x * x_unit, mu_k, c_k)**2)
+                jnp.sum(h_eq(x*x_unit)**2) 
+                + jnp.sum(gplus(x*x_unit, mu_k, c_k)**2)
             )
         ) 
-        # Eq (10) on p160 of Constrained Optimization and Multiplier Method
         # Solving a stage of the problem
-        
+        # 2 rounds of scaling are applied.
+        # Here, Phi is scaled by its average absolute value from the previous iteration
+        # to make it unit-free. Inside run_opt, f is centered and scaled as follows:
+        # f_scaled(x) = [f(x + Phi_scaled_init) - f(Phi_scaled_init)]/f'(Phi_scaled_init)
+        x_k_scaled, val_l_k, grad_l_k, niter_inner_k, dx_k, du_k, dL_k = run_opt(
+            x_km1/x_unit, l_k, maxiter_inner, 
+            fstop_inner, xstop_inner, gtol_inner,
+            verbose
+        )
         # scaled x, count, dx, du, df,
-        x_k_scaled, val_l_k, _, niter_inner_k, dx_k, du_k, dL_k = run_opt(x_km1/x_unit, l_k, maxiter_inner, fstop_inner, xstop_inner, gtol_inner)
         # recover x with unit
         x_k = x_k_scaled * x_unit
-        lam_k_first_order = lam_k + c_k * h_eq(x_k)
-        mu_k_first_order = mu_k + c_k * gplus(x_k, mu_k, c_k)
+        lam_k = lam_k + c_k * h_eq(x_k)
+        mu_k = mu_k + c_k * gplus(x_k, mu_k, c_k)
         
         f_k = f_obj(x_k)
         g_k = g_ineq(x_k)
         h_k = h_eq(x_k)
+
+        # Calculating the gradient of the 
+        # Actual lagrangian: 
+        #   grad_x L
+        # = grad_x f - lam @ grad_x h_eq + mu @ grad_x g_ineq_active
+        grad_f_val = grad_f(x_k)
+        g_active = jnp.where(g_ineq(x_k) >= ctol_outer, 1., 0.)
+        grad_l_val = (
+            grad_f_val 
+            - lam_k @ grad_h(x_k)
+            - (g_active * mu_k) @ grad_g(x_k)
+        )
+        # jax.debug.print(
+        #     '\n grad_l components: {x}, {y}, {z}; x_k: {xx}; g, h: {g}, {h}',
+        #     x=jnp.any(jnp.isnan(grad_f_val )),
+        #     y=jnp.any(jnp.isnan(lam_k @ grad_h(x_k))),
+        #     z=jnp.any(jnp.isnan((g_active * mu_k) @ grad_g(x_k))),
+        #     xx=jnp.any(jnp.isnan(x_k)),
+        #     g=jnp.any(jnp.isnan(grad_h(x_k))),
+        #     h=jnp.any(jnp.isnan(grad_g(x_k))),
+        # )
+        # If any of the following are True, KKT is NOT satisfied
+        # Nocedal pg321, 12.34
+        d_grad_l_val = jnp.linalg.norm(grad_l_val - grad_l_val_km1)
+        KKT1 = jnp.linalg.norm(grad_l_val) >= gtol_outer # Nocedal 12.34a
+        KKT2 = jnp.any(jnp.abs(h_eq(x_k)) >= ctol_outer) # Nocedal 12.34b
+        KKT3 = jnp.any(g_ineq(x_k) >= ctol_outer)        # Nocedal 12.34c
+        KKT4 = jnp.any(mu_k <= -ctol_outer)              # Nocedal 12.34d
+        KKT5 = jnp.abs(lam_k @ h_eq(x_k)) >= ctol_outer  # Nocedal 12.34e
+        KKT6 = jnp.abs(mu_k @ g_ineq(x_k)) >= ctol_outer # Nocedal 12.34e
+        if verbose>1:
+            jax.debug.print(
+                'grad_l_val: {x}, d_grad_l_val: {dx}, grad_f_val: {xx}, min and max mu:{mu1}, {mu2}, inner iter #: {z}\n'\
+                'c_k: {c_k}, max|h_eq|: {h_eq}, max|gplus|: {gplus}', 
+                c_k=c_k,
+                h_eq=jnp.max(jnp.abs(h_eq(x_k))),
+                gplus=jnp.max(jnp.abs(gplus(x_k, mu_k, c_k))),
+                x=jnp.linalg.norm(grad_l_val),
+                mu1=jnp.min(mu_k),
+                mu2=jnp.max(mu_k),
+                dx=jnp.linalg.norm(d_grad_l_val),
+                xx=jnp.linalg.norm(grad_f_val),
+                z=niter_inner_k
+            )
         dict_out = {
             'tot_niter': dict_in['tot_niter']+niter_inner_k,
-            'outer_dx_scaled': jnp.linalg.norm((x_k - x_km1)/x_unit),
-            'outer_df': jnp.max(jnp.abs(f_k - f_km1)),
+            'outer_dx': jnp.linalg.norm(x_k - x_km1),
+            'outer_dgrad_l': d_grad_l_val,
             'outer_dg': jnp.max(jnp.abs(g_k - g_km1)),
             'outer_dh': jnp.max(jnp.abs(h_k - h_km1)),
+            'outer_grad_l': grad_l_val,
             'inner_fin_f': f_k,
             'inner_fin_g': g_k,
             'inner_fin_h': h_k,
             'inner_fin_x': x_k,
-            'inner_fin_l': val_l_k,
-            'inner_fin_grad_f': jnp.linalg.norm(grad_f(x_k)),
+            'inner_fin_l_aug': val_l_k,
+            'inner_fin_grad_l_aug': jnp.linalg.norm(grad_l_k),
+            'KKT1': KKT1, 
+            'KKT2': KKT2,
+            'KKT3': KKT3,
+            'KKT4': KKT4,
+            'KKT5': KKT5,
+            'KKT6': KKT6,
+            'inner_fin_grad_f': jnp.linalg.norm(grad_f_val),
             'inner_fin_c': c_k * c_growth_rate,
-            'inner_fin_lam': lam_k_first_order,
-            'inner_fin_mu': mu_k_first_order,
+            'inner_fin_lam': lam_k,
+            'inner_fin_mu': mu_k,
             'inner_fin_niter': niter_inner_k,
             'inner_fin_dx_scaled': dx_k,
             'inner_fin_du': du_k,
@@ -406,17 +499,26 @@ def solve_constrained(
     init_dict = {
         'tot_niter': 0,       
         # Changes in x between the kth and k-1th iteration
-        'outer_dx_scaled': 0.,
+        'outer_dx': 0.,
         # Changes in f, g, h between the kth and k-1th iteration
-        'outer_df': 0., 
+        'outer_dgrad_l': 0., 
         'outer_dg': 0.,
         'outer_dh': 0.,
+        'outer_dgrad_l': 0.,
+        'outer_grad_l': jnp.zeros_like(x_init),
         'inner_fin_f': f_obj(x_init), # Value of f, g, h after the kth iteration
         'inner_fin_g': g_ineq(x_init),
         'inner_fin_h': h_eq(x_init),
         'x_unit': x_unit_init,
         'inner_fin_x': x_init,
-        'inner_fin_l': 0.,
+        'inner_fin_l_aug': 0.,
+        'inner_fin_grad_l_aug': 0.,
+        'KKT1': True,
+        'KKT2': True,
+        'KKT3': True,
+        'KKT4': True,
+        'KKT5': True,
+        'KKT6': True,
         'inner_fin_grad_f': 0.,
         'inner_fin_c': c_init,
         'inner_fin_lam': lam_init,
@@ -426,10 +528,201 @@ def solve_constrained(
         'inner_fin_du': 0.,
         'inner_fin_dl': 0.,
     }
-    result = while_loop(
+    # Apply a looser tolerance for most of the iteration
+    result_dict = while_loop(
         cond_fun=outer_convergence_criterion,
         body_fun=body_fun_augmented_lagrangian,
         init_val=init_dict,
     )
-    return(result)# Changes in f, g, h between the kth and k-1th iteration
+    # Apply tight tolerance in the last iteration
+    result_dict = body_fun_augmented_lagrangian(
+        result_dict, 
+        gtol_inner=gtol_inner_fin,
+        fstop_inner=0.,
+        xstop_inner=0.,
+    )
+    # jax.debug.print('RESULT {x}', x=result)
+    return(result_dict)# Changes in f, g, h between the kth and k-1th iteration
+
+# def solve_constrained_BCL(
+#         x_init,
+#         x_bound,
+#         x_unit_init,
+#         f_obj,
+#         run_opt=run_opt_lbfgs,
+#         # No constraints by default
+#         c_init=1.,
+#         c_growth_rate=1.1,
+#         h_eq=lambda x:jnp.zeros(1),
+#         g_ineq=lambda x:jnp.zeros(1),
+#         g_bound=-1*jnp.ones(1)
+#     ):
+#     r'''
+#     Solves the constrained optimization problem:
+
+#     .. math::
+
+#         \min_x f(x) \\
+#         \text{subject to } \\
+#         h(x) = 0, \\
+#         g(x) \leq 0 \\
+        
+#     Using the augmented Lagrangian method in 
+#     *Constrained Optimization and Lagrange Multiplier Methods* Chapter 3.
+#     Please refer to the chapter for notation.
+    
+#     Parameters
+#     ----------  
+#     init_params : ndarray, shape (N,)
+#     fun : callable
+#     maxiter : int
+#         The maximum iteration number.
+#     fstop : float
+#         The objective function convergence rate tolerance. 
+#         Terminates when any one of the tolerances is satisfied.
+#     xstop : float
+#         The unknown convergence rate tolerance. 
+#         Terminates when any one of the tolerances is satisfied.
+#     gtol : float
+#         The gradient tolerance. 
+#         Terminates when any one of the tolerances is satisfied.
+    
+#     x_init : ndarray, shape (Nx,)
+#         The initial condition.
+#     x_unit_init : ndarray, shape (Nx,)
+#         The initial x scale. This scaling factor ensures that x~1. Will be updated after every outer iteration.
+#     f_obj : callable
+#         The objective function.
+#     run_opt : callable, optional, default=run_opt_lbfgs
+#         The optimizer choice. Must be a wrapper with the 
+#         same signature as ``run_opt_lbfgs``.
+#     c_init : float, optional, default=1.
+#         The initial :math:`c` factor. Please see 
+#         *Constrained Optimization and Lagrange Multiplier Methods* 
+#         Chapter 3. 
+#     c_growth_rate : float, optional, default=1.1,
+#         The growth rate of the :math:`c` factor.
+#     lam_init : ndarray, shape (Nh), optional, default=jnp.zeros(1),
+#         The initial :math:`\lambda` multiplier for equality constraints.
+#         No constraints by default.
+#     h_eq : callable, optional, default=lambda x:jnp.zeros(1),
+#         The equality constraint function. 
+#         Must map ``x`` to an ``ndarray`` with shape ``(Nh)``.
+#         No constraints by default.
+#     mu_init : ndarray, shape (Ng), optional, default=jnp.zeros(1),
+#         The initial :math:`\mu` multiplier for inequality constraints.
+#         No constraints by default.
+#     g_ineq : callable, optional, default=lambda x:jnp.zeros(1),
+#         The equality constraint function. 
+#         Must map ``x`` to an ``ndarray`` with shape ``(Ng)``.
+#         No constraints by default.
+#     grad_l_stop_outer : float, optional, default=1e-7
+#         (Traced) Terminates when the improvement in the Lagrangian's gradient,
+#         :math:`\nabla L`, falls below this.  
+#     xstop_outer : float, optional, default=1e-7
+#         (Traced) ``x`` convergence rate of the outer augmented 
+#         Lagrangian loop. Terminates when ``dx`` falls below this. 
+#     gtol_outer : float, optional, default=1e-7
+#         (Traced) Tolerance of the :math:`\nabla L` KKT condition in
+#         the outer augmented Lagrangian loop. 
+#     ctol_outer : float, optional, default=1e-7
+#         (Traced) Tolerance of the constraint KKT conditions in the outer
+#         Lagrangian loop. 
+#     fstop_inner : float, optional, default=1e-7
+#         (Traced) ``f`` convergence rate of the inner LBFGS 
+#         Lagrangian loop. Terminates when ``df`` falls below this. 
+#     xstop_inner : float, optional, default=0
+#         (Traced) ``x`` convergence rate of the outer augmented 
+#         Lagrangian loop. Terminates when ``dx`` falls below this. 
+#     gtol_inner : float, optional, default=1e-7
+#         (Traced) Gradient tolerance of the inner LBFGS 
+#         iteration. Terminates when is satisfied. 
+#     gtol_inner_fin : float, optional, default=1e-7
+#         (Traced) Gradient tolerance of the inner LBFGS 
+#         iteration. Terminates when is satisfied. 
+#     maxiter_tot: int, optional, default=50
+#         (Static) The maximum of the outer iteration.
+#     verbose: int, optional, default=0
+#         (Static) The verbosity. When >1, outputs outer iteration convergence info.
+
+#     Returns
+#     -------
+#     status : dict
+#         The end state of the iteration.
+#     '''
+#     # Calculate the number of inequality constraints
+#     n_ineq = len(g_ineq(x_init))
+#     n_dofs = len(x_init)
+#     # We introduce an aux variable for each inequality constraint
+#     x_eff_init = jnp.concatenate([x_init, jnp.zeros(n_ineq)])
+#     # Using the notation in Nocedal P520
+#     def L_A_eff(x_eff, lam, mu):
+#         x = x_eff[:n_dofs] 
+#         a = x_eff[n_dofs:] 
+#         f = f_obj(x)
+#         g = g_ineq(x)
+#         c_eq = h_eq(x)
+#         # We now concert the ineq constraints are converted 
+#         # into equality constraints by: 
+#         # g <= 0 <=> g(x) + a = 0, 0 <= a <= a_max.
+#         c_ineq = g + a
+#         c_eff = jnp.concatenate([c_ineq, c_eq])
+#         return f - lam@c_eff + mu/2*jnp.sum(c_eff**2)
+
+#     def P(g, l, u):
+#         P_lower = jnp.where(g<=l, l, g)
+#         P = jnp.where(P_lower>=u, u, P_lower)
+#         return P
+        
+#     # True when non-convergent.
+#     # @jit
+#     def conv_BCL(dict_in):
+       
+#     # Recursion
+#     # @jit
+#     def body_BCL(dict_in, gtol_inner=gtol_inner):
+        
+        
+#     init_dict = {
+#         'tot_niter': 0,       
+#         # Changes in x between the kth and k-1th iteration
+#         'outer_dx': 0.,
+#         # Changes in f, g, h between the kth and k-1th iteration
+#         'outer_dgrad_l': 0., 
+#         'outer_dg': 0.,
+#         'outer_dh': 0.,
+#         'outer_dgrad_l': 0.,
+#         'outer_grad_l': jnp.zeros_like(x_init),
+#         'inner_fin_f': f_obj(x_init), # Value of f, g, h after the kth iteration
+#         'inner_fin_g': g_ineq(x_init),
+#         'inner_fin_h': h_eq(x_init),
+#         'x_unit': x_unit_init,
+#         'inner_fin_x': x_init,
+#         'inner_fin_l_aug': 0.,
+#         'inner_fin_grad_l_aug': 0.,
+#         'KKT1': True,
+#         'KKT2': True,
+#         'KKT3': True,
+#         'KKT4': True,
+#         'KKT5': True,
+#         'KKT6': True,
+#         'inner_fin_grad_f': 0.,
+#         'inner_fin_c': c_init,
+#         'inner_fin_lam': lam_init,
+#         'inner_fin_mu': mu_init,
+#         'inner_fin_niter': 0,
+#         'inner_fin_dx_scaled': 0.,
+#         'inner_fin_du': 0.,
+#         'inner_fin_dl': 0.,
+#     }
+#     # Apply a looser tolerance for most of the iteration
+#     result_dict = while_loop(
+#         cond_fun=outer_convergence_criterion,
+#         body_fun=body_fun_augmented_lagrangian,
+#         init_val=init_dict,
+#     )
+#     # Apply tight tolerance in the last iteration
+#     result_dict = body_fun_augmented_lagrangian(result_dict, gtol_inner=gtol_inner_fin)
+#     # jax.debug.print('RESULT {x}', x=result)
+#     return(result_dict)# Changes in f, g, h between the kth and k-1th iteration
 
