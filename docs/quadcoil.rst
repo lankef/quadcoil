@@ -7,7 +7,7 @@ Subpackages
 .. toctree::
    :maxdepth: 4
 
-   quadcoil.objective
+   quadcoil.quantity
    quadcoil.io
 
 Submodules

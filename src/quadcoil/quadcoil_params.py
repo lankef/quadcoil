@@ -67,17 +67,17 @@ class QuadcoilParams:
     quadpoints_theta : ndarray, shape (ntheta,)
         (Traced) The poloidal quadrature points to evaluate quantities at. 
     
-    nfp: int
+    nfp : int
         (Static) The number of field periods.
-    stellsym: bool
+    stellsym : bool
         (Static) Stellarator symmetry.
-    mpol: int
+    mpol : int
         (Static) The number of poloidal Fourier harmonics in :math:`\Phi_{sv}`.
-    ntor: int
+    ntor : int
         (Static) The number of toroidal Fourier harmonics in :math:`\Phi_{sv}`.
-    ndofs: int
+    ndofs : int
         (Static) The number of degrees of freedom in :math:`\Phi_{sv}`.
-    ndofs_half: int
+    ndofs_half : int
         (Static) ``ndof`` if ``stellsym==True``, ``ndof//2`` otherwise. 
     '''
     def __init__(

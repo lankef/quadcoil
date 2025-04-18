@@ -6,7 +6,7 @@ from quadcoil import (
     is_ndarray
 )
 from functools import partial
-from quadcoil.objective import Bnormal
+from quadcoil.quantity import Bnormal
 from jax import jacrev, jvp, jit
 import jax
 import jax.numpy as jnp
@@ -57,7 +57,7 @@ def quadcoil(
     # Quadpoints to evaluate objectives at
     quadpoints_phi=None,
     quadpoints_theta=None,
-    x_init=None, 
+    phi_mn_init=None, 
     # Current potential's normalization constant. 
     # By default will be generated from net total current.
     cp_mn_unit=None,
@@ -138,7 +138,7 @@ def quadcoil(
     quadpoints_theta : ndarray, shape (ntheta,), optional, default=None
         (Traced) The toroidal quadrature points on the winding surface to evaluate the objectives at.
         Uses one period from the winding surface by default.
-    x_init : ndarray, optional, default=None
+    phi_mn_init : ndarray, optional, default=None
         (Traced) The initial guess. All zeros by default.
     cp_mn_unit : float, optional, default=None
         (Traced) Current potential's normalization constant.
@@ -421,13 +421,6 @@ def quadcoil(
         )
         return qp_temp
     
-    # ----- Creating init parameters -----
-    qp = y_to_qp(y_dict_current) 
-
-    # ----- Initial state for x -----
-    if x_init is None:
-        x_init = jnp.zeros(qp.ndofs)
-    
     # ----- Normalization -----
     # cp_mn need to be normalized to ~1 for the optimizer to behave well.
     # by default we do this using the net poloidal/toroidal current.
@@ -449,6 +442,8 @@ def quadcoil(
     # A function that handles the parameter-dependence
     # of all objective functions. 
     # Maps parameters (dict) -> f, g, h, (callables, x -> scalar, arr, arr)
+    # Used during implicit differentiation.
+    # It also evaluates some basic properties for initialization.
     def f_g_ineq_h_eq_from_y(
             y_dict,
             objective_name=objective_name,
@@ -456,32 +451,53 @@ def quadcoil(
             constraint_name=constraint_name,
             constraint_type=constraint_type,
             constraint_unit=constraint_unit,
-            constraint_value=constraint_value,
         ):  
-        qp_temp = y_to_qp(y_dict)
-        f_obj = parse_objectives(
+        # First, fetching all objectives and constraints
+        qp = y_to_qp(y_dict)
+        f_obj, g_obj_list, h_obj_list, aux_dofs_obj = parse_objectives(
             objective_name=objective_name, 
             objective_unit=objective_unit,
             objective_weight=y_dict['objective_weight'], 
         )
-        g_ineq, h_eq, g_num, h_num = parse_constraints(
+        g_cons_list, h_cons_list, aux_dofs_cons = parse_constraints(
             constraint_name=constraint_name,
             constraint_type=constraint_type,
             constraint_unit=constraint_unit,
-            constraint_value=constraint_value,
+            constraint_value=y_dict['constraint_value'],
         )
-        # Scaling cp_mn to ~1 to make the optimizer behave better
+        # Merging constraints and aux dofs from different sources
+        g_list = g_obj_list + g_cons_list
+        h_list = h_obj_list + h_cons_list
+        aux_dofs_init = aux_dofs_obj | aux_dofs_cons
+
         f_obj_x = lambda x: f_obj(qp_temp, x)
         g_ineq_x = lambda x: g_ineq(qp_temp, x)
         h_eq_x = lambda x: h_eq(qp_temp, x)
-        
-        return f_obj_x, g_ineq_x, h_eq_x, g_num, h_num
-    
-    # ----- Initializing solver and values -----
-    f_obj, g_ineq, h_eq, g_num, h_num = f_g_ineq_h_eq_from_y(y_dict_current)
-    mu_init = jnp.zeros_like(g_ineq(x_init))
-    lam_init = jnp.zeros_like(h_eq(x_init))
-    unconstrained = g_num == 0 and h_num == 0
+        unconstrained = ((len(g_list) == 0) and (len(h_list) == 0))
+        return f_obj_x, g_ineq_x, h_eq_x, unconstrained, aux_dofs_init
+    # ----- Creating init parameters -----
+    f_obj, g_ineq, h_eq, unconstrained, aux_dofs_init = f_g_ineq_h_eq_from_y(y_dict_current)
+    mu_init = jnp.zeros_like(g_ineq(phi_mn_init))
+    lam_init = jnp.zeros_like(h_eq(phi_mn_init))
+    if phi_mn_init is None:
+        phi_mn_init = jnp.zeros(qp.ndofs)
+    # Calculating the structure of dof. The current dictionary's
+    # items are either None (scalar), tuple (known shape), or 
+    # Callable(QuadcoilParams) (shapes that depend on problem setup)
+    dofs_init = {'phi_mn': phi_mn_init}
+    for key in aux_dofs_init.keys():
+        if callable(aux_dofs_init[key]):
+            dofs_init[key] = aux_aux_dofs_initofs[key](qp, dofs_init)
+        else:
+            try:
+                dofs_init[key] = jnp.array(aux_dofs_init[key])
+            except:
+                raise TypeError(
+                    f'The auxillary variable {key} is not a callable, '\
+                    'and cannot be converted to an array. Its value is: '\
+                    f'{str(aux_dofs_init[key])}. This is an issue with its '\
+                    'implementation. Please contact the developers.')
+
     # ----- Solving QUADCOIL -----
     
     # A dictionary containing augmented lagrangian info
@@ -491,7 +507,7 @@ def quadcoil(
     # purpose of "zooming in" when iteration step lengths
     # are small.
     solve_results = solve_constrained(
-        x_init=x_init,
+        phi_mn_init=phi_mn_init,
         x_unit_init=cp_mn_unit,
         f_obj=f_obj,
         lam_init=lam_init,

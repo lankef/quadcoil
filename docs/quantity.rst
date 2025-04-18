@@ -24,14 +24,14 @@ simply pass their names into ``quadcoil.quadcoil``.
     )
 
 If needed, these quantities can also be
-directly imported as functions from ``quadcoil.objective``:
+directly imported as functions from ``quadcoil.quantity``:
 
 .. code-block:: python
 
-    from quadcoil.objective import K_theta
+    from quadcoil.quantity import K_theta
     print(K_theta(qp, phi_mn))
 
-All members of ``quadcoil.objective`` require the same inputs:
+All members of ``quadcoil.quantity`` require the same inputs:
 
 - ``qp : QuadcoilParams`` - Stores the plasma and winding surface information.
 - ``phi_mn : ndarray`` - The Fourier Coefficients of :math:`\Phi_{sv}` produced by ``quadcoil.quadcoil``.

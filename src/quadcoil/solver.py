@@ -23,7 +23,7 @@ def run_opt_lbfgs(init_params, fun, maxiter, fstop, xstop, gtol, verbose):
     ----------  
     init_params : ndarray, shape (N,)
         The initial condition.
-    fun : callable
+    fun : Callable
         The objective function.
     maxiter : int
         The maximum iteration number.
@@ -65,7 +65,7 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
     ----------  
     init_params : ndarray, shape (N,)
         The initial condition.
-    fun : callable
+    fun : Callable
         The objective function.
     maxiter : int
         The maximum iteration number.
@@ -207,7 +207,7 @@ def solve_constrained(
     Parameters
     ----------  
     init_params : ndarray, shape (N,)
-    fun : callable
+    fun : Callable
     maxiter : int
         The maximum iteration number.
     fstop : float
@@ -224,9 +224,9 @@ def solve_constrained(
         The initial condition.
     x_unit_init : ndarray, shape (Nx,)
         The initial x scale. This scaling factor ensures that x~1. Will be updated after every outer iteration.
-    f_obj : callable
+    f_obj : Callable
         The objective function.
-    run_opt : callable, optional, default=run_opt_lbfgs
+    run_opt : Callable, optional, default=run_opt_lbfgs
         The optimizer choice. Must be a wrapper with the 
         same signature as ``run_opt_lbfgs``.
     c_init : float, optional, default=1.
@@ -238,14 +238,14 @@ def solve_constrained(
     lam_init : ndarray, shape (Nh), optional, default=jnp.zeros(1),
         The initial :math:`\lambda` multiplier for equality constraints.
         No constraints by default.
-    h_eq : callable, optional, default=lambda x:jnp.zeros(1),
+    h_eq : Callable, optional, default=lambda x:jnp.zeros(1),
         The equality constraint function. 
         Must map ``x`` to an ``ndarray`` with shape ``(Nh)``.
         No constraints by default.
     mu_init : ndarray, shape (Ng), optional, default=jnp.zeros(1),
         The initial :math:`\mu` multiplier for inequality constraints.
         No constraints by default.
-    g_ineq : callable, optional, default=lambda x:jnp.zeros(1),
+    g_ineq : Callable, optional, default=lambda x:jnp.zeros(1),
         The equality constraint function. 
         Must map ``x`` to an ``ndarray`` with shape ``(Ng)``.
         No constraints by default.
@@ -574,7 +574,7 @@ def solve_constrained(
 #     Parameters
 #     ----------  
 #     init_params : ndarray, shape (N,)
-#     fun : callable
+#     fun : Callable
 #     maxiter : int
 #         The maximum iteration number.
 #     fstop : float
@@ -591,9 +591,9 @@ def solve_constrained(
 #         The initial condition.
 #     x_unit_init : ndarray, shape (Nx,)
 #         The initial x scale. This scaling factor ensures that x~1. Will be updated after every outer iteration.
-#     f_obj : callable
+#     f_obj : Callable
 #         The objective function.
-#     run_opt : callable, optional, default=run_opt_lbfgs
+#     run_opt : Callable, optional, default=run_opt_lbfgs
 #         The optimizer choice. Must be a wrapper with the 
 #         same signature as ``run_opt_lbfgs``.
 #     c_init : float, optional, default=1.
@@ -605,14 +605,14 @@ def solve_constrained(
 #     lam_init : ndarray, shape (Nh), optional, default=jnp.zeros(1),
 #         The initial :math:`\lambda` multiplier for equality constraints.
 #         No constraints by default.
-#     h_eq : callable, optional, default=lambda x:jnp.zeros(1),
+#     h_eq : Callable, optional, default=lambda x:jnp.zeros(1),
 #         The equality constraint function. 
 #         Must map ``x`` to an ``ndarray`` with shape ``(Nh)``.
 #         No constraints by default.
 #     mu_init : ndarray, shape (Ng), optional, default=jnp.zeros(1),
 #         The initial :math:`\mu` multiplier for inequality constraints.
 #         No constraints by default.
-#     g_ineq : callable, optional, default=lambda x:jnp.zeros(1),
+#     g_ineq : Callable, optional, default=lambda x:jnp.zeros(1),
 #         The equality constraint function. 
 #         Must map ``x`` to an ``ndarray`` with shape ``(Ng)``.
 #         No constraints by default.

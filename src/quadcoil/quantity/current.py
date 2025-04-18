@@ -1,13 +1,13 @@
 import jax.numpy as jnp
-from quadcoil import sin_or_cos
 from jax import jit
 from functools import partial
 from scipy.constants import mu_0
+from .quantity import _Quantity
 
-@partial(jit, static_argnames=[
-    'winding_surface_mode',
-])
-def K(qp, cp_mn, winding_surface_mode=False):
+# ----- Implementations -----
+@jit
+def _K(qp, dofs):
+    phi_mn = dofs['phi_mn']
     # When winding_surface_mode is set to true, 
     # The evaluation will be done over the full winding surface 
     # instead. This is used when calculating B.
@@ -24,6 +24,12 @@ def K(qp, cp_mn, winding_surface_mode=False):
     nfp = qp.nfp
     cp_m, cp_n = qp.make_mn()
     stellsym = qp.stellsym
+    inv_normN_prime_2d = 1/jnp.linalg.norm(normal, axis=-1)
+    G = net_poloidal_current_amperes
+    I = net_toroidal_current_amperes
+    # This part of the implementation is specific to 
+    # Fourier parameterization. May be modified later
+    # to accommodate other bases.
     (
         _, # trig_m_i_n_i,
         trig_diff_m_i_n_i,
@@ -32,10 +38,7 @@ def K(qp, cp_mn, winding_surface_mode=False):
         _, # partial_phi_phi,
         _, # partial_phi_theta,
         _, # partial_theta_theta,
-    ) = qp.diff_helper(winding_surface_mode=winding_surface_mode)
-    inv_normN_prime_2d = 1/jnp.linalg.norm(normal, axis=-1)
-    G = net_poloidal_current_amperes
-    I = net_toroidal_current_amperes
+    ) = qp.diff_helper(winding_surface_mode=False)
     b_K = inv_normN_prime_2d[:, :, None, None] * (
         dg2[:, :, :, None] * (trig_diff_m_i_n_i @ partial_phi)[:, :, None, :]
         - dg1[:, :, :, None] * (trig_diff_m_i_n_i @ partial_theta)[:, :, None, :]
@@ -44,20 +47,22 @@ def K(qp, cp_mn, winding_surface_mode=False):
         dg2 * G
         - dg1 * I
     )
-    return b_K@cp_mn + c_K
-K_desc_unit = lambda scales: scales["B"] / mu_0 # based on infinite solenoid: B = mu_0 K_pol.
+    return b_K@phi_mn + c_K
+_K_desc_unit = lambda scales: scales["B"] / mu_0 # based on infinite solenoid: B = mu_0 K_pol.
 
 @jit
-def K2(qp, cp_mn):
-    return(jnp.sum(K(qp, cp_mn)**2, axis=-1))
-K2_desc_unit = lambda scales: K_desc_unit(scales)**2
+def _K2(qp, dofs):
+    return(jnp.sum(_K(qp, dofs)**2, axis=-1))
+_K2_desc_unit = lambda scales: _K_desc_unit(scales)**2
 
 @jit
-def K_theta(qp, cp_mn):
+def _K_theta(qp, dofs):
+    phi_mn = dofs['phi_mn']
     ''' 
     K in the theta direction. Used to eliminate windowpane coils.  
     by K_theta >= -G. (Prevents current from flowing against G).
     '''
+    phi_mn = dofs['phi_mn']
     cp_m, cp_n = qp.make_mn()
     stellsym = qp.stellsym
     nfp = qp.nfp
@@ -90,11 +95,71 @@ def K_theta(qp, cp_mn):
     K_theta = K_theta_shaped
     A_K_theta = K_theta
     b_K_theta = qp.net_poloidal_current_amperes*jnp.ones((K_theta.shape[0], K_theta.shape[1]))
-    return A_K_theta @ cp_mn + b_K_theta
-K_theta_desc_unit = lambda scales: K_desc_unit(scales)
+    return A_K_theta @ phi_mn + b_K_theta
+# Shares unit with K
 
 @jit 
-def f_K(qp, cp_mn):
-    K2_val = K2(qp, cp_mn)
+def _f_K(qp, dofs):
+    K2_val = _K2(qp, dofs)
     return qp.eval_surface.integrate(K2_val/2)*qp.nfp
-f_K_desc_unit = lambda scales: K_desc_unit(scales)**2 * scales["R0"] * scales["a"]
+    
+_f_K_desc_unit = lambda scales: _K_desc_unit(scales)**2 * scales["R0"] * scales["a"]
+
+# ----- Wrappers -----
+# This is the xyz component of the 
+# current. It's an linear function of the 
+# current potential Phi. Although in theory it should be 
+# compatible with all types of constraints, setting 
+# components of K are arguably a class of trivial 
+# constraints, therefore we prohibit it from being
+# used as constraints or objectives.
+# When compatibility is empty an _Quantity is still a wrapper for 
+# a private function.
+K = _Quantity(
+    val_func=_K, 
+    eff_val_func=_K, 
+    aux_g_ineq_func=None, 
+    aux_h_eq_func=None, 
+    aux_dofs_init=None, 
+    compatibility=['<=', '>='], 
+    desc_unit=_K_desc_unit,
+)
+
+# This is a positive definite quadratic vector field.
+# Therefore, it cannot be used as an objectivem, but 
+# can be used in '==' and '<=' constraints. However, 
+# '==' constraints on K^2 is trivial. We therefore prohibit
+# it here too.
+K2 = _Quantity(
+    val_func=_K2, 
+    eff_val_func=_K2, 
+    aux_g_ineq_func=None, 
+    aux_h_eq_func=None, 
+    aux_dofs_init=None, 
+    compatibility=['<='], 
+    desc_unit=_K2_desc_unit,
+)
+
+# This is a linear scalar field. It's compatible with 
+# '<=', '>=', and '==' constraints. '==' seems trivial 
+# so we exclude it here to prevent user typo.
+K_theta = _Quantity(
+    val_func=_K_theta, 
+    eff_val_func=_K_theta, 
+    aux_g_ineq_func=None, 
+    aux_h_eq_func=None, 
+    aux_dofs_init=None, 
+    compatibility=['<=', '>='], 
+    desc_unit=_K_desc_unit,
+)
+
+# This is a positive definite quadratic scalar. 
+f_K = _Quantity(
+    val_func=_f_K, 
+    eff_val_func=_f_K, 
+    aux_g_ineq_func=None, 
+    aux_h_eq_func=None, 
+    aux_dofs_init=None, 
+    compatibility=['f', '<='], 
+    desc_unit=_f_K_desc_unit,
+)
