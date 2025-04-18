@@ -10,7 +10,7 @@ from .current import _K_desc_unit
 def _Phi(qp, dofs):
     # Calculates the current potential Phi
     # (dipole density) on a grid on the surface. 
-    phi_mn = dofs['phi_mn']
+    phi_mn = dofs['phi']
     (
         trig_m_i_n_i,
         _, # trig_diff_m_i_n_i,
@@ -44,8 +44,10 @@ _f_l1_Phi_desc_unit = lambda scales: Phi_desc_unit(scales) * scales["R0"] * scal
 Phi = _Quantity(
     val_func=_Phi, 
     eff_val_func=_Phi, 
-    aux_g_ineq_func=None, 
-    aux_h_eq_func=None, 
+    aux_g_ineq_func=None,
+    aux_g_ineq_unit_conv=None,
+    aux_h_eq_func=None,
+    aux_h_eq_unit_conv=None,
     aux_dofs_init=None, 
     compatibility=['<=', '>='], 
     desc_unit=_Phi_desc_unit,
@@ -56,8 +58,10 @@ Phi = _Quantity(
 Phi_with_net_current = _Quantity(
     val_func=_Phi_with_net_current, 
     eff_val_func=_Phi_with_net_current, 
-    aux_g_ineq_func=None, 
-    aux_h_eq_func=None, 
+    aux_g_ineq_func=None,
+    aux_g_ineq_unit_conv=None,
+    aux_h_eq_func=None,
+    aux_h_eq_unit_conv=None,
     aux_dofs_init=None, 
     compatibility=['<=', '>='], 
     desc_unit=_Phi_desc_unit,
@@ -68,7 +72,9 @@ Phi2 = _Quantity(
     val_func=_Phi2, 
     eff_val_func=_Phi2, 
     aux_g_ineq_func=None, 
+    aux_g_ineq_unit_conv=None,
     aux_h_eq_func=None, 
+    aux_h_eq_unit_conv=None,
     aux_dofs_init=None, 
     compatibility=['<='], 
     desc_unit=_Phi2_desc_unit,

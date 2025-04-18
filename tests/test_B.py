@@ -1,5 +1,5 @@
 import unittest
-from quadcoil.objective import winding_surface_B, Bnormal, f_B, f_K
+from quadcoil.quantity import winding_surface_B, Bnormal, f_B, f_K
 import jax.numpy as jnp
 from load_test_data import load_data, compare
 try:
@@ -27,7 +27,9 @@ class QuadcoilBTest(unittest.TestCase):
 
     @unittest.skipIf(not CPF_AVAILABLE, "Skipping B test, simsopt.field.CurrentPotentialFourier unavailable.")
     def test_winding_surface_B(self):
-        B_test = winding_surface_B(qp, cp.get_dofs())
+        # quadcoil implementation
+        B_test = winding_surface_B(qp, {'phi': cp.get_dofs()})
+        # simsopt implementation
         Bfield = WindingSurfaceField(cp)
         points = plasma_surface.gamma().reshape(-1, 3)
         Bfield.set_points(points)
@@ -36,14 +38,14 @@ class QuadcoilBTest(unittest.TestCase):
 
     @unittest.skipIf(not CPF_AVAILABLE, "Skipping Bnormal test, simsopt.field.CurrentPotentialFourier unavailable.")
     def test_B_normal(self):
-        B_GI_test = Bnormal(qp, jnp.zeros_like(cp.get_dofs()))
+        B_GI_test = Bnormal(qp, {'phi': jnp.zeros_like(cp.get_dofs())})
         self.assertTrue(compare(B_GI_test.flatten(), cpst.B_GI))
 
     @unittest.skipIf(not CPF_AVAILABLE, "Skipping f_B, f_K test, simsopt.field.CurrentPotentialFourier unavailable.")
     def test_f_B_and_f_K(self):
         phi, f_B_ans, f_K_ans = cpst.solve_tikhonov()
-        f_B_val = f_B(qp, phi)
-        f_K_val = f_K(qp, phi) 
+        f_B_val = f_B(qp, {'phi': phi})
+        f_K_val = f_K(qp, {'phi': phi}) 
         self.assertTrue(compare(f_B_val, f_B_ans))
         self.assertTrue(compare(f_K_val, f_K_ans))
 

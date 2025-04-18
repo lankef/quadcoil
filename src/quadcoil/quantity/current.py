@@ -5,9 +5,11 @@ from scipy.constants import mu_0
 from .quantity import _Quantity
 
 # ----- Implementations -----
-@jit
-def _K(qp, dofs):
-    phi_mn = dofs['phi_mn']
+@partial(jit, static_argnames=('winding_surface_mode'))
+def _K(qp, dofs, winding_surface_mode=False):
+    # winding_surface_mode is for using 
+    # one or more field periods.
+    phi_mn = dofs['phi']
     # When winding_surface_mode is set to true, 
     # The evaluation will be done over the full winding surface 
     # instead. This is used when calculating B.
@@ -38,7 +40,7 @@ def _K(qp, dofs):
         _, # partial_phi_phi,
         _, # partial_phi_theta,
         _, # partial_theta_theta,
-    ) = qp.diff_helper(winding_surface_mode=False)
+    ) = qp.diff_helper(winding_surface_mode=winding_surface_mode)
     b_K = inv_normN_prime_2d[:, :, None, None] * (
         dg2[:, :, :, None] * (trig_diff_m_i_n_i @ partial_phi)[:, :, None, :]
         - dg1[:, :, :, None] * (trig_diff_m_i_n_i @ partial_theta)[:, :, None, :]
@@ -57,12 +59,12 @@ _K2_desc_unit = lambda scales: _K_desc_unit(scales)**2
 
 @jit
 def _K_theta(qp, dofs):
-    phi_mn = dofs['phi_mn']
+    phi_mn = dofs['phi']
     ''' 
     K in the theta direction. Used to eliminate windowpane coils.  
     by K_theta >= -G. (Prevents current from flowing against G).
     '''
-    phi_mn = dofs['phi_mn']
+    phi_mn = dofs['phi']
     cp_m, cp_n = qp.make_mn()
     stellsym = qp.stellsym
     nfp = qp.nfp
@@ -118,8 +120,10 @@ _f_K_desc_unit = lambda scales: _K_desc_unit(scales)**2 * scales["R0"] * scales[
 K = _Quantity(
     val_func=_K, 
     eff_val_func=_K, 
-    aux_g_ineq_func=None, 
-    aux_h_eq_func=None, 
+    aux_g_ineq_func=None,
+    aux_g_ineq_unit_conv=None,
+    aux_h_eq_func=None,
+    aux_h_eq_unit_conv=None,
     aux_dofs_init=None, 
     compatibility=['<=', '>='], 
     desc_unit=_K_desc_unit,
@@ -133,8 +137,10 @@ K = _Quantity(
 K2 = _Quantity(
     val_func=_K2, 
     eff_val_func=_K2, 
-    aux_g_ineq_func=None, 
-    aux_h_eq_func=None, 
+    aux_g_ineq_func=None,
+    aux_g_ineq_unit_conv=None,
+    aux_h_eq_func=None,
+    aux_h_eq_unit_conv=None,
     aux_dofs_init=None, 
     compatibility=['<='], 
     desc_unit=_K2_desc_unit,
@@ -146,8 +152,10 @@ K2 = _Quantity(
 K_theta = _Quantity(
     val_func=_K_theta, 
     eff_val_func=_K_theta, 
-    aux_g_ineq_func=None, 
-    aux_h_eq_func=None, 
+    aux_g_ineq_func=None,
+    aux_g_ineq_unit_conv=None,
+    aux_h_eq_func=None,
+    aux_h_eq_unit_conv=None,
     aux_dofs_init=None, 
     compatibility=['<=', '>='], 
     desc_unit=_K_desc_unit,
@@ -157,8 +165,10 @@ K_theta = _Quantity(
 f_K = _Quantity(
     val_func=_f_K, 
     eff_val_func=_f_K, 
-    aux_g_ineq_func=None, 
-    aux_h_eq_func=None, 
+    aux_g_ineq_func=None,
+    aux_g_ineq_unit_conv=None,
+    aux_h_eq_func=None,
+    aux_h_eq_unit_conv=None,
     aux_dofs_init=None, 
     compatibility=['f', '<='], 
     desc_unit=_f_K_desc_unit,

@@ -11,7 +11,7 @@ def _winding_surface_B(qp, dofs):
     # Array WindingSurfaceB(Array& points, Array& ws_points, Array& ws_normal, Array& K)
     # NOTE: Bnormal_plasma is not necessarily stellarator 
     # symmetric even for stellarator symmetric equilibria.
-    phi_mn = dofs['phi_mn']
+    phi_mn = dofs['phi']
     gamma = qp.plasma_surface.gamma() # The shapes will be used later
     points = gamma.reshape((-1, 3))
     num_points = points.shape[0]
@@ -22,7 +22,7 @@ def _winding_surface_B(qp, dofs):
     nphi = ws_gamma.shape[0]
     ntheta = ws_gamma.shape[1]
     fak = 1e-7  # mu0 divided by 4 * pi factor
-    K_val = _K(qp, phi_mn, winding_surface_mode=True).reshape((-1, 3))
+    K_val = _K(qp, dofs, winding_surface_mode=True).reshape((-1, 3))
     def compute_B(point):
         point = point.reshape(1, -1)
         r = point - ws_points
@@ -61,7 +61,7 @@ def _f_B_normalized_by_Bnormal_IG(qp, dofs):
     # form of f_B's dependence on the current potential phi_mn,
     # and the optimum to this objective is the same as f_B.
     f_B_with_unit = _f_B(qp, dofs)
-    f_B_IG = _f_B(qp, jnp.zeros_like(dofs['phi_mn']))
+    f_B_IG = _f_B(qp, {'phi': jnp.zeros(qp.ndofs)})
     return(f_B_with_unit / f_B_IG)
 
 # ----- Wrappers -----
@@ -70,8 +70,10 @@ def _f_B_normalized_by_Bnormal_IG(qp, dofs):
 winding_surface_B = _Quantity(
     val_func=_winding_surface_B, 
     eff_val_func=_winding_surface_B, 
-    aux_g_ineq_func=None, 
-    aux_h_eq_func=None, 
+    aux_g_ineq_func=None,
+    aux_g_ineq_unit_conv=None,
+    aux_h_eq_func=None,
+    aux_h_eq_unit_conv=None,
     aux_dofs_init=None, 
     compatibility=['<=', '>='], 
     desc_unit=_winding_surface_B_desc_unit,
@@ -82,8 +84,10 @@ winding_surface_B = _Quantity(
 Bnormal = _Quantity(
     val_func=_Bnormal, 
     eff_val_func=_Bnormal, 
-    aux_g_ineq_func=None, 
-    aux_h_eq_func=None, 
+    aux_g_ineq_func=None,
+    aux_g_ineq_unit_conv=None,
+    aux_h_eq_func=None,
+    aux_h_eq_unit_conv=None,
     aux_dofs_init=None, 
     compatibility=['<=', '>='], 
     desc_unit=_winding_surface_B_desc_unit,
@@ -94,8 +98,10 @@ Bnormal = _Quantity(
 Bnormal2 = _Quantity(
     val_func=_Bnormal2, 
     eff_val_func=_Bnormal2, 
-    aux_g_ineq_func=None, 
-    aux_h_eq_func=None, 
+    aux_g_ineq_func=None,
+    aux_g_ineq_unit_conv=None,
+    aux_h_eq_func=None,
+    aux_h_eq_unit_conv=None,
     aux_dofs_init=None, 
     compatibility=['<='], 
     desc_unit=lambda scales: scales["B"]**2,
@@ -105,8 +111,10 @@ Bnormal2 = _Quantity(
 f_B = _Quantity(
     val_func=_f_B, 
     eff_val_func=_f_B, 
-    aux_g_ineq_func=None, 
-    aux_h_eq_func=None, 
+    aux_g_ineq_func=None,
+    aux_g_ineq_unit_conv=None,
+    aux_h_eq_func=None,
+    aux_h_eq_unit_conv=None,
     aux_dofs_init=None, 
     compatibility=['f', '<='], 
     desc_unit=_f_B_desc_unit,
@@ -116,8 +124,10 @@ f_B = _Quantity(
 f_B_normalized_by_Bnormal_IG = _Quantity(
     val_func=_f_B_normalized_by_Bnormal_IG, 
     eff_val_func=_f_B_normalized_by_Bnormal_IG, 
-    aux_g_ineq_func=None, 
-    aux_h_eq_func=None, 
+    aux_g_ineq_func=None,
+    aux_g_ineq_unit_conv=None,
+    aux_h_eq_func=None,
+    aux_h_eq_unit_conv=None,
     aux_dofs_init=None, 
     compatibility=['f', '<='], 
     desc_unit=lambda scales: 1.,

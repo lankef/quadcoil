@@ -7,7 +7,7 @@ from .quantity import _Quantity
 # ----- Implementations -----
 @jit
 def _K_dot_grad_K(qp, dofs):
-    phi_mn = dofs['phi_mn']
+    phi_mn = dofs['phi']
     normal = qp.eval_surface.normal()
     gammadash1 = qp.eval_surface.gammadash1()
     gammadash2 = qp.eval_surface.gammadash2()
@@ -59,39 +59,31 @@ def _K_dot_grad_K_cyl(qp, dofs):
 # ----- Wrappers -----
 # This is the xyz component of the 
 # K dot grad K. It's a non-convex, quadratic function of the 
-# current potential Phi. Although in theory it should be 
-# compatible with all types of constraints, setting 
-# components of K dot grad K are arguably a class of trivial 
-# constraints, therefore we prohibit it from being
-# used as constraints or objectives.
-# When compatibility is empty an _Quantity is still a wrapper for 
-# a private function.
+# current potential Phi. Compatible with only inequality constraints.
 K_dot_grad_K = _Quantity(
     val_func=_K_dot_grad_K, 
     eff_val_func=_K_dot_grad_K, 
-    aux_g_ineq_func=None, 
-    aux_h_eq_func=None, 
+    aux_g_ineq_func=None,
+    aux_g_ineq_unit_conv=None,
+    aux_h_eq_func=None,
+    aux_h_eq_unit_conv=None,
     aux_dofs_init=None, 
-    compatibility=[], 
+    compatibility=['<=', '>='], 
     desc_unit=_K_dot_grad_K_desc_unit,
 )
 
 # This is the r, phi, z component of the 
 # K dot grad K. It's a non-convex, quadratic function of the 
-# current potential Phi. Although in theory it should be 
-# compatible with all types of constraints, setting 
-# components of K dot grad K are arguably a class of trivial 
-# constraints, therefore we prohibit it from being
-# used as constraints or objectives.
-# When compatibility is empty an _Quantity is still a wrapper for 
-# a private function.
+# current potential Phi. Compatible with only inequality constraints.
 K_dot_grad_K_cyl = _Quantity(
     val_func=_K_dot_grad_K_cyl, 
     eff_val_func=_K_dot_grad_K_cyl, 
-    aux_g_ineq_func=None, 
-    aux_h_eq_func=None, 
+    aux_g_ineq_func=None,
+    aux_g_ineq_unit_conv=None,
+    aux_h_eq_func=None,
+    aux_h_eq_unit_conv=None,
     aux_dofs_init=None, 
-    compatibility=[], 
+    compatibility=['<=', '>='], 
     desc_unit=_K_dot_grad_K_desc_unit,
 )
 

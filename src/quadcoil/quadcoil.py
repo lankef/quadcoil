@@ -1,5 +1,5 @@
 from quadcoil import (
-    parse_objectives, parse_constraints, get_objective,
+    # parse_objectives, parse_constraints, get_objective,
     gen_winding_surface_atan, 
     SurfaceRZFourierJAX, QuadcoilParams, 
     solve_constrained, run_opt_lbfgs,

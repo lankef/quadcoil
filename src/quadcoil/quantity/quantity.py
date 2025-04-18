@@ -1,11 +1,13 @@
 from typing import Callable, List, Any
-
+from jax import jit
+import jax.numpy as jnp
+from functools import partial
 class _Quantity: 
     r'''
     Interior point methods require :math:`C^1` objectives. Therefore, 
     QUADCOIL has to convert non-:math:`C^1`, convex objectives, such as 
     L-:math:`\infty` or L1 norms, into a combination of :math:`C^1` objectives, constraints
-    and auxillary variables. For example, the L-:math:`\infty` norm 
+    and auxiliary variables. For example, the L-:math:`\infty` norm 
     :math:`\max_{ws}\Phi`, is actually:
     
     .. math::
@@ -13,7 +15,7 @@ class _Quantity:
         \max_{ws}\Phi = \min s, \text{ where } |\Phi|\leq s.
 
     This "under-the-hood" implementation is less intuitive, and will not work for the optimum
-    of a different problem that does not contain the same auxillary variable. To make 
+    of a different problem that does not contain the same auxiliary variable. To make 
     QUADCOIL (hopefully) easier to use and develop for, we've came up with the ``_Quantity`` class.
 
     ``_Quantity`` is designed as a class for storing all these different forms of the same
@@ -22,7 +24,7 @@ class _Quantity:
         * A "surface-level", non-:math:`C^1` implementation that's 
         easy to understand and works for all problems. This is ``eff_val_func``.
         * An "under-the-hood" implementation :math:`C^1`, but nay not be well-defined in
-        another problem with different auxillary vars, and is less intuitive to the user.
+        another problem with different auxiliary vars, and is less intuitive to the user.
         These are ``val_func, aux_g_ineq_func, aux_h_eq_func, aux_dofs_init``.
 
     To add a new quantity to QUADCOIL, a developer only need to create a new **instance** (not subclass!)
@@ -36,7 +38,7 @@ class _Quantity:
     It's purely for use by ``quadcoil/wrapper.py`` to construct the :math:`f, g, h` of the constrained 
     optimization problem.
 
-    Quantities with auxillary variables are often incompatible with ``'=='`` and ``'>='`` 
+    Quantities with auxiliary variables are often incompatible with ``'=='`` and ``'>='`` 
     constraints. For example, :math:`\max_{ws}\Phi=\alpha` and :math:`\max_{ws}\Phi\geq\alpha`
     are both non-convex constraints, and not supported by QUADCOIL. The compatibility is 
     stored in ``Objective``. 
@@ -47,26 +49,26 @@ class _Quantity:
         The value of the quantity. Must be :math:`C^1`.
     eff_val_func : Callable(qp: QuadcoilParams, dofs: dict)
         A "real" implementation of the quantity that can directly be calculated from :math:`\Phi_{sv}`
-        without using auxillary variables. Can be :math:`C^0` rather than :math:`C^1`. This is the 
+        without using auxiliary variables. Can be :math:`C^0` rather than :math:`C^1`. This is the 
         "surface-level" imnplementation that works across different problems, and that 
         QUADCOIL users will typically access.
     aux_g_ineq_func : Callable(qp: QuadcoilParams, dofs: dict)
-        The auxillary inequality constraints required by the objective, in the form 
+        The auxiliary inequality constraints required by the objective, in the form 
         of :math:`g(x)\leq0`.  
-    val_unit_to_g_ineq_unit : Callable(qp: QuadcoilParams, f_unit: float)
-        The auxillary constraint of the quantity often have a different unit from the 
+    aux_g_ineq_unit_conv : Callable(qp: QuadcoilParams, f_unit: float)
+        The auxiliary constraint of the quantity often have a different unit from the 
         value of the quantity itself. For example, the L-1 norm of a field :math:`v` has the unit of 
-        :math:`(\text{unit}_v) m^2`, whereas its auxillary constraints have the unit of
+        :math:`(\text{unit}_v) m^2`, whereas its auxiliary constraints have the unit of
         :math:`(\text{unit}_v)`. To allow the user to appoint one unit for the entire quantity, 
         we must provide a unit conversion function. The function will access the problem setup (but not state)
         via a ``QuadcoilParams``.
     aux_h_eq_func : Callable(qp: QuadcoilParams, dofs: dict)
-        The auxillary equality constraints required by the objective, in the form 
+        The auxiliary equality constraints required by the objective, in the form 
         of :math:`h(x)=0`.  
-    val_unit_to_h_eq_unit : Callable(qp: QuadcoilParams, f_unit: float)
+    aux_h_eq_unit_conv : Callable(qp: QuadcoilParams, f_unit: float)
         The unit conversion function for ``aux_h_eq_func``.
     aux_dofs_init : dict{str: scalar, array or Callable(qp: QuadcoilParams)}
-        The names of the auxillary variables and callables for evaluating their initial values
+        The names of the auxiliary variables and callables for evaluating their initial values
         in terms of dofs.
     compatibility : List[str]
         Whether this quantity can serve as an objective, or appear in
@@ -77,10 +79,12 @@ class _Quantity:
 
     Attributes
     ----------
-    val_func : Callable(x: dict)
-    eff_val_func : Callable(x: dict)
-    aux_g_ineq_func : Callable(x: dict)
-    aux_h_eq_func : Callable(x: dict)
+    val_func : Callable(qp: QuadcoilParams, dofs: dict)
+    eff_val_func : Callable(qp: QuadcoilParams, dofs: dict)
+    aux_g_ineq_func : Callable(qp: QuadcoilParams, dofs: dict)
+    aux_g_ineq_unit_conv : Callable(qp: QuadcoilParams, f_unit: float)
+    aux_h_eq_func : Callable(qp: QuadcoilParams, dofs: dict)
+    aux_h_eq_unit_conv : Callable(qp: QuadcoilParams, f_unit: float)
     aux_dofs_init : dict{str: Callable(QuadcoilParams) -> Tuple}
     desc_unit : Callable(scale: dict)
     compatibility : List[str]
@@ -92,9 +96,9 @@ class _Quantity:
         self, 
         val_func, eff_val_func, 
         aux_g_ineq_func,
-        val_unit_to_g_ineq_unit,
+        aux_g_ineq_unit_conv,
         aux_h_eq_func,
-        val_unit_to_h_eq_unit,
+        aux_h_eq_unit_conv,
         aux_dofs_init, 
         compatibility, 
         desc_unit
@@ -107,7 +111,7 @@ class _Quantity:
             raise TyperError('aux_g_ineq_func must not be a _Quantity.')
         if isinstance(aux_h_eq_func, _Quantity):
             raise TyperError('aux_h_eq_func must not be a _Quantity.')
-        # Checking whether the auxillary variable name has already been used elsewhere.
+        # Checking whether the auxiliary variable name has already been used elsewhere.
         if aux_dofs_init is not None:
             if not isinstance(aux_dofs_init, dict):
                 raise TypeError('aux_dofs_init muse be a dict.')
@@ -116,7 +120,7 @@ class _Quantity:
             # Check for duplicates
             if dup_aux_names:
                 raise ValueError(
-                    f'The auxillary variable name {dup_aux_names} '\
+                    f'The auxiliary variable name {dup_aux_names} '\
                     'has already been used. Please choose a different one.'\
                     'If you are not developing new quantities, this is an issue with '\
                     'the implementation of an existing quantity. Please contact the developers.'
@@ -134,10 +138,10 @@ class _Quantity:
         self.aux_dofs_init = aux_dofs_init
         self.compatibility = compatibility
         self.desc_unit = desc_unit
-        self.val_unit_to_g_ineq_unit = val_unit_to_g_ineq_unit
-        self.val_unit_to_h_eq_unit = val_unit_to_h_eq_unit
+        self.aux_g_ineq_unit_conv = aux_g_ineq_unit_conv
+        self.aux_h_eq_unit_conv = aux_h_eq_unit_conv
         
-
+    @partial(jit, static_argnames=('self',))
     def __call__(self, qp, dofs):
         '''
         Evaluate this quantity. For  convenience.
@@ -150,11 +154,12 @@ class _Quantity:
         dofs : dict
             (static) A dictionary storing the degrees of freedom in a QUADCOIL problem. 
         '''
+        print(dofs)
         return self.eff_val_func(qp, {'phi': dofs['phi']})
     
     def generate_linf_norm(func, aux_argname, desc_unit, positive_definite=False):
         '''
-        Generates the auxillary constraints for an L-:math:`\infty`
+        Generates the auxiliary constraints for an L-:math:`\infty`
         norm. See documentations for ``quadcoil.objective.Objective``.
         An L-:math:`\infty` norm term in an objective or :math:`\leq`
         constraint can be represented by:
@@ -174,7 +179,7 @@ class _Quantity:
         func : Callable
             The source function :math:`f` to convert into an L-:math:`\infty` norm.
         aux_argname : str
-            The name of the auxillary variable. Must be unique among all supported
+            The name of the auxiliary variable. Must be unique among all supported
             ``_Quantity``s.
         maxdesc_unit : Callable
             A callable calculating the quantity's unit in DESC.
@@ -187,7 +192,7 @@ class _Quantity:
         A ``_Quantity``.
         '''
         # The objective/constraint form of this L-infinity
-        # norm is just a function that returns the auxillary variable.
+        # norm is just a function that returns the auxiliary variable.
         val_func = lambda qp, dofs, aux_argname=aux_argname: dofs[aux_argname]
         # The effective function
         eff_val_func = lambda qp, dofs, func=func: jnp.max(jnp.abs(func(qp, dofs)))
@@ -200,20 +205,17 @@ class _Quantity:
             if positive_definite:
                 return g_plus
             g_minus = -field - p_aux # -f - p <=0
-            return jnp.concatenate([
-                jnp.atleast_1d(g_plus),
-                jnp.atleast_1d(g_minus),
-            ])
+            return jnp.stack([g_plus,g_minus], axis=0)
         
         return _Quantity(
             val_func=val_func,
             eff_val_func=eff_val_func, 
             aux_g_ineq_func=aux_g_ineq_func,
-            # The auxillary constraint g of L-inf norms
+            # The auxiliary constraint g of L-inf norms
             # has the same unit as its value.
-            val_unit_to_g_ineq_unit=lambda qp, unit: unit,  
+            aux_g_ineq_unit_conv=lambda qp, unit: unit,  
             aux_h_eq_func=None, 
-            val_unit_to_h_eq_unit=None,
+            aux_h_eq_unit_conv=None,
             aux_dofs_init={aux_argname: eff_val_func},
             compatibility=['f', '<='], 
             desc_unit=desc_unit,
@@ -221,7 +223,7 @@ class _Quantity:
 
     def generate_l1_norm(func, aux_argname, desc_unit, positive_definite=False):
         '''
-        Generates the auxillary constraints for an L-1 
+        Generates the auxiliary constraints for an L-1 
         norm. See documentations for ``quadcoil.objective.Objective``.
         An L-1 norm in an objective or a :math:`\leq` constraint is equivalent to:
 
@@ -243,7 +245,7 @@ class _Quantity:
         func_shape : Tuple
             The shape of ``func``'s output. Muse be 
         aux_argname : str
-            The name of the auxillary variable. Must be unique among all supported
+            The name of the auxiliary variable. Must be unique among all supported
             ``_Quantity``s.
         maxdesc_unit : Callable
             A callable calculating the quantity's unit in DESC.
@@ -268,28 +270,25 @@ class _Quantity:
         def aux_g_ineq_func(qp, dofs, func=func, aux_argname=aux_argname):
             field = func(qp, dofs)
             p_aux = dofs[aux_argname]
-            g_plus  =  field - p_aux #  f - p <=0
+            g_plus = field - p_aux #  f - p <=0
             # We need only half of the constraints if f is positive definite
             if positive_definite:
                 return g_plus
             g_minus = -field - p_aux # -f - p <=0
-            return jnp.concatenate([
-                jnp.atleast_1d(g_plus),
-                jnp.atleast_1d(g_minus),
-            ])
+            return jnp.stack([g_plus,g_minus], axis=0)
         # The unit of L-1 norm is m^2 (unit),
-        # but the unit of its auxillary constraints
+        # but the unit of its auxiliary constraints
         # are (unit). Therefore, g_unit is val_unit \
         # divided by the surface's area.
-        def val_unit_to_g_ineq_unit(qp, unit):
-            return unit / qp.eval_surface.area()*qp.nfp
+        def aux_g_ineq_unit_conv(qp, unit):
+            return unit / (qp.eval_surface.area() * qp.nfp)
         return _Quantity(
             val_func=val_func,
             eff_val_func=eff_val_func, 
             aux_g_ineq_func=aux_g_ineq_func,
-            val_unit_to_g_ineq_unit=val_unit_to_g_ineq_unit,
+            aux_g_ineq_unit_conv=aux_g_ineq_unit_conv,
             aux_h_eq_func=None, 
-            val_unit_to_h_eq_unit=None,
+            aux_h_eq_unit_conv=None,
             aux_dofs_init={aux_argname: lambda qp, dpfs: jnp.abs(func(qp, dofs))},
             compatibility=['f', '<='], 
             desc_unit=desc_unit,
