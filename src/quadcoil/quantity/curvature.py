@@ -59,7 +59,9 @@ def _K_dot_grad_K_cyl(qp, dofs):
 # ----- Wrappers -----
 # This is the xyz component of the 
 # K dot grad K. It's a non-convex, quadratic function of the 
-# current potential Phi. Compatible with only inequality constraints.
+# current potential Phi. Compatible with all types of copnstraints.
+# '==' constraint is somewhat trivial, but we need one "==" constraint
+# somewhere for testing so we pick this uncommonly used vector field for it.
 K_dot_grad_K = _Quantity(
     val_func=_K_dot_grad_K, 
     eff_val_func=_K_dot_grad_K, 
@@ -68,7 +70,7 @@ K_dot_grad_K = _Quantity(
     aux_h_eq_func=None,
     aux_h_eq_unit_conv=None,
     aux_dofs_init=None, 
-    compatibility=['<=', '>='], 
+    compatibility=['<=', '>=', '=='], 
     desc_unit=_K_dot_grad_K_desc_unit,
 )
 

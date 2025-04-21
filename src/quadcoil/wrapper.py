@@ -178,7 +178,7 @@ def parse_objectives(objective_name, objective_unit=None, objective_weight=1.):
         and an array of :math:`\Phi_{sv}` Fourier coefficients into a scalar.
     g_list : List[Callable or None]
     h_list : List[Callable or None]
-    aux_dofs_acc : dict{str: None, Tuple or Callable}
+    aux_dofs : dict{str: None, Tuple or Callable}
     '''
     if isinstance(objective_name, str):
         objective_name = (objective_name,)
@@ -186,7 +186,7 @@ def parse_objectives(objective_name, objective_unit=None, objective_weight=1.):
         objective_weight = jnp.array([objective_weight,])
     if len(objective_name) != len(objective_weight): # or len(objective_name) != len(objective_unit):
         raise ValueError('objective, objective_weight and objective_unit must have the same length.')
-    aux_dofs_acc = {}
+    aux_dofs = {}
     f_list = []
     g_list = []
     h_list = []
@@ -196,13 +196,13 @@ def parse_objectives(objective_name, objective_unit=None, objective_weight=1.):
             g_ineq_list_scaled,
             h_eq_list_scaled,
             _,
-            aux_dofs,   
+            aux_dofs_i,   
         ) = _add_quantity(
             name=objective_name[i],
             unit=objective_unit[i],
             use_case='f',
         )
-        aux_dofs_acc = aux_dofs_acc | aux_dofs
+        aux_dofs = aux_dofs | aux_dofs_i
         f_list.append(val_scaled)
         g_list = g_list + g_ineq_list_scaled
         h_list = h_list + h_eq_list_scaled
@@ -216,7 +216,7 @@ def parse_objectives(objective_name, objective_unit=None, objective_weight=1.):
         for i in range(len(f_list)):
             out = out + f_list[i](qp, dofs) * objective_weight[i]
         return out
-    return jit(f_tot), g_list, h_list, aux_dofs_acc
+    return jit(f_tot), g_list, h_list, aux_dofs
 
 def parse_constraints(
     constraint_name, 
@@ -248,7 +248,7 @@ def parse_constraints(
     h_list : List[Callable or None]
         A list of ``Callable`` for the inequality/equality constraints. Returns will be 
         greater than 0 when the constraints are violated.
-    aux_dofs_acc : dict{str: None, Tuple or Callable}
+    aux_dofs : dict{str: None, Tuple or Callable}
         A dictionary containing the shapes of the auxillary variables, or the \
         ``Callables`` required to calculate them
     '''
@@ -274,7 +274,7 @@ def parse_constraints(
     h_eq_list = []
     g_num = 0
     h_num = 0
-    aux_dofs_acc = {}
+    aux_dofs = {}
     for i in range(n_cons_total):
         cons_type_i = constraint_type[i]
         cons_unit_i = constraint_unit[i]
@@ -284,15 +284,15 @@ def parse_constraints(
             aux_g_ineq_i_scaled,
             aux_h_eq_i_scaled,
             unit_callable_i,
-            aux_dofs_acc_i
+            aux_dofs_i
         ) = _add_quantity(
             name=constraint_name[i],
             unit=constraint_unit[i],
-            aux_dofs_acc=aux_dofs_acc,
             use_case=cons_type_i,
         )
-        g_ineq_list.append(aux_g_ineq_i_scaled)
-        h_eq_list.append(aux_h_eq_i_scaled)
+        aux_dofs = aux_dofs | aux_dofs_i
+        g_ineq_list = g_ineq_list + aux_g_ineq_i_scaled
+        h_eq_list = h_eq_list + aux_h_eq_i_scaled
         # Flipping the sign of >= constraints.
         if cons_type_i == '>=':
             sign_i = -1
@@ -323,5 +323,5 @@ def parse_constraints(
     # # merge_callables already contains jit.
     # g_ineq = merge_callables(g_ineq_list)
     # h_eq = merge_callables(h_eq_list)
-    return g_ineq_list, h_eq_list, aux_dofs_acc
+    return g_ineq_list, h_eq_list, aux_dofs
     
