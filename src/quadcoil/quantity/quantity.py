@@ -86,6 +86,7 @@ class _Quantity:
     aux_h_eq_func : Callable(qp: QuadcoilParams, dofs: dict)
     aux_h_eq_unit_conv : Callable(qp: QuadcoilParams, f_unit: float)
     aux_dofs_init : dict{str: Callable(qp: QuadcoilParams, dofs: dict, f_unit: float) -> Tuple}
+    aux_dofs_unit_conv : dict{str: Callable(qp: QuadcoilParams, f_unit: float) -> Tuple}
     desc_unit : Callable(scale: dict)
     compatibility : List[str]
     '''
@@ -143,7 +144,7 @@ class _Quantity:
         
     @partial(jit, static_argnames=('self',))
     def __call__(self, qp, dofs):
-        '''
+        r'''
         Evaluate this quantity. For  convenience.
         
         Parameters
@@ -157,7 +158,7 @@ class _Quantity:
         return self.eff_val_func(qp, {'phi': dofs['phi']})
     
     def generate_linf_norm(func, aux_argname, desc_unit, positive_definite=False):
-        '''
+        r'''
         Generates the auxiliary constraints for an L-:math:`\infty`
         norm. See documentations for ``quadcoil.objective.Objective``.
         An L-:math:`\infty` norm term in an objective or :math:`\leq`
@@ -199,7 +200,7 @@ class _Quantity:
         def aux_g_ineq_func(qp, dofs, func=func, aux_argname=aux_argname):
             field = func(qp, dofs)
             p_aux = dofs[aux_argname]
-            g_plus  =  field - p_aux #  f - p <=0
+            g_plus = field - p_aux #  f - p <=0
             # We need only half of the constraints if f is positive definite
             if positive_definite:
                 return g_plus
@@ -209,13 +210,14 @@ class _Quantity:
         # The initial value of the auxiliary variable is the 
         # eff_val_func / unit. 
         aux_dofs_init = lambda qp, dofs, unit: eff_val_func(qp, dofs)/unit
+        g_unit = lambda qp, unit: unit
         return _Quantity(
             val_func=val_func,
             eff_val_func=eff_val_func, 
             aux_g_ineq_func=aux_g_ineq_func,
             # The auxiliary constraint g of L-inf norms
             # has the same unit as its value.
-            aux_g_ineq_unit_conv=lambda qp, unit: unit,  
+            aux_g_ineq_unit_conv=g_unit,  
             aux_h_eq_func=None, 
             aux_h_eq_unit_conv=None,
             # The auxiliary dofs' names and initial values
@@ -225,7 +227,7 @@ class _Quantity:
         )
 
     def generate_l1_norm(func, aux_argname, desc_unit, positive_definite=False):
-        '''
+        r'''
         Generates the auxiliary constraints for an L-1 
         norm. See documentations for ``quadcoil.objective.Objective``.
         An L-1 norm in an objective or a :math:`\leq` constraint is equivalent to:
