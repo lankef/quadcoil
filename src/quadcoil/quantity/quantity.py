@@ -67,7 +67,7 @@ class _Quantity:
         of :math:`h(x)=0`.  
     aux_h_eq_unit_conv : Callable(qp: QuadcoilParams, f_unit: float)
         The unit conversion function for ``aux_h_eq_func``.
-    aux_dofs_init : dict{str: scalar, array or Callable(qp: QuadcoilParams)}
+    aux_dofs_init : dict{str: scalar, array or Callable(qp: QuadcoilParams, dofs: dict, f_unit: float)}
         The names of the auxiliary variables and callables for evaluating their initial values
         in terms of dofs.
     compatibility : List[str]
@@ -85,7 +85,7 @@ class _Quantity:
     aux_g_ineq_unit_conv : Callable(qp: QuadcoilParams, f_unit: float)
     aux_h_eq_func : Callable(qp: QuadcoilParams, dofs: dict)
     aux_h_eq_unit_conv : Callable(qp: QuadcoilParams, f_unit: float)
-    aux_dofs_init : dict{str: Callable(QuadcoilParams) -> Tuple}
+    aux_dofs_init : dict{str: Callable(qp: QuadcoilParams, dofs: dict, f_unit: float) -> Tuple}
     desc_unit : Callable(scale: dict)
     compatibility : List[str]
     '''
@@ -154,7 +154,6 @@ class _Quantity:
         dofs : dict
             (static) A dictionary storing the degrees of freedom in a QUADCOIL problem. 
         '''
-        print(dofs)
         return self.eff_val_func(qp, {'phi': dofs['phi']})
     
     def generate_linf_norm(func, aux_argname, desc_unit, positive_definite=False):
@@ -207,6 +206,9 @@ class _Quantity:
             g_minus = -field - p_aux # -f - p <=0
             return jnp.stack([g_plus,g_minus], axis=0)
         
+        # The initial value of the auxiliary variable is the 
+        # eff_val_func / unit. 
+        aux_dofs_init = lambda qp, dofs, unit: eff_val_func(qp, dofs)/unit
         return _Quantity(
             val_func=val_func,
             eff_val_func=eff_val_func, 
@@ -216,7 +218,8 @@ class _Quantity:
             aux_g_ineq_unit_conv=lambda qp, unit: unit,  
             aux_h_eq_func=None, 
             aux_h_eq_unit_conv=None,
-            aux_dofs_init={aux_argname: eff_val_func},
+            # The auxiliary dofs' names and initial values
+            aux_dofs_init={aux_argname: aux_dofs_init},
             compatibility=['f', '<='], 
             desc_unit=desc_unit,
         )
@@ -280,16 +283,19 @@ class _Quantity:
         # but the unit of its auxiliary constraints
         # are (unit). Therefore, g_unit is val_unit \
         # divided by the surface's area.
-        def aux_g_ineq_unit_conv(qp, unit):
+        def g_unit(qp, unit):
             return unit / (qp.eval_surface.area() * qp.nfp)
+        # The initial value of the auxiliary variable is the 
+        # abs(field) / g_unit. 
+        aux_dofs_init = lambda qp, dofs, unit: jnp.abs(func(qp, dofs))/g_unit(qp, unit)
         return _Quantity(
             val_func=val_func,
             eff_val_func=eff_val_func, 
             aux_g_ineq_func=aux_g_ineq_func,
-            aux_g_ineq_unit_conv=aux_g_ineq_unit_conv,
+            aux_g_ineq_unit_conv=g_unit,
             aux_h_eq_func=None, 
             aux_h_eq_unit_conv=None,
-            aux_dofs_init={aux_argname: lambda qp, dpfs: jnp.abs(func(qp, dofs))},
+            aux_dofs_init={aux_argname: aux_dofs_init},
             compatibility=['f', '<='], 
             desc_unit=desc_unit,
         )

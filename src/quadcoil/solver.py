@@ -109,7 +109,7 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
     g0_max = jnp.max(jnp.abs(g0))
     value_and_grad_fun = optax.value_and_grad_from_state(fun)
     if verbose>1:
-        jax.debug.print('INNER: g0_norm: {a}, g0_norm * tol: {b}', a=g0_norm, b=gtol * g0_norm)
+        jax.debug.print('INNER: starting gradient L2 norm: {a}', a=g0_norm)
     # Carry is params, update, value, dx, du, df, state1
     def step(carry):
         params1, updates1, value1, _, _, _, state1 = carry
@@ -165,7 +165,7 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
 
 def solve_constrained(
         x_init,
-        x_unit_init,
+        # x_unit_init,
         f_obj,
         run_opt=run_opt_lbfgs,
         # No constraints by default
@@ -391,37 +391,45 @@ def solve_constrained(
         f_km1 = dict_in['inner_fin_f']
         g_km1 = dict_in['inner_fin_g']
         h_km1 = dict_in['inner_fin_h']
-        x_unit = dict_in['x_unit']
+        # x_unit = dict_in['x_unit']
         grad_l_val_km1 = dict_in['outer_grad_l']
         # Eq (10) on p160 of Constrained Optimization and Multiplier Method
         l_k = lambda x: (
-            f_obj(x*x_unit) 
-            + lam_k@h_eq(x*x_unit) 
+            f_obj(x) 
+            + lam_k@h_eq(x) 
             + c_k/2 * (
-                jnp.sum(h_eq(x*x_unit)**2) 
-                + jnp.sum(gplus(x*x_unit, mu_k, c_k)**2)
+                jnp.sum(h_eq(x)**2) 
+                + jnp.sum(gplus(x, mu_k, c_k)**2)
             )
         ) 
+        # l_k = lambda x: (
+        #     f_obj(x*x_unit) 
+        #     + lam_k@h_eq(x*x_unit) 
+        #     + c_k/2 * (
+        #         jnp.sum(h_eq(x*x_unit)**2) 
+        #         + jnp.sum(gplus(x*x_unit, mu_k, c_k)**2)
+        #     )
+        # ) 
         # Solving a stage of the problem
-        # 2 rounds of scaling are applied.
-        # Here, Phi is scaled by its average absolute value from the previous iteration
-        # to make it unit-free. Inside run_opt, f is centered and scaled as follows:
-        # f_scaled(x) = [f(x + Phi_scaled_init) - f(Phi_scaled_init)]/f'(Phi_scaled_init)
-        x_k_scaled, val_l_k, grad_l_k, niter_inner_k, dx_k, du_k, dL_k = run_opt(
-            x_km1/x_unit, l_k, maxiter_inner, 
+        x_k, val_l_k, grad_l_k, niter_inner_k, dx_k, du_k, dL_k = run_opt(
+            x_km1, l_k, maxiter_inner, 
             fstop_inner, xstop_inner, gtol_inner,
             verbose
         )
-        # scaled x, count, dx, du, df,
-        # recover x with unit
-        x_k = x_k_scaled * x_unit
+        # Here, Phi is scaled by its average absolute value from the previous iteration
+        # to make it unit-free. 
+        #     x_km1/x_unit, l_k, maxiter_inner, 
+        #     fstop_inner, xstop_inner, gtol_inner,
+        #     verbose
+        # )
+        # # scaled x, count, dx, du, df,
+        # # recover x with unit
+        # x_k = x_k_scaled * x_unit
         lam_k = lam_k + c_k * h_eq(x_k)
         mu_k = mu_k + c_k * gplus(x_k, mu_k, c_k)
-        
         f_k = f_obj(x_k)
         g_k = g_ineq(x_k)
         h_k = h_eq(x_k)
-
         # Calculating the gradient of the 
         # Actual lagrangian: 
         #   grad_x L
@@ -493,7 +501,7 @@ def solve_constrained(
             'inner_fin_du': du_k,
             'inner_fin_dl': dL_k,
             # The scaling factor for the next iteration
-            'x_unit': jnp.average(jnp.abs(x_k)),
+            # 'x_unit': jnp.average(jnp.abs(x_k)),
         }
         return(dict_out)
     init_dict = {
@@ -509,7 +517,7 @@ def solve_constrained(
         'inner_fin_f': f_obj(x_init), # Value of f, g, h after the kth iteration
         'inner_fin_g': g_ineq(x_init),
         'inner_fin_h': h_eq(x_init),
-        'x_unit': x_unit_init,
+        # 'x_unit': x_unit_init,
         'inner_fin_x': x_init,
         'inner_fin_l_aug': 0.,
         'inner_fin_grad_l_aug': 0.,
@@ -541,7 +549,6 @@ def solve_constrained(
         fstop_inner=0.,
         xstop_inner=0.,
     )
-    # jax.debug.print('RESULT {x}', x=result)
     return(result_dict)# Changes in f, g, h between the kth and k-1th iteration
 
 # def solve_constrained_BCL(

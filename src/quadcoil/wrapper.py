@@ -2,6 +2,7 @@ import quadcoil.quantity
 from quadcoil.quantity.quantity import _Quantity
 import jax.numpy as jnp
 from jax import jit
+from functools import partial
 
 def get_quantity(func_name: str):
     r'''
@@ -114,6 +115,13 @@ def _add_quantity(name, unit, use_case):
     # Adding auxillary variables to the accumulator
     if aux_dofs is None:
         aux_dofs = {}
+    # Handling the unit dependence of aux_dofs
+    else:
+        # We loop over all auxiliary variables' init function, 
+        # and substitute in the value of unit with the presently known value.
+        for key in aux_dofs:
+            aux_dofs_new = partial(aux_dofs[key], unit=unit)
+
     # Perform scaling
     # When the unit of a quantity is left blank,
     # automatically scale that quantity by its value
@@ -152,7 +160,7 @@ def _add_quantity(name, unit, use_case):
     )
 
 
-def parse_objectives(objective_name, objective_unit=None, objective_weight=1.): 
+def _parse_objectives(objective_name, objective_unit=None, objective_weight=1.): 
     r'''
     Parses a tuple of ``str`` quantities names (or a single ``str`` for one objective only), 
     an array of weights, and a tuple of units into a ``callable`` 
@@ -218,7 +226,7 @@ def parse_objectives(objective_name, objective_unit=None, objective_weight=1.):
         return out
     return jit(f_tot), g_list, h_list, aux_dofs
 
-def parse_constraints(
+def _parse_constraints(
     constraint_name, 
     constraint_type, 
     constraint_unit, 
