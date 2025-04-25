@@ -1,4 +1,4 @@
-from quadcoil import quadcoil, SurfaceRZFourierJAX, get_objective
+from quadcoil import quadcoil, SurfaceRZFourierJAX, get_quantity
 import jax.numpy as jnp
 from scipy.constants import mu_0
 
@@ -10,16 +10,16 @@ def generate_desc_scaling(objective_name, constraint_name, scales):
     The formula must be first implemented as quadcoil.objective.<quantity_name>_desc_unit.
     '''
     if isinstance(objective_name, str):
-        objective_unit = get_objective(objective_name + '_desc_unit')(scales)
+        objective_unit = get_quantity(objective_name).desc_unit(scales)
     else:
         objective_unit_new = []
         for obj_name in objective_name:
-            objective_unit_new.append(get_objective(obj_name + '_desc_unit')(scales))
+            objective_unit_new.append(get_quantity(obj_name).desc_unit(scales))
         objective_unit = tuple(objective_unit_new)
     
     constraint_unit_new = []
     for cons_name in constraint_name:
-        constraint_unit_new.append(get_objective(cons_name + '_desc_unit')(scales))
+        constraint_unit_new.append(get_quantity(cons_name).desc_unit(scales))
     constraint_unit = tuple(constraint_unit_new)
     return(objective_unit, constraint_unit)
 
