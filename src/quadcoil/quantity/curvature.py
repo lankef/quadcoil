@@ -62,14 +62,8 @@ def _K_dot_grad_K_cyl(qp, dofs):
 # current potential Phi. Compatible with all types of copnstraints.
 # '==' constraint is somewhat trivial, but we need one "==" constraint
 # somewhere for testing so we pick this uncommonly used vector field for it.
-K_dot_grad_K = _Quantity(
-    val_func=_K_dot_grad_K, 
-    eff_val_func=_K_dot_grad_K, 
-    aux_g_ineq_func=None,
-    aux_g_ineq_unit_conv=None,
-    aux_h_eq_func=None,
-    aux_h_eq_unit_conv=None,
-    aux_dofs_init=None, 
+K_dot_grad_K = _Quantity.generate_c2(
+    func=_K_dot_grad_K, 
     compatibility=['<=', '>=', '=='], 
     desc_unit=_K_dot_grad_K_desc_unit,
 )
@@ -77,14 +71,8 @@ K_dot_grad_K = _Quantity(
 # This is the r, phi, z component of the 
 # K dot grad K. It's a non-convex, quadratic function of the 
 # current potential Phi. Compatible with only inequality constraints.
-K_dot_grad_K_cyl = _Quantity(
-    val_func=_K_dot_grad_K_cyl, 
-    eff_val_func=_K_dot_grad_K_cyl, 
-    aux_g_ineq_func=None,
-    aux_g_ineq_unit_conv=None,
-    aux_h_eq_func=None,
-    aux_h_eq_unit_conv=None,
-    aux_dofs_init=None, 
+K_dot_grad_K_cyl = _Quantity.generate_c2(
+    func=_K_dot_grad_K_cyl, 
     compatibility=['<=', '>='], 
     desc_unit=_K_dot_grad_K_desc_unit,
 )

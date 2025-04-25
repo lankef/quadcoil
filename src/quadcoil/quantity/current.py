@@ -117,14 +117,8 @@ _f_K_desc_unit = lambda scales: _K_desc_unit(scales)**2 * scales["R0"] * scales[
 # used as constraints or objectives.
 # When compatibility is empty an _Quantity is still a wrapper for 
 # a private function.
-K = _Quantity(
-    val_func=_K, 
-    eff_val_func=_K, 
-    aux_g_ineq_func=None,
-    aux_g_ineq_unit_conv=None,
-    aux_h_eq_func=None,
-    aux_h_eq_unit_conv=None,
-    aux_dofs_init=None, 
+K = _Quantity.generate_c2(
+    func=_K, 
     compatibility=['<=', '>='], 
     desc_unit=_K_desc_unit,
 )
@@ -134,14 +128,8 @@ K = _Quantity(
 # can be used in '==' and '<=' constraints. However, 
 # '==' constraints on K^2 is trivial. We therefore prohibit
 # it here too.
-K2 = _Quantity(
-    val_func=_K2, 
-    eff_val_func=_K2, 
-    aux_g_ineq_func=None,
-    aux_g_ineq_unit_conv=None,
-    aux_h_eq_func=None,
-    aux_h_eq_unit_conv=None,
-    aux_dofs_init=None, 
+K2 = _Quantity.generate_c2(
+    func=_K2, 
     compatibility=['<='], 
     desc_unit=_K2_desc_unit,
 )
@@ -149,27 +137,15 @@ K2 = _Quantity(
 # This is a linear scalar field. It's compatible with 
 # '<=', '>=', and '==' constraints. '==' seems trivial 
 # so we exclude it here to prevent user typo.
-K_theta = _Quantity(
-    val_func=_K_theta, 
-    eff_val_func=_K_theta, 
-    aux_g_ineq_func=None,
-    aux_g_ineq_unit_conv=None,
-    aux_h_eq_func=None,
-    aux_h_eq_unit_conv=None,
-    aux_dofs_init=None, 
+K_theta = _Quantity.generate_c2(
+    func=_K_theta, 
     compatibility=['<=', '>='], 
     desc_unit=_K_desc_unit,
 )
 
 # This is a positive definite quadratic scalar. 
-f_K = _Quantity(
-    val_func=_f_K, 
-    eff_val_func=_f_K, 
-    aux_g_ineq_func=None,
-    aux_g_ineq_unit_conv=None,
-    aux_h_eq_func=None,
-    aux_h_eq_unit_conv=None,
-    aux_dofs_init=None, 
+f_K = _Quantity.generate_c2(
+    func=_f_K, 
     compatibility=['f', '<='], 
     desc_unit=_f_K_desc_unit,
 )

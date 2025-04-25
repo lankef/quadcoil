@@ -67,68 +67,38 @@ def _f_B_normalized_by_Bnormal_IG(qp, dofs):
 # ----- Wrappers -----
 # This is a linear 3d vector field. Setting its components would be trivial
 # but it should still support <= and >=
-winding_surface_B = _Quantity(
-    val_func=_winding_surface_B, 
-    eff_val_func=_winding_surface_B, 
-    aux_g_ineq_func=None,
-    aux_g_ineq_unit_conv=None,
-    aux_h_eq_func=None,
-    aux_h_eq_unit_conv=None,
-    aux_dofs_init=None, 
+winding_surface_B = _Quantity.generate_c2(
+    func=_winding_surface_B, 
     compatibility=['<=', '>='], 
     desc_unit=_winding_surface_B_desc_unit,
 )
 
 # This is a linear scalar field. Setting its components would be trivial
 # but it should still support <= and >=
-Bnormal = _Quantity(
-    val_func=_Bnormal, 
-    eff_val_func=_Bnormal, 
-    aux_g_ineq_func=None,
-    aux_g_ineq_unit_conv=None,
-    aux_h_eq_func=None,
-    aux_h_eq_unit_conv=None,
-    aux_dofs_init=None, 
+Bnormal = _Quantity.generate_c2(
+    func=_Bnormal, 
     compatibility=['<=', '>='], 
     desc_unit=_winding_surface_B_desc_unit,
 )
 
 # This is a quadratic scalar field. Setting its components would be trivial
 # but it should still support <= constraints.
-Bnormal2 = _Quantity(
-    val_func=_Bnormal2, 
-    eff_val_func=_Bnormal2, 
-    aux_g_ineq_func=None,
-    aux_g_ineq_unit_conv=None,
-    aux_h_eq_func=None,
-    aux_h_eq_unit_conv=None,
-    aux_dofs_init=None, 
+Bnormal2 = _Quantity.generate_c2(
+    func=_Bnormal2, 
     compatibility=['<='], 
     desc_unit=lambda scales: scales["B"]**2,
 )
 
 # This is a positive definite quadratic scalar. 
-f_B = _Quantity(
-    val_func=_f_B, 
-    eff_val_func=_f_B, 
-    aux_g_ineq_func=None,
-    aux_g_ineq_unit_conv=None,
-    aux_h_eq_func=None,
-    aux_h_eq_unit_conv=None,
-    aux_dofs_init=None, 
+f_B = _Quantity.generate_c2(
+    func=_f_B, 
     compatibility=['f', '<='], 
     desc_unit=_f_B_desc_unit,
 )
 
 # This is a positive definite quadratic scalar. 
-f_B_normalized_by_Bnormal_IG = _Quantity(
-    val_func=_f_B_normalized_by_Bnormal_IG, 
-    eff_val_func=_f_B_normalized_by_Bnormal_IG, 
-    aux_g_ineq_func=None,
-    aux_g_ineq_unit_conv=None,
-    aux_h_eq_func=None,
-    aux_h_eq_unit_conv=None,
-    aux_dofs_init=None, 
+f_B_normalized_by_Bnormal_IG = _Quantity.generate_c2(
+    func=_f_B_normalized_by_Bnormal_IG, 
     compatibility=['f', '<='], 
     desc_unit=lambda scales: 1.,
 )

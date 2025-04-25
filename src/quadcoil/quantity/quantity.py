@@ -22,10 +22,10 @@ class _Quantity:
     physical quantity in the same place. You can think of it as a ``FunctionType`` that 
     switches between: 
         * A "surface-level", non-:math:`C^1` implementation that's 
-        easy to understand and works for all problems. This is ``eff_val_func``.
+        easy to understand and works for all problems. This is ``c0_impl``.
         * An "under-the-hood" implementation :math:`C^1`, but nay not be well-defined in
         another problem with different auxiliary vars, and is less intuitive to the user.
-        These are ``val_func, aux_g_ineq_func, aux_h_eq_func, aux_dofs_init``.
+        These are ``scaled_c2_impl, scaled_g_ineq_impl, scaled_h_eq_impl, scaled_aux_dofs_init``.
 
     To add a new quantity to QUADCOIL, a developer only need to create a new **instance** (not subclass!)
     of ``_Quantity`` and provide all the functions and limitations necessary. Users will import and use
@@ -45,31 +45,25 @@ class _Quantity:
     
     Parameters
     ----------
-    val_func : Callable(qp: QuadcoilParams, dofs: dict)
+    scaled_c2_impl : Callable(qp: QuadcoilParams, dofs: dict)
         The value of the quantity. Must be :math:`C^1`.
-    eff_val_func : Callable(qp: QuadcoilParams, dofs: dict)
+    c0_impl : Callable(qp: QuadcoilParams, dofs: dict, unit: float)
         A "real" implementation of the quantity that can directly be calculated from :math:`\Phi_{sv}`
         without using auxiliary variables. Can be :math:`C^0` rather than :math:`C^1`. This is the 
         "surface-level" imnplementation that works across different problems, and that 
-        QUADCOIL users will typically access.
-    aux_g_ineq_func : Callable(qp: QuadcoilParams, dofs: dict)
+        QUADCOIL users will typically access. Scale dependence must be included.
+    scaled_g_ineq_impl : Callable(qp: QuadcoilParams, dofs: dict, unit: float)
         The auxiliary inequality constraints required by the objective, in the form 
-        of :math:`g(x)\leq0`.  
-    aux_g_ineq_unit_conv : Callable(qp: QuadcoilParams, f_unit: float)
-        The auxiliary constraint of the quantity often have a different unit from the 
+        of :math:`g(x)\leq0`. Note the inclusion of ``unit`` as an argument. 
+        This is because the auxiliary constraint of the quantity often have a different unit from the 
         value of the quantity itself. For example, the L-1 norm of a field :math:`v` has the unit of 
         :math:`(\text{unit}_v) m^2`, whereas its auxiliary constraints have the unit of
         :math:`(\text{unit}_v)`. To allow the user to appoint one unit for the entire quantity, 
         we must provide a unit conversion function. The function will access the problem setup (but not state)
-        via a ``QuadcoilParams``.
-    aux_h_eq_func : Callable(qp: QuadcoilParams, dofs: dict)
+        via a ``QuadcoilParams``. **It is our responsibility as developers to make g and h unit-free!**
+    scaled_h_eq_impl : Callable(qp: QuadcoilParams, dofs: dict, unit: float)
         The auxiliary equality constraints required by the objective, in the form 
         of :math:`h(x)=0`.  
-    aux_h_eq_unit_conv : Callable(qp: QuadcoilParams, f_unit: float)
-        The unit conversion function for ``aux_h_eq_func``.
-    aux_dofs_init : dict{str: scalar, array or Callable(qp: QuadcoilParams, dofs: dict, f_unit: float)}
-        The names of the auxiliary variables and callables for evaluating their initial values
-        in terms of dofs.
     compatibility : List[str]
         Whether this quantity can serve as an objective, or appear in
         ``'<='``  ``'=='`` and (or) ``'>='`` constraints. Must be a ``List`` containing one or 
@@ -79,14 +73,11 @@ class _Quantity:
 
     Attributes
     ----------
-    val_func : Callable(qp: QuadcoilParams, dofs: dict)
-    eff_val_func : Callable(qp: QuadcoilParams, dofs: dict)
-    aux_g_ineq_func : Callable(qp: QuadcoilParams, dofs: dict)
-    aux_g_ineq_unit_conv : Callable(qp: QuadcoilParams, f_unit: float)
-    aux_h_eq_func : Callable(qp: QuadcoilParams, dofs: dict)
-    aux_h_eq_unit_conv : Callable(qp: QuadcoilParams, f_unit: float)
-    aux_dofs_init : dict{str: Callable(qp: QuadcoilParams, dofs: dict, f_unit: float) -> Tuple}
-    aux_dofs_unit_conv : dict{str: Callable(qp: QuadcoilParams, f_unit: float) -> Tuple}
+    scaled_c2_impl : Callable(qp: QuadcoilParams, dofs: dict)
+    c0_impl : Callable(qp: QuadcoilParams, dofs: dict, unit: float)
+    scaled_g_ineq_impl : Callable(qp: QuadcoilParams, dofs: dict, unit: float)
+    scaled_h_eq_impl : Callable(qp: QuadcoilParams, dofs: dict, unit: float)
+    scaled_aux_dofs_init : dict{str: Callable(qp: QuadcoilParams, dofs: dict, unit: float) -> Tuple}
     desc_unit : Callable(scale: dict)
     compatibility : List[str]
     '''
@@ -95,28 +86,27 @@ class _Quantity:
 
     def __init__(
         self, 
-        val_func, eff_val_func, 
-        aux_g_ineq_func,
-        aux_g_ineq_unit_conv,
-        aux_h_eq_func,
-        aux_h_eq_unit_conv,
-        aux_dofs_init, 
+        scaled_c2_impl, 
+        c0_impl, 
+        scaled_g_ineq_impl,
+        scaled_h_eq_impl,
+        scaled_aux_dofs_init, 
         compatibility, 
         desc_unit
     ):
-        if isinstance(val_func, _Quantity):
-            raise TyperError('val_func must not be a _Quantity.')
-        if isinstance(eff_val_func, _Quantity):
-            raise TyperError('eff_val_func must not be a _Quantity.')
-        if isinstance(aux_g_ineq_func, _Quantity):
-            raise TyperError('aux_g_ineq_func must not be a _Quantity.')
-        if isinstance(aux_h_eq_func, _Quantity):
-            raise TyperError('aux_h_eq_func must not be a _Quantity.')
+        if isinstance(scaled_c2_impl, _Quantity):
+            raise TyperError('scaled_c2_impl must not be a _Quantity.')
+        if isinstance(c0_impl, _Quantity):
+            raise TyperError('c0_impl must not be a _Quantity.')
+        if isinstance(scaled_g_ineq_impl, _Quantity):
+            raise TyperError('scaled_g_ineq_impl must not be a _Quantity.')
+        if isinstance(scaled_h_eq_impl, _Quantity):
+            raise TyperError('scaled_h_eq_impl must not be a _Quantity.')
         # Checking whether the auxiliary variable name has already been used elsewhere.
-        if aux_dofs_init is not None:
-            if not isinstance(aux_dofs_init, dict):
-                raise TypeError('aux_dofs_init muse be a dict.')
-            aux_names = set(aux_dofs_init.keys())
+        if scaled_aux_dofs_init is not None:
+            if not isinstance(scaled_aux_dofs_init, dict):
+                raise TypeError('scaled_aux_dofs_init muse be a dict.')
+            aux_names = set(scaled_aux_dofs_init.keys())
             dup_aux_names = self.__class__._used_aux_names.intersection(aux_names)
             # Check for duplicates
             if dup_aux_names:
@@ -132,15 +122,13 @@ class _Quantity:
                     raise ValueError(f'`compatibility` contains illegal value, {item}')
             self.__class__._used_aux_names = self.__class__._used_aux_names | aux_names
         # Setting attributes
-        self.val_func = val_func
-        self.eff_val_func = eff_val_func
-        self.aux_g_ineq_func = aux_g_ineq_func
-        self.aux_h_eq_func = aux_h_eq_func
-        self.aux_dofs_init = aux_dofs_init
+        self.scaled_c2_impl = scaled_c2_impl
+        self.c0_impl = c0_impl
+        self.scaled_g_ineq_impl = scaled_g_ineq_impl
+        self.scaled_h_eq_impl = scaled_h_eq_impl
+        self.scaled_aux_dofs_init = scaled_aux_dofs_init
         self.compatibility = compatibility
         self.desc_unit = desc_unit
-        self.aux_g_ineq_unit_conv = aux_g_ineq_unit_conv
-        self.aux_h_eq_unit_conv = aux_h_eq_unit_conv
         
     @partial(jit, static_argnames=('self',))
     def __call__(self, qp, dofs):
@@ -155,9 +143,20 @@ class _Quantity:
         dofs : dict
             (static) A dictionary storing the degrees of freedom in a QUADCOIL problem. 
         '''
-        return self.eff_val_func(qp, {'phi': dofs['phi']})
+        return self.c0_impl(qp, {'phi': dofs['phi']})
+
+    def generate_c2(func, compatibility, desc_unit):
+        return _Quantity(
+            scaled_c2_impl=lambda qp, dofs, unit: func(qp, dofs)/unit, 
+            c0_impl=func, 
+            scaled_g_ineq_impl=None,
+            scaled_h_eq_impl=None,
+            scaled_aux_dofs_init=None, 
+            compatibility=compatibility, 
+            desc_unit=desc_unit,
+        )
     
-    def generate_linf_norm(func, aux_argname, desc_unit, positive_definite=False):
+    def generate_linf_norm(func, aux_argname, desc_unit, positive_definite=False, square=False):
         r'''
         Generates the auxiliary constraints for an L-:math:`\infty`
         norm. See documentations for ``quadcoil.objective.Objective``.
@@ -181,11 +180,14 @@ class _Quantity:
         aux_argname : str
             The name of the auxiliary variable. Must be unique among all supported
             ``_Quantity``s.
-        maxdesc_unit : Callable
+        desc_unit : Callable
             A callable calculating the quantity's unit in DESC.
         positive_definite : bool, optional, default=False
             Whether ``func`` is positive definite. If ``True``, then
             the second constraint is not required.
+        square : bool, optional, default=True
+            When ``True``, generates :math:`\|f\|_\infty^2` instead. This is better-behaved
+            when used as objective.
 
         Returns
         -------
@@ -193,35 +195,38 @@ class _Quantity:
         '''
         # The objective/constraint form of this L-infinity
         # norm is just a function that returns the auxiliary variable.
-        val_func = lambda qp, dofs, aux_argname=aux_argname: dofs[aux_argname]
-        # The effective function
-        eff_val_func = lambda qp, dofs, func=func: jnp.max(jnp.abs(func(qp, dofs)))
+        # Because the aux var is already scaled to O(1),
+        # scaled_c2_impl doesn't acually need to have unit dependence.
+        if square:
+            scaled_c2_impl = lambda qp, dofs, unit, aux_argname=aux_argname: dofs[aux_argname]**2
+            # The effective function
+            c0_impl = lambda qp, dofs, func=func: jnp.max(jnp.abs(func(qp, dofs)))**2
+        else:
+            scaled_c2_impl = lambda qp, dofs, unit, aux_argname=aux_argname: dofs[aux_argname]
+            # The effective function
+            c0_impl = lambda qp, dofs, func=func: jnp.max(jnp.abs(func(qp, dofs)))
         # The constraints
-        def aux_g_ineq_func(qp, dofs, func=func, aux_argname=aux_argname):
+        def scaled_g_ineq_impl(qp, dofs, unit, func=func, aux_argname=aux_argname):
             field = func(qp, dofs)
             p_aux = dofs[aux_argname]
-            g_plus = field - p_aux #  f - p <=0
+            g_plus = field/unit - p_aux #  f - p <=0
             # We need only half of the constraints if f is positive definite
             if positive_definite:
                 return g_plus
-            g_minus = -field - p_aux # -f - p <=0
+            g_minus = -field/unit - p_aux # -f - p <=0
             return jnp.stack([g_plus,g_minus], axis=0)
         
         # The initial value of the auxiliary variable is the 
-        # eff_val_func / unit. 
-        aux_dofs_init = lambda qp, dofs, unit: eff_val_func(qp, dofs)/unit
+        # c0_impl / unit. 
+        scaled_aux_dofs_init = lambda qp, dofs, unit: c0_impl(qp, dofs)/unit
         g_unit = lambda qp, unit: unit
         return _Quantity(
-            val_func=val_func,
-            eff_val_func=eff_val_func, 
-            aux_g_ineq_func=aux_g_ineq_func,
-            # The auxiliary constraint g of L-inf norms
-            # has the same unit as its value.
-            aux_g_ineq_unit_conv=g_unit,  
-            aux_h_eq_func=None, 
-            aux_h_eq_unit_conv=None,
+            scaled_c2_impl=scaled_c2_impl,
+            c0_impl=c0_impl, 
+            scaled_g_ineq_impl=scaled_g_ineq_impl,
+            scaled_h_eq_impl=None, 
             # The auxiliary dofs' names and initial values
-            aux_dofs_init={aux_argname: aux_dofs_init},
+            scaled_aux_dofs_init={aux_argname: scaled_aux_dofs_init},
             compatibility=['f', '<='], 
             desc_unit=desc_unit,
         )
@@ -264,22 +269,24 @@ class _Quantity:
         '''
         # The objective/constraint form of this L-1
         # norm is the surface integral pf the aux variable.
-        def val_func(qp, dofs, aux_argname=aux_argname):
+        def scaled_c2_impl(qp, dofs, unit, aux_argname=aux_argname):
+            # Because the aux vars are already
+            # scaled to O(1), no unit dependence is actually needed here.
             return qp.eval_surface.integrate(dofs[aux_argname])*qp.nfp
         # The effective function
-        def eff_val_func(qp, dofs, func=func):
+        def c0_impl(qp, dofs, func=func):
             return qp.eval_surface.integrate(jnp.abs(
                 func(qp, dofs)
             ))*qp.nfp
         # The constraints
-        def aux_g_ineq_func(qp, dofs, func=func, aux_argname=aux_argname):
+        def scaled_g_ineq_impl(qp, dofs, unit, func=func, aux_argname=aux_argname):
             field = func(qp, dofs)
             p_aux = dofs[aux_argname]
-            g_plus = field - p_aux #  f - p <=0
+            g_plus = field/unit - p_aux #  f - p <=0
             # We need only half of the constraints if f is positive definite
             if positive_definite:
                 return g_plus
-            g_minus = -field - p_aux # -f - p <=0
+            g_minus = -field/unit - p_aux # -f - p <=0
             return jnp.stack([g_plus,g_minus], axis=0)
         # The unit of L-1 norm is m^2 (unit),
         # but the unit of its auxiliary constraints
@@ -289,15 +296,13 @@ class _Quantity:
             return unit / (qp.eval_surface.area() * qp.nfp)
         # The initial value of the auxiliary variable is the 
         # abs(field) / g_unit. 
-        aux_dofs_init = lambda qp, dofs, unit: jnp.abs(func(qp, dofs))/g_unit(qp, unit)
+        scaled_aux_dofs_init = lambda qp, dofs, unit: jnp.abs(func(qp, dofs))/g_unit(qp, unit)
         return _Quantity(
-            val_func=val_func,
-            eff_val_func=eff_val_func, 
-            aux_g_ineq_func=aux_g_ineq_func,
-            aux_g_ineq_unit_conv=g_unit,
-            aux_h_eq_func=None, 
-            aux_h_eq_unit_conv=None,
-            aux_dofs_init={aux_argname: aux_dofs_init},
+            scaled_c2_impl=scaled_c2_impl,
+            c0_impl=c0_impl, 
+            scaled_g_ineq_impl=scaled_g_ineq_impl,
+            scaled_h_eq_impl=None, 
+            scaled_aux_dofs_init={aux_argname: scaled_aux_dofs_init},
             compatibility=['f', '<='], 
             desc_unit=desc_unit,
         )

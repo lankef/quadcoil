@@ -41,57 +41,46 @@ _f_l1_Phi_desc_unit = lambda scales: Phi_desc_unit(scales) * scales["R0"] * scal
 # ----- Wrappers -----
 # This is a linear scalar field. Again, 
 # == is trivial so we prohibit it.
-Phi = _Quantity(
-    val_func=_Phi, 
-    eff_val_func=_Phi, 
-    aux_g_ineq_func=None,
-    aux_g_ineq_unit_conv=None,
-    aux_h_eq_func=None,
-    aux_h_eq_unit_conv=None,
-    aux_dofs_init=None, 
+Phi = _Quantity.generate_c2(
+    func=_Phi, 
     compatibility=['<=', '>='], 
     desc_unit=_Phi_desc_unit,
 )
 
 # This is a linear scalar field. Again, 
 # == is trivial so we prohibit it.
-Phi_with_net_current = _Quantity(
-    val_func=_Phi_with_net_current, 
-    eff_val_func=_Phi_with_net_current, 
-    aux_g_ineq_func=None,
-    aux_g_ineq_unit_conv=None,
-    aux_h_eq_func=None,
-    aux_h_eq_unit_conv=None,
-    aux_dofs_init=None, 
+Phi_with_net_current = _Quantity.generate_c2(
+    func=_Phi_with_net_current, 
     compatibility=['<=', '>='], 
     desc_unit=_Phi_desc_unit,
 )
 
 # This is a convex quadratic scalar field. It supports only <=.  
-Phi2 = _Quantity(
-    val_func=_Phi2, 
-    eff_val_func=_Phi2, 
-    aux_g_ineq_func=None, 
-    aux_g_ineq_unit_conv=None,
-    aux_h_eq_func=None, 
-    aux_h_eq_unit_conv=None,
-    aux_dofs_init=None, 
+Phi2 = _Quantity.generate_c2(
+    func=_Phi2, 
     compatibility=['<='], 
     desc_unit=_Phi2_desc_unit,
 )
 
 f_max_Phi = _Quantity.generate_linf_norm(
     func=_Phi, 
-    aux_argname='max_Phi', 
+    aux_argname='max_Phi(f_max_Phi)', 
     desc_unit=_Phi_desc_unit
 )
 
 f_max_Phi2 = _Quantity.generate_linf_norm(
-    func=_Phi2, 
-    aux_argname='max_Phi2', 
+    func=_Phi, 
+    aux_argname='max_Phi(f_max_Phi2)', 
     desc_unit=_Phi2_desc_unit,
-    positive_definite=True
+    square=True
 )
+
+# f_max_Phi2 = _Quantity.generate_linf_norm(
+#     func=_Phi2, 
+#     aux_argname='max_Phi2', 
+#     desc_unit=_Phi2_desc_unit,
+#     positive_definite=True
+# )
 
 f_l1_Phi = _Quantity.generate_l1_norm(
     func=_Phi, 

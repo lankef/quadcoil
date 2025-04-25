@@ -78,14 +78,14 @@ def _add_quantity(name, unit, use_case):
         The name of the quantity to find
     unit : scalar or None 
         The unit of the quantity
-    aux_dofs : dict{str: None, Tuple or Callable}
+    scaled_aux_dofs : dict{str: None, Tuple or Callable}
         The accumulator.
     use_case : str
         The current type of use case (``'f'``, ``'=='``, ``'<='`` or ``'>='``).
 
     Returns
     -------
-    val_func : Callable
+    scaled_c2_impl : Callable
         The "under-the-hood" implementation of the quantity
     g_ineq, h_eq : List[Callable]
         The list of inequality and equality constraints.
@@ -93,17 +93,15 @@ def _add_quantity(name, unit, use_case):
         The unit as a Callable, in case the scaling factor of the quantity 
         need to be used later, and the scaling mode is set to ``None``.
         The only place where this is currently used is constraint value scaling. 
-    aux_dofs : dict{str: None, Tuple or Callable}
-        The accumulator after adding auxillary variables.
+    scaled_aux_dofs : dict{str: None, Tuple or Callable}
+        The accumulator after adding auxiliary variables.
     '''
     quantity = get_quantity(name)
-    val_func = quantity.val_func
-    aux_g_ineq_func = quantity.aux_g_ineq_func
-    aux_h_eq_func = quantity.aux_h_eq_func
-    aux_dofs = quantity.aux_dofs_init
+    scaled_c2_impl = quantity.scaled_c2_impl
+    scaled_g_ineq_impl = quantity.scaled_g_ineq_impl
+    scaled_h_eq_impl = quantity.scaled_h_eq_impl
+    scaled_aux_dofs = quantity.scaled_aux_dofs_init
     compatibility = quantity.compatibility
-    aux_g_ineq_unit_conv = quantity.aux_g_ineq_unit_conv    
-    aux_h_eq_unit_conv = quantity.aux_h_eq_unit_conv
     # Checking compatibility
     if use_case not in compatibility:
         if use_case == 'f':
@@ -112,16 +110,6 @@ def _add_quantity(name, unit, use_case):
             raise ValueError(f'{name} cannot be used in a {use_case} constraint.')
         else:
             raise ValueError(f'{use_case} is not a valid type of constraint.')
-    # Adding auxillary variables to the accumulator
-    if aux_dofs is None:
-        aux_dofs = {}
-    # Handling the unit dependence of aux_dofs
-    else:
-        # We loop over all auxiliary variables' init function, 
-        # and substitute in the value of unit with the presently known value.
-        for key in aux_dofs:
-            aux_dofs_new = partial(aux_dofs[key], unit=unit)
-
     # Perform scaling
     # When the unit of a quantity is left blank,
     # automatically scale that quantity by its value
@@ -129,8 +117,8 @@ def _add_quantity(name, unit, use_case):
     # To accommodate this with the shortest amount of code,
     # we make unit a callable regardless it's a scalar or None.
     if unit is None:
-        eff_val_func = quantity.eff_val_func
-        unit_callable = lambda qp: eff_val_func(qp, {'phi': jnp.zeros(qp.ndofs)})
+        c0_impl = quantity.c0_impl
+        unit_callable = lambda qp: c0_impl(qp, {'phi': jnp.zeros(qp.ndofs)})
     elif jnp.isscalar(unit):
         unit_callable = lambda qp: unit
     else:
@@ -138,17 +126,30 @@ def _add_quantity(name, unit, use_case):
             f'Unit for {name} has incorrect type. The supported '\
             f'types are scalar and None. The provided value is a {type(unit)}.'
         )
-
-    val_scaled = lambda qp, dofs, unit_callable=unit_callable:\
-        val_func(qp, dofs)/unit_callable(qp)
-    if aux_g_ineq_func is not None:
-        g_ineq_list_scaled = [lambda qp, dofs, unit_callable=unit_callable: \
-            aux_g_ineq_func(qp, dofs)/aux_g_ineq_unit_conv(qp, unit_callable(qp))]
+    # Apply units (now known) to a function with signature 
+    # Callable(qp: QuadcoilParams, dofs: dict, unit: float)
+    def apply_unit(fun, unit_callable=unit_callable):
+        return lambda qp, dofs, fun=fun, unit_callable=unit_callable:\
+            fun(qp, dofs, unit=unit_callable(qp))
+        
+    # Scaling value
+    val_scaled = apply_unit(scaled_c2_impl)
+    
+    # Scaling auxiliary variables' initial values
+    scaled_aux_dofs_out = {}
+    if not (scaled_aux_dofs is None):
+        # We loop over all auxiliary variables' init function, 
+        # and substitute in the value of unit with the presently known value.
+        for key in scaled_aux_dofs:
+            scaled_aux_dofs_new = apply_unit(scaled_aux_dofs[key])
+            scaled_aux_dofs_out[key] = scaled_aux_dofs_new
+    # Scaling g and h
+    if scaled_g_ineq_impl is not None:
+        g_ineq_list_scaled = [apply_unit(scaled_g_ineq_impl)]
     else:
         g_ineq_list_scaled = []
-    if aux_h_eq_func is not None:
-        h_eq_list_scaled = lambda qp, dofs, unit_callable=unit_callable: \
-            aux_h_eq_func(qp, dofs)/aux_h_eq_unit_conv(qp, unit_callable(qp))
+    if scaled_h_eq_impl is not None:
+        h_eq_list_scaled = [apply_unit(scaled_h_eq_impl)]
     else:
         h_eq_list_scaled = []
     return (
@@ -156,7 +157,7 @@ def _add_quantity(name, unit, use_case):
         g_ineq_list_scaled,
         h_eq_list_scaled,
         unit_callable,
-        aux_dofs
+        scaled_aux_dofs_out
     )
 
 
@@ -186,15 +187,15 @@ def _parse_objectives(objective_name, objective_unit=None, objective_weight=1.):
         and an array of :math:`\Phi_{sv}` Fourier coefficients into a scalar.
     g_list : List[Callable or None]
     h_list : List[Callable or None]
-    aux_dofs : dict{str: None, Tuple or Callable}
+    scaled_aux_dofs : dict{str: None, Tuple or Callable}
     '''
     if isinstance(objective_name, str):
         objective_name = (objective_name,)
         objective_unit = (objective_unit,)
-        objective_weight = jnp.array([objective_weight,])
+        objective_weight = jnp.array([1.,])
     if len(objective_name) != len(objective_weight): # or len(objective_name) != len(objective_unit):
         raise ValueError('objective, objective_weight and objective_unit must have the same length.')
-    aux_dofs = {}
+    scaled_aux_dofs = {}
     f_list = []
     g_list = []
     h_list = []
@@ -204,13 +205,13 @@ def _parse_objectives(objective_name, objective_unit=None, objective_weight=1.):
             g_ineq_list_scaled,
             h_eq_list_scaled,
             _,
-            aux_dofs_i,   
+            scaled_aux_dofs_i,   
         ) = _add_quantity(
             name=objective_name[i],
             unit=objective_unit[i],
             use_case='f',
         )
-        aux_dofs = aux_dofs | aux_dofs_i
+        scaled_aux_dofs = scaled_aux_dofs | scaled_aux_dofs_i
         f_list.append(val_scaled)
         g_list = g_list + g_ineq_list_scaled
         h_list = h_list + h_eq_list_scaled
@@ -224,7 +225,7 @@ def _parse_objectives(objective_name, objective_unit=None, objective_weight=1.):
         for i in range(len(f_list)):
             out = out + f_list[i](qp, dofs) * objective_weight[i]
         return out
-    return jit(f_tot), g_list, h_list, aux_dofs
+    return jit(f_tot), g_list, h_list, scaled_aux_dofs
 
 def _parse_constraints(
     constraint_name, 
@@ -256,8 +257,8 @@ def _parse_constraints(
     h_list : List[Callable or None]
         A list of ``Callable`` for the inequality/equality constraints. Returns will be 
         greater than 0 when the constraints are violated.
-    aux_dofs : dict{str: None, Tuple or Callable}
-        A dictionary containing the shapes of the auxillary variables, or the \
+    scaled_aux_dofs : dict{str: None, Tuple or Callable}
+        A dictionary containing the shapes of the auxiliary variables, or the \
         ``Callables`` required to calculate them
     '''
     # Outputs g_ineq and h_ineq for the augmented lagrangian solver:
@@ -282,7 +283,7 @@ def _parse_constraints(
     h_eq_list = []
     g_num = 0
     h_num = 0
-    aux_dofs = {}
+    scaled_aux_dofs = {}
     for i in range(n_cons_total):
         cons_type_i = constraint_type[i]
         cons_unit_i = constraint_unit[i]
@@ -292,13 +293,13 @@ def _parse_constraints(
             aux_g_ineq_i_scaled,
             aux_h_eq_i_scaled,
             unit_callable_i,
-            aux_dofs_i
+            scaled_aux_dofs_i
         ) = _add_quantity(
             name=constraint_name[i],
             unit=constraint_unit[i],
             use_case=cons_type_i,
         )
-        aux_dofs = aux_dofs | aux_dofs_i
+        scaled_aux_dofs = scaled_aux_dofs | scaled_aux_dofs_i
         g_ineq_list = g_ineq_list + aux_g_ineq_i_scaled
         h_eq_list = h_eq_list + aux_h_eq_i_scaled
         # Flipping the sign of >= constraints.
@@ -331,5 +332,5 @@ def _parse_constraints(
     # # merge_callables already contains jit.
     # g_ineq = merge_callables(g_ineq_list)
     # h_eq = merge_callables(h_eq_list)
-    return g_ineq_list, h_eq_list, aux_dofs
+    return g_ineq_list, h_eq_list, scaled_aux_dofs
     

@@ -276,3 +276,92 @@ def gen_winding_surface_atan(
     )
     return(dofs_expand)
 
+@partial(jit, static_argnames=[
+    'nfp',
+    'stellsym',
+    'mpol',
+    'ntor',
+    'pol_interp',
+    'tor_interp',
+    # 'lam_tikhonov'
+])
+def gen_winding_surface_arc(
+        plasma_gamma, d_expand, 
+        nfp, stellsym,
+        unitnormal=None,
+        mpol=5, ntor=5,
+        pol_interp=2,
+        tor_interp=2,
+        lam_tikhonov=1e-5,
+    ):
+    
+    # ----- Create uniform offset -----
+    uniform_offset_dofs = gen_winding_surface_offset(
+        plasma_gamma, d_expand, 
+        nfp, stellsym,
+        unitnormal=unitnormal,
+        mpol=mpol, ntor=ntor,
+    )
+    
+    # ----- Interpolate to generate smooth poloidal cross sections -----
+    phi_expand = jnp.linspace(0, 1/nfp, plasma_gamma.shape[0] * tor_interp)
+    uniform_offset_surface_jax = SurfaceRZFourierJAX(
+        nfp=nfp, stellsym=stellsym, 
+        mpol=mpol, ntor=ntor, 
+        quadpoints_phi=phi_expand, 
+        quadpoints_theta=jnp.linspace(0, 1, plasma_gamma.shape[1] * pol_interp, endpoint=False), 
+        dofs=uniform_offset_dofs
+    )
+    gamma_uniform = uniform_offset_surface_jax.gamma()
+    
+    # ----- Trimming based on stellarator symmetry -----
+    # Fit only half a field period when stellsym.
+    if stellsym:
+        # If stellsym, then only use half of the field period for surface fitting
+        len_phi = len(phi_expand)//2
+        gamma_uniform = gamma_uniform[:len_phi]
+        phi_expand = phi_expand[:len_phi]
+        # finding center to generate poloidal parameterization
+        r_plasma = jnp.sqrt(plasma_gamma[:len_phi, :, 1]**2 + plasma_gamma[:len_phi, :, 0]**2)
+        z_plasma = plasma_gamma[:len_phi, :, 2]
+    else:
+        gamma_uniform = gamma_uniform
+        # Copy the gamma from the next and last fp.
+        # finding center to generate poloidal parameterization
+        r_plasma = jnp.sqrt(plasma_gamma[:, :, 1]**2 + plasma_gamma[:, :, 0]**2)
+        z_plasma = plasma_gamma[:, :, 2]
+    r_center = jnp.average(r_plasma, axis=-1)
+    z_center = jnp.average(z_plasma, axis=-1)
+    # The original uniform offset. Has self-intersections.
+    # Tested to be differentiable.
+    r_expand = jnp.sqrt(gamma_uniform[:, :, 1]**2 + gamma_uniform[:, :, 0]**2)
+    z_expand = gamma_uniform[:, :, 2]
+    ''' Removing self-intersection '''
+    weight_remove_invalid = vmap(polygon_self_intersection, in_axes=0)(r_expand, z_expand)
+    
+    # ----- Calculating parameterization -----
+    r_wrapped = jnp.pad(r_expand, pad_width=((0, 0), (0, 1)), mode='wrap')
+    z_wrapped = jnp.pad(z_expand, pad_width=((0, 0), (0, 1)), mode='wrap')
+    # Compute the differences along axis=1 (between successive points)
+    dr = jnp.diff(r_wrapped, axis=1)
+    dz = jnp.diff(z_wrapped, axis=1)
+    # Compute the Euclidean distance for each segment
+    segment_lengths = jnp.sqrt(dr**2 + dz**2)
+    # Sum the segment lengths to get the total arclength for each curve
+    arclengths = jnp.cumsum(segment_lengths, axis=1)
+    theta_arc = (arclengths - arclengths[:, 0][:, None]) / arclengths[:, -1][:, None]
+    phi_expand, theta_arc = jnp.broadcast_arrays(phi_expand[:, None], theta_arc)
+
+    # ----- Fitting surface -----
+    dofs_expand = fit_surfacerzfourier(
+        mpol=mpol,
+        ntor=ntor,
+        theta_grid=theta_arc, # theta_interp
+        phi_grid=phi_expand,
+        r_fit=r_expand,
+        z_fit=z_expand,
+        nfp=nfp, stellsym=stellsym,
+        lam_tikhonov=lam_tikhonov,
+        custom_weight=weight_remove_invalid,
+    )
+    return(dofs_expand)
