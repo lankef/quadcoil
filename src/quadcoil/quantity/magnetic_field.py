@@ -106,14 +106,14 @@ f_B_normalized_by_Bnormal_IG = _Quantity.generate_c2(
 # This is an l-infinity norm objective.
 f_max_Bnormal = _Quantity.generate_linf_norm(
     func=_Bnormal, 
-    aux_argname='max_Bnormal', 
+    aux_argname='scaled max Bnormal', 
     desc_unit=_winding_surface_B_desc_unit
 )
 
 # This is an l-infinity norm objective.
 f_max_Bnormal2 = _Quantity.generate_linf_norm(
     func=_Bnormal2, 
-    aux_argname='max_Bnormal2', 
+    aux_argname='scaled max Bnormal2', 
     desc_unit=lambda scales: scales["B"]**2,
     positive_definite=True,
 )

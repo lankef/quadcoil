@@ -62,7 +62,7 @@ def merge_callables(callables):
         outputs = [out.ravel() for out in outputs]
         # Concatenate into a single 1D array
         if len(outputs) == 0:
-            return jnp.zeros(1)
+            return jnp.zeros(0)
         return jnp.concatenate(outputs, axis=0)
     
     return jit(merged_fn)

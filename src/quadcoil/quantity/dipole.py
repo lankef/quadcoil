@@ -35,6 +35,7 @@ def _Phi_with_net_current(qp, dofs):
 def _Phi2(qp, dofs):
     return _Phi(qp, dofs)**2
 _Phi2_desc_unit = lambda scales: Phi_desc_unit(scales)**2
+_Phi4_desc_unit = lambda scales: Phi_desc_unit(scales)**4
 
 _f_l1_Phi_desc_unit = lambda scales: Phi_desc_unit(scales) * scales["R0"] * scales["a"]
 
@@ -64,15 +65,23 @@ Phi2 = _Quantity.generate_c2(
 
 f_max_Phi = _Quantity.generate_linf_norm(
     func=_Phi, 
-    aux_argname='max_Phi(f_max_Phi)', 
-    desc_unit=_Phi_desc_unit
+    aux_argname='scaled_max_phi', 
+    desc_unit=_Phi_desc_unit,
+    auto_stellsym=True,
 )
 
 f_max_Phi2 = _Quantity.generate_linf_norm(
     func=_Phi, 
-    aux_argname='max_Phi(f_max_Phi2)', 
+    aux_argname='scaled_max_phi_f_max_Phi2', 
     desc_unit=_Phi2_desc_unit,
-    square=True
+    square=True,
+    auto_stellsym=True,
+)
+
+f_max_Phi4 = _Quantity.generate_linf_norm_4(
+    func=_Phi, 
+    aux_argname='scaled_max_phi2_f_max_Phi4', 
+    desc_unit=_Phi4_desc_unit,
 )
 
 # f_max_Phi2 = _Quantity.generate_linf_norm(
@@ -84,7 +93,8 @@ f_max_Phi2 = _Quantity.generate_linf_norm(
 
 f_l1_Phi = _Quantity.generate_l1_norm(
     func=_Phi, 
-    aux_argname='|Phi|', 
-    desc_unit=_f_l1_Phi_desc_unit
+    aux_argname='scaled_abs_phi', 
+    desc_unit=_f_l1_Phi_desc_unit,
+    auto_stellsym=True,
 )
     

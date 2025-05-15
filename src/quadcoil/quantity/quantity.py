@@ -2,6 +2,12 @@ from typing import Callable, List, Any
 from jax import jit
 import jax.numpy as jnp
 from functools import partial
+
+def _flatten_first_two_dims(x):
+    shape = x.shape
+    new_shape = (shape[0] * shape[1],) + shape[2:]
+    return jnp.reshape(x, new_shape)
+
 class _Quantity: 
     r'''
     Interior point methods require :math:`C^1` objectives. Therefore, 
@@ -64,6 +70,7 @@ class _Quantity:
     scaled_h_eq_impl : Callable(qp: QuadcoilParams, dofs: dict, unit: float)
         The auxiliary equality constraints required by the objective, in the form 
         of :math:`h(x)=0`.  
+    scaled_aux_dofs_init : dict{str: Callable(qp: QuadcoilParams, dofs: dict, unit: float) -> Tuple}
     compatibility : List[str]
         Whether this quantity can serve as an objective, or appear in
         ``'<='``  ``'=='`` and (or) ``'>='`` constraints. Must be a ``List`` containing one or 
@@ -155,8 +162,8 @@ class _Quantity:
             compatibility=compatibility, 
             desc_unit=desc_unit,
         )
-    
-    def generate_linf_norm(func, aux_argname, desc_unit, positive_definite=False, square=False):
+
+    def generate_linf_norm(func, aux_argname, desc_unit, positive_definite=False, square=False, auto_stellsym=False):
         r'''
         Generates the auxiliary constraints for an L-:math:`\infty`
         norm. See documentations for ``quadcoil.objective.Objective``.
@@ -165,10 +172,97 @@ class _Quantity:
 
         .. math::
 
-            max|f| &= p,\\
+            max|f| &= p (\text{or } p^2 \text{ if square=True}),\\
             \text{where}&\\
              f - p &\leq 0\\
             -f - p &\leq 0
+        
+        This is a scalar, convex quantity that's only compatible as an 
+        objective term or with ``'<='`` constraints.
+
+        Parameters
+        ----------  
+        func : Callable
+            The source function :math:`f` to convert into an L-:math:`\infty` norm.
+        aux_argname : str
+            The name of the auxiliary variable. Must be unique among all supported
+            ``_Quantity``s.
+        desc_unit : Callable
+            A callable calculating the quantity's unit in DESC.
+        positive_definite : bool, optional, default=False
+            Whether ``func`` is positive definite. If ``True``, then
+            the second constraint is not required.
+        square : bool, optional, default=True
+            When ``True``, generates :math:`\|f\|_\infty^2` instead. This is better-behaved
+            when used as objective.
+        auto_stellsym : bool, optional, default=False
+            When ``True``, ignores the second half of all objective values when constructing 
+            constraints. Reduces computational cost and improves conditioning.
+
+        Returns
+        -------
+        A ``_Quantity``.
+        '''
+        # The objective/constraint form of this L-infinity
+        # norm is just a function that returns the auxiliary variable.
+        # Because the aux var is already scaled to O(1),
+        # scaled_c2_impl doesn't acually need to have unit dependence.
+        if square:
+            scaled_c2_impl = lambda qp, dofs, unit, aux_argname=aux_argname: dofs[aux_argname]**2
+            # The effective function
+            c0_impl = lambda qp, dofs, func=func: jnp.max(jnp.abs(func(qp, dofs)))**2
+        else:
+            scaled_c2_impl = lambda qp, dofs, unit, aux_argname=aux_argname: dofs[aux_argname]
+            # The effective function
+            c0_impl = lambda qp, dofs, func=func: jnp.max(jnp.abs(func(qp, dofs)))
+        # The constraints
+        def scaled_g_ineq_impl(qp, dofs, unit, func=func, aux_argname=aux_argname):
+            # When square==True, the specified by the user is field^2.
+            if square:
+                unit_eff = jnp.sqrt(unit)
+            else:
+                unit_eff = unit
+            field = func(qp, dofs)
+            if auto_stellsym and qp.stellsym:
+                field = _flatten_first_two_dims(field)
+                field = field[:len(field)//2]
+            p_aux = dofs[aux_argname]
+            g_plus = field/unit_eff - p_aux #  f - p <=0
+            # We need only half of the constraints if f is positive definite
+            if positive_definite:
+                return g_plus
+            g_minus = -field/unit_eff - p_aux # -f - p <=0
+            return jnp.stack([g_plus,g_minus], axis=0)
+        
+        # The initial value of the auxiliary variable is the 
+        # c0_impl / unit. 
+        if square:
+            scaled_aux_dofs_init = lambda qp, dofs, unit: c0_impl(qp, dofs)/jnp.sqrt(unit)
+        else:
+            scaled_aux_dofs_init = lambda qp, dofs, unit: c0_impl(qp, dofs)/unit
+        return _Quantity(
+            scaled_c2_impl=scaled_c2_impl,
+            c0_impl=c0_impl, 
+            scaled_g_ineq_impl=scaled_g_ineq_impl,
+            scaled_h_eq_impl=None, 
+            # The auxiliary dofs' names and initial values
+            scaled_aux_dofs_init={aux_argname: scaled_aux_dofs_init},
+            compatibility=['f', '<='], 
+            desc_unit=desc_unit,
+        )
+    
+    def generate_linf_norm_4(func, aux_argname, desc_unit):
+        r'''
+        Generates the auxiliary constraints for an L-:math:`\infty`
+        norm. See documentations for ``quadcoil.objective.Objective``.
+        An L-:math:`\infty` norm term in an objective or :math:`\leq`
+        constraint can be represented by:
+
+        .. math::
+
+            max|f|^4 &= p^2,\\
+            \text{where}&\\
+             f^2 - p &\leq 0\\
         
         This is a scalar, convex quantity that's only compatible as an 
         objective term or with ``'<='`` constraints.
@@ -197,29 +291,21 @@ class _Quantity:
         # norm is just a function that returns the auxiliary variable.
         # Because the aux var is already scaled to O(1),
         # scaled_c2_impl doesn't acually need to have unit dependence.
-        if square:
-            scaled_c2_impl = lambda qp, dofs, unit, aux_argname=aux_argname: dofs[aux_argname]**2
-            # The effective function
-            c0_impl = lambda qp, dofs, func=func: jnp.max(jnp.abs(func(qp, dofs)))**2
-        else:
-            scaled_c2_impl = lambda qp, dofs, unit, aux_argname=aux_argname: dofs[aux_argname]
-            # The effective function
-            c0_impl = lambda qp, dofs, func=func: jnp.max(jnp.abs(func(qp, dofs)))
+        scaled_c2_impl = lambda qp, dofs, unit, aux_argname=aux_argname: dofs[aux_argname]**2
+        # The effective function
+        c0_impl = lambda qp, dofs, func=func: jnp.max(func(qp, dofs)**4)
         # The constraints
         def scaled_g_ineq_impl(qp, dofs, unit, func=func, aux_argname=aux_argname):
+            # The unit specified by the user is field^4
+            unit_sq = jnp.sqrt(unit)
             field = func(qp, dofs)
             p_aux = dofs[aux_argname]
-            g_plus = field/unit - p_aux #  f - p <=0
-            # We need only half of the constraints if f is positive definite
-            if positive_definite:
-                return g_plus
-            g_minus = -field/unit - p_aux # -f - p <=0
-            return jnp.stack([g_plus,g_minus], axis=0)
+            g_sq = field**2/unit_sq - p_aux
+            return g_sq
         
         # The initial value of the auxiliary variable is the 
-        # c0_impl / unit. 
-        scaled_aux_dofs_init = lambda qp, dofs, unit: c0_impl(qp, dofs)/unit
-        g_unit = lambda qp, unit: unit
+        # max(|field|^2) / unit_sq. 
+        scaled_aux_dofs_init = lambda qp, dofs, unit: jnp.max(func(qp, dofs)**2)/jnp.sqrt(unit)
         return _Quantity(
             scaled_c2_impl=scaled_c2_impl,
             c0_impl=c0_impl, 
@@ -230,8 +316,8 @@ class _Quantity:
             compatibility=['f', '<='], 
             desc_unit=desc_unit,
         )
-
-    def generate_l1_norm(func, aux_argname, desc_unit, positive_definite=False):
+    
+    def generate_l1_norm(func, aux_argname, desc_unit, positive_definite=False, square=False, auto_stellsym=False):
         r'''
         Generates the auxiliary constraints for an L-1 
         norm. See documentations for ``quadcoil.objective.Objective``.
@@ -262,6 +348,11 @@ class _Quantity:
         positive_definite : bool, optional, default=False
             Whether ``func`` is positive definite. If ``True``, then
             the second constraint is not required.
+        square : bool, optional, default=True
+            When ``True``, generates :math:`\|f\|_1^2` instead. For non-singular Hessians.
+        auto_stellsym : bool, optional, default=False
+            When ``True``, ignores the second half of all objective values when constructing 
+            constraints. Reduces computational cost and improves conditioning.
 
         Returns
         -------
@@ -279,8 +370,11 @@ class _Quantity:
                 func(qp, dofs)
             ))*qp.nfp
         # The constraints
-        def scaled_g_ineq_impl(qp, dofs, unit, func=func, aux_argname=aux_argname):
+        def scaled_g_ineq_impl(qp, dofs, unit, func=func, aux_argname=aux_argname, auto_stellsym=auto_stellsym):
             field = func(qp, dofs)
+            if auto_stellsym and qp.stellsym:
+                field = _flatten_first_two_dims(field)
+                field = field[:len(field)//2]
             p_aux = dofs[aux_argname]
             g_plus = field/unit - p_aux #  f - p <=0
             # We need only half of the constraints if f is positive definite
@@ -296,7 +390,12 @@ class _Quantity:
             return unit / (qp.eval_surface.area() * qp.nfp)
         # The initial value of the auxiliary variable is the 
         # abs(field) / g_unit. 
-        scaled_aux_dofs_init = lambda qp, dofs, unit: jnp.abs(func(qp, dofs))/g_unit(qp, unit)
+        def scaled_aux_dofs_init(qp, dofs, unit, auto_stellsym=auto_stellsym):
+            field = func(qp, dofs)
+            if auto_stellsym and qp.stellsym:
+                field = _flatten_first_two_dims(field)
+                field = field[:len(field)//2]
+            jnp.abs(field)/g_unit(qp, unit)
         return _Quantity(
             scaled_c2_impl=scaled_c2_impl,
             c0_impl=c0_impl, 

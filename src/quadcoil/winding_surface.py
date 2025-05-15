@@ -6,7 +6,6 @@ from jax.lax import scan
 from functools import partial
 from .surfacerzfourier_jax import dof_to_rz_op, SurfaceRZFourierJAX
 import lineax as lx
-import equinox as eqx
 
 # @partial(jit, static_argnames=['nfp', 'stellsym', 'mpol', 'ntor', 'lam_tikhonov',])
 def fit_surfacerzfourier(

@@ -82,5 +82,6 @@ K_dot_grad_K_cyl = _Quantity.generate_c2(
 f_max_K_dot_grad_K_cyl = _Quantity.generate_linf_norm(
     func=_K_dot_grad_K_cyl, 
     aux_argname='max_KK_cyl', 
-    desc_unit=_K_dot_grad_K_desc_unit
+    desc_unit=_K_dot_grad_K_desc_unit,
+    auto_stellsym=True,
 )

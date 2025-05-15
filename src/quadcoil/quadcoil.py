@@ -3,16 +3,21 @@ from quadcoil import (
     gen_winding_surface_arc, 
     SurfaceRZFourierJAX, QuadcoilParams, 
     solve_constrained, run_opt_lbfgs,
-    is_ndarray
+    is_ndarray, tree_len,
 )
 from quadcoil.wrapper import _parse_objectives, _parse_constraints
 from functools import partial
 from quadcoil.quantity import Bnormal
-from jax import jacrev, jvp, jit
-import jax
+from jax import jacfwd, jacrev, jvp, jit, hessian, block_until_ready
+from jax import config
+from jax import debug
+from jax import flatten_util
 import jax.numpy as jnp
 import lineax as lx
+config.update('jax_enable_x64', True)
 
+tol_default = 1e-5
+tol_default_last = 1e-8
 # The list of all static arguments of 
 # quadcoil. Also used in the DESC interface.
 # All other vars are assumed traced. If you
@@ -35,9 +40,14 @@ QUADCOIL_STATIC_ARGNAMES=[
     # - Constraints 
     'constraint_name',
     'constraint_type',
-    # - Solver options
+    # - Metrics
     'metric_name',
+    # - Solver options
+    'convex',
     'maxiter_tot',
+    'maxiter_inner',
+    'maxiter_inner_last',
+    'implicit_linear_solver',
     'value_only',
     'verbose',
 ]
@@ -96,18 +106,25 @@ def quadcoil(
     metric_name=('f_B', 'f_K'),
 
     # - Solver options
+    convex=False,
     c_init:float=1.,
     c_growth_rate:float=2,
-    xstop_outer:float=1e-5, # convergence rate tolerance
-    gtol_outer:float=1e-7, # gradient tolerance
-    ctol_outer:float=1e-7, # constraint tolerance
-    fstop_inner:float=1e-5,
-    xstop_inner:float=1e-5,
-    gtol_inner:float=1e-5,
+    xstop_outer:float=tol_default, # convergence rate tolerance
+    # gtol_outer:float=1e-7, # gradient tolerance
+    ctol_outer:float=tol_default, # constraint tolerance
+    fstop_inner:float=0.,
+    xstop_inner:float=tol_default,
+    gtol_inner:float=tol_default,
+    fstop_inner_last:float=0.,
+    xstop_inner_last:float=tol_default_last,
+    gtol_inner_last:float=tol_default_last,
+    svtol:float=tol_default,
     maxiter_tot:int=10000,
     maxiter_inner:int=1000,
+    maxiter_inner_last:int=1000,
+    implicit_linear_solver=lx.AutoLinearSolver(well_posed=True),
     value_only=False,
-    verbose=False,
+    verbose=0,
 ):
     r'''
     Solves a QUADCOIL problem.
@@ -180,6 +197,8 @@ def quadcoil(
         (Traced) The constraint thresholds. Derivatives will be calculated w.r.t. this quantity.
     metric_name : tuple, optional, default=('f_B', 'f_K')
         (Static) The names of the functions to diagnose the coil configurations with. Will be differentiated w.r.t. other input quantities.
+    convex : bool, optional, default=False
+        (Static) Whether to assume the problem is convex. When ``True``, QUADCOIL will apply some limited simplifications.
     c_init : float, optional, default=1.
         (Traced) The initial :math:`c` factor. Please see *Constrained Optimization and Lagrange Multiplier Methods* Chapter 3.
     c_growth_rate : float, optional, default=1.2
@@ -187,24 +206,26 @@ def quadcoil(
     xstop_outer : float, optional, default=1e-7
         (Traced) ``x`` convergence rate of the outer augmented 
         Lagrangian loop. Terminates when ``dx`` falls below this. 
-    gtol_outer : float, optional, default=1e-7
-        (Traced) Tolerance of the :math:`\nabla L` KKT condition in
-        the outer augmented Lagrangian loop. 
     ctol_outer : float, optional, default=1e-7
         (Traced) Tolerance of the constraint KKT conditions in the outer
         Lagrangian loop. 
-    fstop_inner : float, optional, default=1e-7
+    fstop_inner, fstop_inner_last : float, optional, default=1e-7
         (Traced) ``f`` convergence rate of the inner LBFGS 
         Lagrangian loop. Terminates when ``df`` falls below this. 
-    xstop_inner : float, optional, default=0
+    xstop_inner, xstop_inner_last : float, optional, default=0
         (Traced) ``x`` convergence rate of the outer augmented 
         Lagrangian loop. Terminates when ``dx`` falls below this. 
-    gtol_inner : float, optional, default=0.1
+    gtol_inner, gtol_inner_last : float, optional, default=0.1
         (Traced) Gradient tolerance of the inner LBFGS iteration, normalized by the starting gradient.
-    maxiter_toter : int, optional, default=50
+    svtol : float, optional, default=0.1
+        (Traced) Singular-value cut-off threshold during the pre-conditioning. Will treat 
+        singular values smaller than ``svtol * jnp.max(s)`` as 0
+    maxiter_tot : int, optional, default=50.
         (Static) The maximum of the outer iteration.
-    maxiter_tot : int, optional, default=500
+    maxiter_inner, maxiter_inner_last : int, optional, default=500
         (Static) The maximum of the inner iteration.
+    implicit_linear_solver : lineax.AbstractLinearSolver, optional, default=lineax.AutoLinearSolver(well_posed=True)
+        (Static) The lineax linear solver choice for implicit differentiation.
     value_only : bool, optional, default=False
         (Static) When ``True``, skip gradient calculations.
     verbose : int, optional, default=False
@@ -245,12 +266,7 @@ def quadcoil(
         if len(objective_name) != len(objective_weight) or len(objective_name) != len(objective_unit):
             raise ValueError('objective_name, objective_weight, and objective_unit must have the same len')
     else:
-        if objective_weight != 1:
-            raise AttributeError(
-                'When optimizing for one objective, objective_weight '\
-                'should not be provided. The provided value is:', 
-                objective_weight
-            )
+        objective_weight = 1.
     if isinstance(metric_name, str):
         metric_name = (metric_name,)
     if not isinstance(constraint_name, tuple):
@@ -287,21 +303,21 @@ def quadcoil(
     # it's not zero.
     if Bnormal_plasma is not None:
         if verbose>0:
-            jax.debug.print('Maximum Bnormal_plasma: {x}', x=jnp.max(jnp.abs(Bnormal_plasma)))
+            debug.print('Maximum Bnormal_plasma: {x}', x=jnp.max(jnp.abs(Bnormal_plasma)))
         y_dict_current['Bnormal_plasma'] = Bnormal_plasma
     # Include winding dofs when it's provided.
     if plasma_coil_distance is None:
         if verbose>0:
-            jax.debug.print('Using custom winding surface.')
+            debug.print('Using custom winding surface.')
         y_dict_current['winding_dofs'] = winding_dofs
     else:
         if verbose>0:
-            jax.debug.print('Plasma-coil distance (m): {x}', x=plasma_coil_distance)
+            debug.print('Plasma-coil distance (m): {x}', x=plasma_coil_distance)
         y_dict_current['plasma_coil_distance'] = plasma_coil_distance
     
     # ----- Printing inputs -----
     if verbose>0:
-        jax.debug.print(
+        debug.print(
             'Running QUADCOIL in verbose mode \n\n'\
             '----- Input summary ----- \n'\
             'Evaluation phi quadpoint num: {n_quadpoints_phi}\n'\
@@ -323,7 +339,7 @@ def quadcoil(
             '    c_init: {c_init}\n'\
             '    c_growth_rate: {c_growth_rate}\n'\
             '    xstop_outer: {xstop_outer}\n'\
-            '    gtol_outer: {gtol_outer}\n'\
+            # '    gtol_outer: {gtol_outer}\n'\
             '    ctol_outer: {ctol_outer}\n'\
             '    fstop_inner: {fstop_inner}\n'\
             '    xstop_inner: {xstop_inner}\n'\
@@ -348,7 +364,7 @@ def quadcoil(
             c_init=c_init,
             c_growth_rate=c_growth_rate,
             xstop_outer=xstop_outer,
-            gtol_outer=gtol_outer,
+            # gtol_outer=gtol_outer,
             ctol_outer=ctol_outer,
             fstop_inner=fstop_inner,
             xstop_inner=xstop_inner,
@@ -469,18 +485,21 @@ def quadcoil(
         h_list = h_obj_list + h_cons_list
         aux_dofs_init = aux_dofs_obj | aux_dofs_cons
 
-        f_obj_x = lambda x: f_obj(qp_temp, x)
-        g_ineq_x = lambda x: merge_callables(g_list)(qp_temp, x)
-        h_eq_x = lambda x: merge_callables(h_list)(qp_temp, x)
-        unconstrained = ((len(g_list) == 0) and (len(h_list) == 0))
-        return f_obj_x, g_ineq_x, h_eq_x, unconstrained, aux_dofs_init
+        f_obj_x = lambda x, qp_temp=qp_temp, f_obj=f_obj: f_obj(qp_temp, x)
+        g_ineq_x = lambda x, qp_temp=qp_temp, g_list=g_list: merge_callables(g_list)(qp_temp, x)
+        h_eq_x = lambda x, qp_temp=qp_temp, h_list=h_list: merge_callables(h_list)(qp_temp, x)
+        n_g = len(g_list)
+        n_h = len(h_list)
+        return f_obj_x, g_ineq_x, h_eq_x, n_g, n_h, aux_dofs_init
 
+    
     # ----- Creating Initializing phi -----
     # Defining a shared problem parameter object
     qp = y_to_qp(y_dict_current)
     # f, g, h are Callable(qp, {'phi':, ..., })
     # i.e., they accepts unscaled input
-    f_obj, g_ineq, h_eq, unconstrained, aux_dofs_init = f_g_ineq_h_eq_from_y(y_dict_current)
+    f_obj, g_ineq, h_eq, n_g, n_h, aux_dofs_init = f_g_ineq_h_eq_from_y(y_dict_current)
+    unconstrained = ((n_g == 0) and (n_h == 0))
 
     if phi_mn_init is None:
         phi_mn_init = jnp.zeros(qp.ndofs)
@@ -536,38 +555,46 @@ def quadcoil(
     # implementation, we need to unravel it into a jax array. 
     # Here we perform the unraveling. 
     # *** x_flat_init is the actual dof manipulated by the optimizers! ***
-    x_flat_init, unravel_fn = jax.flatten_util.ravel_pytree(x_dict)
+    x_flat_init, unravel_x = flatten_util.ravel_pytree(x_dict)
+    ndofs_tot = len(x_flat_init) # This counts the aux vars too
+    ny = tree_len(y_dict_current)
     # This block prints out a summary on the auxiliary vars and 
     # phi degrees of freedom.
-    def x_flat_to_dofs(x, unravel_fn=unravel_fn, phi_unit=phi_unit):
-        d = unravel_fn(x)
+    def unravel_unscale_x(x, unravel_x=unravel_x, phi_unit=phi_unit):
+        d = unravel_x(x)
         # Replace scaled phi with regular phi
         # after unraveling for passing into 
         # f_obj, g_ineq and h_eq.
         dofs_temp = {k: v for k, v in {**d, "phi": d["phi_scaled"] * phi_unit}.items() if k != "phi_scaled"}
         return(dofs_temp)
+    # ----- Scaling f, g, h and initializing mu and lam -----
+    # f, g and h should take x_flat_init, the flattened, scaled dofs.
+    # *** f_scaled, g_scaled and h_scaled are the actual functions 
+    # seen by the optimizer! ***
+    f_scaled = lambda x_scaled, f_obj=f_obj: f_obj(unravel_unscale_x(x_scaled))
+    g_scaled = lambda x_scaled, g_ineq=g_ineq: g_ineq(unravel_unscale_x(x_scaled))
+    h_scaled = lambda x_scaled, h_eq=h_eq: h_eq(unravel_unscale_x(x_scaled))
+    mu_init = jnp.zeros_like(g_scaled(x_flat_init))
+    lam_init = jnp.zeros_like(h_scaled(x_flat_init))
+    
+    # ----- Summarizing initialization -----
     if verbose>0:
         dofs_summary = []
         for key, value in x_dict.items():
             dofs_summary.append(f"    {key}: {jnp.atleast_1d(value).shape}")
         final_str = "\n".join(dofs_summary)
-        jax.debug.print(
+        debug.print(
             '----- DOF summary ----- \n'\
             'After converting non-smooth terms (such as |f|) into\n'\
             'smooth terms, auxiliary vars and constraints, the dofs are:\n{s}\n'\
-            'Total # dofs (including auxiliary): {t}',
-            s = final_str, t = len(x_flat_init) 
+            'Total # dofs (including auxiliary): {t}\n'\
+            'Shape of mu, lam: {mu}, {lam}\n'\
+            'Total # of ineq constraint quantities (can have array output): {n_g}\n'\
+            'Total # of eq constraint quantities (can have array output): {n_h}\n'\
+            'Total # problem parameters: {u}',
+            mu=mu_init.shape, lam=lam_init.shape,
+            s=final_str, t=ndofs_tot, u=ny, n_g=n_g, n_h=n_h
         )
-    
-    # ----- Scaling f, g, h and initializing mu and lam -----
-    # f, g and h should take x_flat_init, the flattened, scaled dofs.
-    # *** f_scaled, g_scaled and h_scaled are the actual functions 
-    # seen by the optimizer! ***
-    f_scaled = lambda x_scaled, f_obj=f_obj: f_obj(x_flat_to_dofs(x_scaled))
-    g_scaled = lambda x_scaled, g_ineq=g_ineq: g_ineq(x_flat_to_dofs(x_scaled))
-    h_scaled = lambda x_scaled, h_eq=h_eq: h_eq(x_flat_to_dofs(x_scaled))
-    mu_init = jnp.zeros_like(g_scaled(x_flat_init))
-    lam_init = jnp.zeros_like(h_scaled(x_flat_init))
     
     # ----- Solving QUADCOIL -----
     # A dictionary containing augmented lagrangian info
@@ -580,17 +607,16 @@ def quadcoil(
         x_flat_opt, val_l_k, grad_l_k, niter_inner_k, dx_k, du_k, dL_k = run_opt_lbfgs(
             init_params=x_flat_init,
             fun=f_scaled,
-            maxiter=maxiter_inner,
-            fstop=fstop_inner,
-            xstop=xstop_inner,
+            maxiter=maxiter_inner_last,
+            fstop=fstop_inner_last,
+            xstop=xstop_inner_last,
             gtol=gtol_inner,
             verbose=verbose,
         )
-        dofs_opt = x_flat_to_dofs(x_flat_opt)
+        dofs_opt = unravel_unscale_x(x_flat_opt)
         solve_results = {
             'inner_fin_f': val_l_k,
             'inner_fin_x': x_flat_opt,
-            'inner_fin_grad_f': jnp.linalg.norm(grad_l_k),
             'inner_fin_niter': niter_inner_k,
             'inner_fin_dx_scaled': dx_k,
             'inner_fin_du': du_k,
@@ -599,24 +625,21 @@ def quadcoil(
             # 'x_unit': jnp.average(jnp.abs(x_k)),
         }
         if verbose>0:       
-            jax.debug.print(
+            debug.print(
                 '----- Solver status summary -----\n'\
                 'Final value of objective f: {f}\n'\
                 'Final Max current potential (dipole density): {max_cp} (A)\n'\
                 'Final Avg current potential (dipole density): {avg_cp} (A)\n'\
                 '* Total L-BFGS iteration number: {niter}\n'\
                 '    Phi scaling constant:  {x_unit_init}(A)\n'\
-                # '    Final value of phi scaling constant: {x_unit}(A)\n'\
-                '    Final value of grad f: {grad_f}\n'\
                 '    Inner convergence rate in x (scaled): {inner_dx}, {inner_du}\n'\
                 '    Inner convergence rate in f: {df}\n',
                 f=val_l_k,
                 niter=niter_inner_k,
-                grad_f=jax.block_until_ready(solve_results['inner_fin_grad_f']),
                 x_unit_init=phi_unit,
-                inner_dx=jax.block_until_ready(solve_results['inner_fin_dx_scaled']),
-                inner_du=jax.block_until_ready(solve_results['inner_fin_du']),
-                df=jax.block_until_ready(solve_results['inner_fin_df']),
+                inner_dx=block_until_ready(solve_results['inner_fin_dx_scaled']),
+                inner_du=block_until_ready(solve_results['inner_fin_du']),
+                df=block_until_ready(solve_results['inner_fin_df']),
                 max_cp=jnp.max(jnp.abs(dofs_opt['phi'])),
                 avg_cp=jnp.average(jnp.abs(dofs_opt['phi'])),
             )
@@ -632,45 +655,44 @@ def quadcoil(
             c_growth_rate=c_growth_rate,
             ctol_outer=ctol_outer,
             xstop_outer=xstop_outer,
-            gtol_outer=gtol_outer,
+            # gtol_outer=gtol_outer,
             fstop_inner=fstop_inner,
             xstop_inner=xstop_inner,
             gtol_inner=gtol_inner,
+            fstop_inner_last=fstop_inner_last,
+            xstop_inner_last=xstop_inner_last,
+            gtol_inner_last=gtol_inner_last,
             maxiter_tot=maxiter_tot,
             maxiter_inner=maxiter_inner,
             verbose=verbose
         )
         # The optimum, unit-less.
         x_flat_opt = solve_results['inner_fin_x']
-        dofs_opt = x_flat_to_dofs(x_flat_opt)
+        dofs_opt = unravel_unscale_x(x_flat_opt)
         if verbose>0:       
-            jax.debug.print(
+            debug.print(
                 '----- Solver status summary -----\n'\
                 'Final value of objective f: {f}\n'\
                 'Final Max current potential (dipole density): {max_cp} (A)\n'\
                 'Final Avg current potential (dipole density): {avg_cp} (A)\n'\
                 '* Total L-BFGS iteration number: {niter}\n'\
                 '    Phi scaling constant:  {x_unit_init}(A)\n'\
-                # '    Final value of phi scaling constant: {x_unit}(A)\n'\
-                '    Final value of grad f: {grad_f}\n'\
                 '    Final value of constraint g: {g}\n'\
                 '    Final value of constraint h: {h}\n'\
                 '    Outer convergence rate in x (scaled): {dx}\n'\
                 '* Last inner L_BFGS iteration number: {inner_niter}\n'\
                 '    Inner convergence rate in x (scaled): {inner_dx}, {inner_du}\n'\
                 '    Inner convergence rate in l: {dl}\n',
-                f=jax.block_until_ready(solve_results['inner_fin_f']),
-                niter=jax.block_until_ready(solve_results['tot_niter']),
-                grad_f=jax.block_until_ready(solve_results['inner_fin_grad_f']),
-                g=jax.block_until_ready(solve_results['inner_fin_g']),
-                h=jax.block_until_ready(solve_results['inner_fin_h']),
+                f=block_until_ready(solve_results['inner_fin_f']),
+                niter=block_until_ready(solve_results['tot_niter']),
+                g=block_until_ready(solve_results['inner_fin_g']),
+                h=block_until_ready(solve_results['inner_fin_h']),
                 x_unit_init=phi_unit,
-                # x_unit=jax.block_until_ready(solve_results['x_unit']),
-                dx=jax.block_until_ready(solve_results['outer_dx']),
-                inner_niter=jax.block_until_ready(solve_results['inner_fin_niter']),
-                inner_dx=jax.block_until_ready(solve_results['inner_fin_dx_scaled']),
-                inner_du=jax.block_until_ready(solve_results['inner_fin_du']),
-                dl=jax.block_until_ready(solve_results['inner_fin_dl']),
+                dx=block_until_ready(solve_results['outer_dx']),
+                inner_niter=block_until_ready(solve_results['inner_fin_niter']),
+                inner_dx=block_until_ready(solve_results['inner_fin_dx_scaled']),
+                inner_du=block_until_ready(solve_results['inner_fin_du']),
+                dl=block_until_ready(solve_results['inner_fin_dl']),
                 max_cp=jnp.max(jnp.abs(dofs_opt['phi'])),
                 avg_cp=jnp.average(jnp.abs(dofs_opt['phi'])),
             )
@@ -683,101 +705,288 @@ def quadcoil(
                 'value': metric_result_i
             }
             if verbose>0:
-                jax.debug.print('Metric evaluated. {x} = {y}', x=metric_name_i, y=metric_result_i)
+                debug.print('Metric evaluated. {x} = {y}', x=metric_name_i, y=metric_result_i)
         return out_dict, qp, dofs_opt, solve_results
+    # flatten the y dictionary. This will simplify the code structure a bit
+    y_flat, unravel_y = flatten_util.ravel_pytree(y_dict_current)
+    out_dict = {}
     
-    # ''' Recover the l_k in the last iteration for dx_k/dy '''
-
-    # First, we reproduce the augmented lagrangian objective l_k that 
-    # led to the optimum.
+    # ----- Stationarity conditions -----
+    # It will be prohibitively expensive to solve the KKT condition. 
+    # Therefore, we use the Jacobian of the unconstrained objective instead.
     if unconstrained:
         def l_k(x, y): 
-            f_obj, _, _, _, _ = f_g_ineq_h_eq_from_y(y)
-            return f_obj(x_flat_to_dofs(x)) 
-    else:  
-        c_k = solve_results['inner_fin_c']
-        lam_k = solve_results['inner_fin_lam']
-        mu_k = solve_results['inner_fin_mu']
-        @jit
-        def l_k(x, y, mu_k=mu_k, c_k=c_k): 
-            f_obj, g_ineq, h_eq, _, _ = f_g_ineq_h_eq_from_y(y)
-            f_scaled = lambda x_flat, f_obj=f_obj: f_obj(x_flat_to_dofs(x_flat))
-            g_scaled = lambda x_flat, g_ineq=g_ineq: g_ineq(x_flat_to_dofs(x_flat))
-            h_scaled = lambda x_flat, h_eq=h_eq: h_eq(x_flat_to_dofs(x_flat))
-            gplus = lambda x, mu, c: jnp.max(jnp.array([g_scaled(x), -mu/c]), axis=0)
-            return(
-                f_scaled(x) 
-                + lam_k@h_scaled(x) 
-                + mu_k@gplus(x, mu_k, c_k)
-                + c_k/2 * (
-                    jnp.sum(h_scaled(x)**2) 
-                    + jnp.sum(gplus(x, mu_k, c_k)**2)
-                )
+            f_obj, _, _, _, _, _ = f_g_ineq_h_eq_from_y(unravel_y(y))
+            return f_obj(unravel_unscale_x(x)) 
+        # No need in preconditioning x.
+        # for more detail, see Step-1 preconditioning.
+        x_flat_precond = x_flat_opt
+        xp_to_x = lambda xp: xp
+        # 
+        grad_x_l_k = jacrev(l_k, argnums=0)
+        # When the problem is unconstrained, 
+        # we can avoid materializing the full Hessian.
+        if convex:
+            vihp_A_precond = lx.JacobianLinearOperator(
+                grad_x_l_k, 
+                x_flat_opt, args=y_flat, 
+                tags=(lx.symmetric_tag, lx.positive_semidefinite_tag)
             )
-    nabla_x_l_k = jacrev(l_k, argnums=0)
-    nabla_y_l_k = jacrev(l_k, argnums=1)
-    nabla_y_l_k_for_hess = lambda x: nabla_y_l_k(x, y_dict_current)
-    hess_l_k = jacrev(nabla_x_l_k)(x_flat_opt, y_dict_current)
-    if verbose >1:
-        jax.debug.print('hess_l_k shape, {s}', s=hess_l_k.shape)
-        jax.debug.print('hess_l_k cond, {s}', s=jnp.linalg.cond(hess_l_k))
-        jax.debug.print('hess_l_k rank, {s}', s=jnp.linalg.matrix_rank(hess_l_k))
-    out_dict = {}
-    hess_l_k_operator = lx.MatrixLinearOperator(hess_l_k)
-    for metric_name_i in metric_name:
-        f_metric = lambda x, y: get_quantity(metric_name_i)(y_to_qp(y), x_flat_to_dofs(x))
-        nabla_x_f = jacrev(f_metric, argnums=0)(x_flat_opt, y_dict_current)
-        nabla_y_f = jacrev(f_metric, argnums=1)(x_flat_opt, y_dict_current)
-        vihp = lx.linear_solve(hess_l_k_operator, nabla_x_f).value
-        # Now we calculate df/dy using vjp
-        # \nabla_{x_k} f [-H(l_k, x_k)^-1 \nabla_{x_k}\nabla_{y} l_k]
-        # Primal and tangent must be the same shape
-        _, dfdy1 = jvp(nabla_y_l_k_for_hess, primals=[x_flat_opt], tangents=[vihp])
-        # \nabla_{y} f
-        dfdy2 = nabla_y_f
-        # This was -dfdy1 + dfdy2 in the old code where
-        # y is an array. Now y is a dict, and 
-        # dfdy1, dfdy2 are both dicts.
-        dfdy = {}
-        for key in dfdy1.keys():
-            if dfdy1[key] is not None and dfdy2[key] is not None:
-                dfdy['df_d' + key] = -jnp.array(dfdy1[key]) + jnp.array(dfdy2[key])
-                if verbose > 1:
-                    test_dfdy = {}
-                    test_dfdy['df_d' + key + '_1'] = -jnp.array(dfdy1[key])
-                    test_dfdy['df_d' + key + '_vihp'] = vihp
-                    test_dfdy['df_d' + key + '_nabla_x_f'] = nabla_x_f
-                    test_dfdy['df_d' + key + '_nabla_y_f'] = nabla_y_f[key]
-                    test_dfdy['df_d' + key + '_hess_l_k'] = hess_l_k
-                    test_dfdy['df_d' + key + '_2'] = jnp.array(dfdy2[key])
-                    jax.debug.print(
-                        'test_dfdy[\'df_d{key}_1\'] = {l_1}, {u_1}\n'\
-                        'test_dfdy[\'df_d{key}_vihp\'] = {l_vihp}, {u_vihp}\n'\
-                        'test_dfdy[\'df_d{key}_nabla_x_f\'] = {l_nabla_x_f}, {u_nabla_x_f} (RHS)\n'\
-                        'test_dfdy[\'df_d{key}_nabla_y_f\'] = {l_nabla_y_f}, {u_nabla_y_f}\n'\
-                        'test_dfdy[\'df_d{key}_2\'] = {l_2}, {u_2}\n'\
-                        'tot = {l_tot}, {u_tot}',
-                        key=key,
-                        l_1=jnp.min(test_dfdy['df_d' + key + '_1']),
-                        l_vihp=jnp.min(test_dfdy['df_d' + key + '_vihp']),
-                        l_nabla_x_f=jnp.min(test_dfdy['df_d' + key + '_nabla_x_f']),
-                        l_nabla_y_f=jnp.min(test_dfdy['df_d' + key + '_nabla_y_f']),
-                        l_2=jnp.min(test_dfdy['df_d' + key + '_2']),
-                        u_1=jnp.max(test_dfdy['df_d' + key + '_1']),
-                        u_vihp=jnp.max(test_dfdy['df_d' + key + '_vihp']),
-                        u_nabla_x_f=jnp.max(test_dfdy['df_d' + key + '_nabla_x_f']),
-                        u_nabla_y_f=jnp.max(test_dfdy['df_d' + key + '_nabla_y_f']),
-                        u_2=jnp.max(test_dfdy['df_d' + key + '_2']),
-                        l_tot = jnp.min(-jnp.array(dfdy1[key]) + jnp.array(dfdy2[key])),
-                        u_tot = jnp.max(-jnp.array(dfdy1[key]) + jnp.array(dfdy2[key]))
-                    )
-        metric_result_i = f_metric(x_flat_opt, y_dict_current)
+        else:
+            vihp_A_precond = lx.JacobianLinearOperator(
+                grad_x_l_k, 
+                x_flat_opt, args=y_flat,
+                tags=(lx.symmetric_tag)
+            )
         if verbose>0:
-            jax.debug.print('Metric evaluated. {x} = {y}', x=metric_name_i, y=metric_result_i)
+            hess_l_k = jacrev(grad_x_l_k)(x_flat_opt, y_flat)
+            hess_cond = jnp.linalg.cond(hess_l_k)
+            out_dict['hess_cond'] = hess_cond
+            debug.print('Unconstrained Hessian condition number: {x}', x=hess_cond)
+    else:  
+        # When solving a constrained optimization problem, an important source of 
+        # ill-conditioning is that the three terms in l_k can have drastically different
+        # orders of magnitudes. This block of code performs the pre-conditioning.
+        c_k = solve_results['inner_fin_c']
+        mu_k = solve_results['inner_fin_mu']
+        lam_k = solve_results['inner_fin_lam']
+        # The pre-conditioning requires that us treat the three 
+        # terms in l_k separately.
+        def l_k_terms(x, y=y_flat, mu=mu_k, lam=lam_k, c=c_k): 
+        # def l_k_terms_raw(x, y=y_flat, mu=mu_k, lam=lam_k, c=c_k): 
+            f_obj_temp, g_ineq_temp, h_eq_temp, _, _, _ = f_g_ineq_h_eq_from_y(unravel_y(y))
+            f_scaled_temp = lambda x_flat: f_obj_temp(unravel_unscale_x(x_flat))
+            g_scaled_temp = lambda x_flat: g_ineq_temp(unravel_unscale_x(x_flat))
+            h_scaled_temp = lambda x_flat: h_eq_temp(unravel_unscale_x(x_flat))
+            gplus = lambda x, mu, c: jnp.max(jnp.array([g_scaled_temp(x), -mu/c]), axis=0)
+            # gplus = lambda x, mu, c: g_scaled_temp(x)
+            return jnp.array([
+                f_scaled_temp(x),
+                lam@h_scaled_temp(x) + mu@gplus(x, mu, c),
+                c/2 * (
+                    jnp.sum(h_scaled_temp(x)**2) 
+                    + jnp.sum(gplus(x, mu, c)**2)
+                )
+            ])
+        # For calculating grad_y_l_k
+        l_k = lambda x, y=y_flat, mu=mu_k, lam=lam_k, c=c_k: jnp.sum(l_k_terms(x=x, y=y, mu=mu_k, lam=lam_k, c=c_k))
+        # hess_l_k = hessian(l_k)(x_flat_opt)
+        x_flat_precond = x_flat_opt
+        xp_to_x = lambda xp: xp
+        # # ----- Step-1 preconditioning -----
+        # l_k_raw = lambda x, y=y_flat, mu=mu_k, lam=lam_k, c=c_k: jnp.sum(l_k_terms_raw(x=x, y=y, mu=mu_k, lam=lam_k, c=c_k))
+        # hess_l_k_raw = hessian(l_k_raw)(x_flat_opt)
+        # # As the first step of the pre-conditioning, we re-define 
+        # # l_k and l_k_terms under a changed coordinate based 
+        # # on the SVD of l_k's hessian. This reduce rounding error 
+        # # during the autodiff process, and improve the conditioning of 
+        # # all three terms in l_k. 
+        # # First, we generate the coordinate transform.
+        # x_to_xp, xp_to_x = _precondition_coordinate_by_matrix(hess_l_k_raw)
+        # # We replace x_flat with its new definition after pre-conditioning.
+        # # We've already unraveled it before this point, so it's okay to replace
+        # # the variable.
+        # x_flat_precond = x_to_xp(x_flat_opt)
+        # # Redefining l_k and l_k_terms. All autodiff will be done 
+        # # with these instead.
+        # l_k_terms = lambda xp, y=y_flat: l_k_terms_raw(xp_to_x(xp), y=y)
+        # l_k = lambda xp, y: jnp.sum(l_k_terms(xp=xp, y=y))
+        # ----- Step-2 preconditioning -----
+        # An important source of ill-conditioning in Hess(l_k)
+        # is the difference in the three terms' orders of magnitude.
+        # Often, each of these terms are singular by themselves, 
+        # but adds up to a non-singular Hess(l_k).
+        # The goal of pre-conditioning is to 
+        # 1. Sort the three Hessians based on the magnitude of their 
+        # SV's, in ascending order as A, B and C.
+        # 2. Stretch B in directions where it's linearly indep from C.
+        # 3. Stretch A in directions where it's linearly indep from B and C.
+        # Because these are symmetric matrices, 
+        hess_l_k_terms_val = hessian(l_k_terms)(x_flat_precond)
+        hess_l_k = jnp.sum(hess_l_k_terms_val, axis=0)
+        # Symmetrizing
+        hess_l_k_terms_val = 0.5 * (
+            hess_l_k_terms_val
+            + jnp.swapaxes(hess_l_k_terms_val, 1, 2)
+        )
+        # U_i = V_i.
+        # (or U - VH.T = 0)
+        U, s, VH = jnp.linalg.svd(hess_l_k_terms_val)
+        # We use the maximum SV as an estimate of the 
+        # order of magnitude of a matrix
+        s_max = jnp.max(s, axis=1)
+        # A 3 x ndofs boolean array that 
+        # selects singular values bigger than machine 
+        # precision * s_max.
+        s_selection = s>=svtol * s_max[:, None]
+        # We now sort the matrices by their orders of magnitude
+        # We'll refer to the matrices in ascending order as 
+        # A, B, C
+        hess_order = jnp.argsort(s_max)
+        # We first project B's basis' onto C's basis and then remove the projection
+        # from B's basis'. This gives us the "component" of B that are impossible 
+        # to represent with C's basis.
+        A = hess_l_k_terms_val[hess_order[0]]
+        B = hess_l_k_terms_val[hess_order[1]]
+        C = hess_l_k_terms_val[hess_order[2]]
+        VH_A = VH[hess_order[0]]
+        VH_B = VH[hess_order[1]]
+        VH_C = VH[hess_order[2]]
+        s_selection_B = s_selection[hess_order[1]]
+        s_selection_C = s_selection[hess_order[2]]
+        proj_C  = VH_C.T @ (   s_selection_C[:, None] * VH_C)
+        proj_B  = VH_B.T @ (   s_selection_B[:, None] * VH_B)
+        annil_C = VH_C.T @ ((~s_selection_C)[:, None] * VH_C)
+        # annil_C = jnp.identity(len(x_flat_precond)) - proj_C
+        # We now calculate the basis spanned by B abd C combined
+        U_BC, s_BC, VH_BC = jnp.linalg.svd(jnp.concatenate([proj_B, proj_C]))
+        s_BC_selection = s_BC>=svtol * jnp.max(s_BC)
+        # annil_BC and annil_C removes the components spanned by BC and C's basis
+        # proj_BC and proj_C projects a vector in BC and C's basis
+        proj_BC  = VH_BC.T @ (  s_BC_selection [:, None] * VH_BC)
+        annil_BC = VH_BC.T @ ((~s_BC_selection)[:, None] * VH_BC)
+        # This where statement is here in case A (or A and B)'s Hessian is rank-0
+        scale_AC = jnp.where(s_max[hess_order[0]]>0, s_max[hess_order[2]] / s_max[hess_order[0]], 0)
+        scale_BC = jnp.where(s_max[hess_order[1]]>0, s_max[hess_order[2]] / s_max[hess_order[1]], 0)
+        # The appropriate pre-conditioner is:
+        # O \equiv \[\epsilon^-2 (I-P_{BC}) + \epsilon^-1 P_{BC}\](I-P_C) +P_C
+        OC = C
+        OB = scale_BC * proj_BC @ annil_C @ B + proj_C @ B 
+        OA = (
+            scale_AC * annil_BC @ annil_C @ A
+            + scale_BC * proj_BC @ annil_C @ A
+            + proj_C @ A
+        )
+        Ohess = OA + OB + OC
+        
+        vihp_A_raw = lx.MatrixLinearOperator(hess_l_k)
+        vihp_A_precond = lx.MatrixLinearOperator(Ohess)
+        if verbose>0:
+            hess_rank = jnp.linalg.matrix_rank(A + B + C)
+            Ohess_rank = jnp.linalg.matrix_rank(OA + OB + OC)
+            hess_cond = jnp.linalg.cond(A + B + C)
+            Ohess_cond = jnp.linalg.cond(OA + OB + OC)
+            # out_dict['hess_cond'] = hess_cond
+            # out_dict['hess_cond_preconditioned'] = Ohess_cond
+            debug.print(
+                'Info on Hessian terms (unsorted)\n'\
+                '    Rank of term 1, 2 and 3: {a1}\n'\
+                '    Max sv of 1, 2 and 3: {a2}\n'\
+                'Info on Hessian terms (sorted)\n'\
+                '    Rank of A, B and C: {a}\n'\
+                '    Max sv of A, B and C: {aa}\n'\
+                '    Rank of OA, OB and OC: {b}\n'\
+                '    scale_AC and scale_BC: {bb}\n'\
+                '    Rank of proj_BC and annil_BC: {c}\n'\
+                '    Rank of proj_C  and annil_C:  {d}\n'\
+                '    Constrained Hessian rank and condition number, before pre-conditioning: {x}, {x1}\n'\
+                '    Constrained Hessian rank and condition number, after pre-conditioning:  {y}, {y1}', 
+                a1=jnp.linalg.matrix_rank(hess_l_k_terms_val),
+                a2=s_max,
+                a=jnp.sum(s_selection[hess_order], axis=1),
+                aa=s_max[hess_order],
+                b=(jnp.linalg.matrix_rank(OA), jnp.linalg.matrix_rank(OB), jnp.linalg.matrix_rank(OC)),
+                bb=(scale_AC, scale_BC),
+                c=(jnp.linalg.matrix_rank(proj_BC), jnp.linalg.matrix_rank(annil_BC)),
+                d=(jnp.linalg.matrix_rank(proj_C), jnp.linalg.matrix_rank(annil_C)),
+                x=hess_rank,
+                y=Ohess_rank,
+                x1=hess_cond,
+                y1=Ohess_cond
+            )
+    grad_y_l_k = jacrev(l_k, argnums=1)
+    grad_y_l_k_for_hess = lambda x: grad_y_l_k(x, y_flat)
+    for metric_name_i in metric_name:
+        f_metric = lambda xp, y: get_quantity(metric_name_i)(
+            y_to_qp(unravel_y(y)), 
+            unravel_unscale_x(xp_to_x(xp))
+        )
+        grad_x_f = jacrev(f_metric, argnums=0)(x_flat_precond, y_flat)
+        grad_y_f = jacrev(f_metric, argnums=1)(x_flat_precond, y_flat)
+        if unconstrained:
+            vihp = lx.linear_solve(
+                vihp_A_precond, # should be .T but hessian is symmetric 
+                grad_x_f,
+            ).value
+        else:
+            vihp_b = (
+                scale_AC * annil_BC @ annil_C @ grad_x_f
+                + scale_BC * proj_BC @ annil_C @ grad_x_f
+                + proj_C @ grad_x_f
+            )
+            # TODO
+            # It is somewhat hard to tell whether pre-conditioning 
+            # improves accuracy or introduces additional error 
+            # just from A and b. Therefore, we compute both with
+            # and without pre-conditioning, and pick the option with 
+            # the less error. Is there a way to improve this?
+            vihp_raw = lx.linear_solve(
+                vihp_A_raw, # should be .T but hessian is symmetric 
+                grad_x_f,
+                solver=implicit_linear_solver
+            ).value
+            vihp_precond = lx.linear_solve(
+                vihp_A_precond, # should be .T but hessian is symmetric 
+                vihp_b,
+                solver=implicit_linear_solver
+            ).value
+            hess_err = jnp.linalg.norm(hess_l_k @ vihp_raw - grad_x_f)
+            Ohess_err = jnp.linalg.norm(hess_l_k @ vihp_precond - grad_x_f)
+            vihp = jnp.where(hess_err < Ohess_err, vihp_raw, vihp_precond)
+            
+        # Now we calculate df/dy using vjp
+        # \grad_{x_k} f [-H(l_k, x_k)^-1 \grad_{x_k}\grad_{y} l_k]
+        # Primal and tangent must be the same shape
+        _, dfdy1 = jvp(grad_y_l_k_for_hess, primals=[x_flat_precond], tangents=[vihp])
+        # \grad_{y} f
+        dfdy2 = grad_y_f
+        dfdy_arr = -dfdy1 + dfdy2
+        dfdy_dict = {f"df_d{key}": value for key, value in unravel_y(dfdy_arr).items()}
+        metric_result_i = f_metric(x_flat_precond, y_flat)
+        if verbose>0:
+            debug.print(
+                '* Metric evaluated.\n'\
+                '    {x} = {y}\n'\
+                '    VIHP error without pre-conditioning: {a}\n'\
+                '    VIHP error with pre-conditioning:    {b}',
+                x=metric_name_i, 
+                y=metric_result_i,
+                a=hess_err,
+                b=Ohess_err,
+            )
         out_dict[metric_name_i] = {
             'value': metric_result_i, 
-            'grad': dfdy
-        }
+            'grad': dfdy_dict,
+        }     
+        if verbose>0:
+            out_dict[metric_name_i]['hess_rank'] = hess_rank
+            out_dict[metric_name_i]['Ohess_rank'] = Ohess_rank
+            out_dict[metric_name_i]['hess_cond'] = hess_cond
+            out_dict[metric_name_i]['Ohess_cond'] = Ohess_cond
+            out_dict[metric_name_i]['hess_err'] = hess_err
+            out_dict[metric_name_i]['Ohess_err'] = Ohess_err
     return(out_dict, qp, dofs_opt, solve_results)
 
+def _choose_fwd_rev(func, n_in, n_out, argnums):
+    '''
+    Choosing forward or reverse-mode AD based on the input and 
+    output size of a function.
+    '''
+    if n_out > n_in:
+        out = jacfwd(func, argnums=argnums)
+    else:
+        out = jacrev(func, argnums=argnums)
+    return out
 
+def _precondition_coordinate_by_matrix(hess):
+    '''
+    Takes a symmetric matrix hess, calculates its SVD, 
+    and returns two coordinate transform function, 
+    x_to_xp and xp_to_x, so that 
+    hess(f(x')) is more well-behaved than hess(f(x)).
+    '''
+    _, sv, basis = jnp.linalg.svd(hess)
+    scale = jnp.sqrt(sv)
+    x_to_xp = lambda x: (basis @ x) * scale
+    xp_to_x = lambda xp: basis.T @ (xp / scale)
+    return x_to_xp, xp_to_x

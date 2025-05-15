@@ -142,6 +142,9 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
         # DEBUG 
         param2 = dx + params
         dx1 = param2 - params
+        dx_norm = jnp.linalg.norm(dx)
+        du_norm = jnp.linalg.norm(du)
+        params_norm = jnp.linalg.norm(params)
         if verbose>2:
             jax.debug.print(
                 'INNER: L: {l}, dx: {dx}, du: {du}, df: {df}, \n'\
@@ -149,7 +152,7 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
                 '    grad:{g}, grad/g0:{gnorm}\n'\
                 '    Stopping criteria - (err > gtol): {a},(dx > xstop or du > xstop): {b},(df > fstop): {c}',
                 a=(err > gtol), #  * g0_norm) # TOLERANCE SCALING! MAY NEED CHANGING!
-                b=(jnp.any(dx > xstop * params) | jnp.any(du > xstop * params)),
+                b=((dx_norm > xstop * params_norm) | (du_norm > xstop * params_norm)),
                 c=(df > fstop),
                 l=value,
                 dx=jnp.max(dx),
@@ -162,7 +165,7 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
         return (iter_num == 0) | (
             (iter_num < maxiter) 
             & (err > gtol) 
-            & (jnp.any(dx > xstop * params) | jnp.any(du > xstop * params))
+            & ((dx_norm > xstop * params_norm) | (du_norm > xstop * params_norm))
             & (df > fstop * value) 
         )
     final_params, final_updates, final_value, final_dx, final_du, final_df, final_state = while_loop(
@@ -186,23 +189,26 @@ def solve_constrained(
         # No constraints by default
         c_init=1.,
         c_growth_rate=1.1,
-        lam_init=jnp.zeros(1),
-        h_eq=lambda x:jnp.zeros(1),
-        mu_init=jnp.zeros(1),
-        g_ineq=lambda x:jnp.zeros(1),
+        lam_init=jnp.zeros(0),
+        h_eq=lambda x:jnp.zeros(0),
+        mu_init=jnp.zeros(0),
+        g_ineq=lambda x:jnp.zeros(0),
         xstop_outer=1e-7, # convergence rate tolerance
-        gtol_outer=1e-7, # gradient tolerance
-        ctol_outer=1e-7, # constraint tolerance
+        # gtol_outer=1e-7, # gradient tolerance
+        ctol_outer=1e-7, # constraint tolerance, used in multiplier update
         fstop_inner=1e-7,
         xstop_inner=1e-7,
         gtol_inner=1e-7,
+        fstop_inner_last=1e-7,
+        xstop_inner_last=1e-7,
+        gtol_inner_last=1e-7,
         maxiter_tot=10000,
         maxiter_inner=500,
         # # Uses jax.lax.scan instead of while_loop.
         # # Enables history and forward diff but disables 
         # # convergence test.
         verbose=0,
-        c_k_safe=1e6
+        c_k_safe=1e9
     ):
     r'''
     Solves the constrained optimization problem:
@@ -319,7 +325,8 @@ def solve_constrained(
     # True when non-convergent.
     # @jit
     def outer_convergence_criterion(dict_in):
-        # x_k = dict_in['inner_fin_x']
+        x_k = dict_in['inner_fin_x']
+        x_norm = jnp.linalg.norm(x_k)
         # lam_k = dict_in['inner_fin_lam']
         # mu_k = dict_in['inner_fin_mu']
         # grad_l = dict_in['outer_grad_l']
@@ -343,7 +350,7 @@ def solve_constrained(
                 # )
                 # Stop if the iteration convergence 
                 # rate falls below the stopping criterion
-                & (outer_dx >= xstop_outer)
+                & (outer_dx >= xstop_outer * x_norm)
                 # KKT criterion, P321 of Nocedal
                 # & (
                 #     KKT1 
@@ -453,7 +460,7 @@ def solve_constrained(
                 '    Stopping criterion 2: {b}\n'\
                 '        outer_dx    = {outer_dx}\n'\
                 '        xstop_outer = {xstop_outer}\n'\
-                '    grad_l_val: {x}, d_grad_l_val: {dx}\n'\
+                # '    grad_l_val: {x}, d_grad_l_val: {dx}\n'\
                 '    inner iter #: {z}\n'\
                 '    c_k: {c_k}',
                 # ga=jnp.linalg.norm(grad_f_val),
@@ -463,27 +470,27 @@ def solve_constrained(
                 # gtol_outer=gtol_outer,
                 # ctol_outer=ctol_outer,
                 f=f_k,
-                gmin=jnp.min(g_k),
-                gmax=jnp.max(g_k),
-                gpmin=jnp.min(gp_k),
-                gpmax=jnp.max(gp_k),
-                hmin=jnp.min(h_k),
-                hmax=jnp.max(h_k),
+                gmin=_print_min_blank(g_k),
+                gmax=_print_max_blank(g_k),
+                gpmin=_print_min_blank(gp_k),
+                gpmax=_print_max_blank(gp_k),
+                hmin=_print_min_blank(h_k),
+                hmax=_print_max_blank(h_k),
                 c_k=c_k,
-                x=jnp.linalg.norm(grad_l_val),
-                mu1=jnp.min(mu_k),
-                mu2=jnp.max(mu_k),
-                lam1=jnp.min(lam_k),
-                lam2=jnp.max(lam_k),
-                dx=jnp.linalg.norm(d_grad_l_val),
-                # xx=jnp.linalg.norm(grad_f_val),
+                # x=jnp.linalg.norm(grad_l_val),
+                mu1=_print_min_blank(mu_k),
+                mu2=_print_max_blank(mu_k),
+                lam1=_print_min_blank(lam_k),
+                lam2=_print_max_blank(lam_k),
+                # dx=jnp.linalg.norm(d_grad_l_val),
+                xx=jnp.linalg.norm(grad_f(x_k)),
                 xg=jnp.linalg.norm(grad_g(x_k)),
                 xh=jnp.linalg.norm(grad_h(x_k)),
                 z=niter_inner_k,
                 tot_niter=dict_in['tot_niter']+niter_inner_k,
                 maxiter_tot=maxiter_tot,
                 outer_dx=jnp.linalg.norm(x_k - x_km1),
-                xstop_outer=xstop_outer,
+                xstop_outer=xstop_outer * jnp.linalg.norm(x_k),
                 b=(jnp.linalg.norm(x_k - x_km1) >= xstop_outer),
 
             )
@@ -550,9 +557,16 @@ def solve_constrained(
         init_val=init_dict,
     )
     # Apply tight tolerance in the last iteration
-    # result_dict = body_fun_augmented_lagrangian(
-    #     result_dict, 
-    #     fstop_inner=0.,
-    #     xstop_inner=0.,
-    # )
+    result_dict = body_fun_augmented_lagrangian(
+        result_dict, 
+        gtol_inner=gtol_inner_last, 
+        fstop_inner=fstop_inner_last, 
+        xstop_inner=xstop_inner_last
+    )
     return(result_dict)# Changes in f, g, h between the kth and k-1th iteration
+
+def _print_min_blank(a):
+    jnp.min(a) if a.size > 0 else jnp.nan
+
+def _print_max_blank(a):
+    jnp.max(a) if a.size > 0 else jnp.nan

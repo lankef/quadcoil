@@ -1,6 +1,11 @@
 import jax.numpy as jnp
 import numpy as np # Don't panic, it's for type checking
 from jax import jit
+from jax.tree_util import tree_reduce
+def tree_len(pytree):
+    return tree_reduce(
+        lambda acc, leaf: acc + jnp.atleast_1d(leaf).size, pytree, initializer=0
+    )
 
 def is_ndarray(arr, n=1):
     return isinstance(arr, (np.ndarray, jnp.ndarray)) and arr.ndim == 1
