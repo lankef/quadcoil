@@ -1,6 +1,6 @@
 import unittest
-from quadcoil import get_quantity, merge_callables, parse_objectives, parse_constraints
-from quadcoil.wrapper import _add_quantity
+from quadcoil import get_quantity, merge_callables
+from quadcoil.wrapper import _add_quantity, _parse_objectives, _parse_constraints
 from quadcoil.quantity import f_B, f_K, K_dot_grad_K, f_B_normalized_by_Bnormal_IG, Phi
 import jax.numpy as jnp
 import numpy as np
@@ -51,7 +51,7 @@ class QuadcoilWrapperTest(unittest.TestCase):
         self.assertTrue(result.shape[0]==104)
 
     @unittest.skipIf(not CPF_AVAILABLE, "Skipping constraint parser test, simsopt.field.CurrentPotentialFourier unavailable.")
-    def test_parse_constraints(self):
+    def test__parse_constraints(self):
         dofs = {'phi': cp.get_dofs()}
         # We test the constraints using f_K and K_dot_grad_K
         f_K_ans = f_K(qp, dofs)
@@ -60,7 +60,7 @@ class QuadcoilWrapperTest(unittest.TestCase):
         pert_KK = (np.random.random(KK_ans.shape)-0.5) * jnp.max(jnp.abs(KK_ans))
         unit_f_K = 114
         unit_KK = 514
-        g_ineq_test, h_eq_test, aux_dofs = parse_constraints(
+        g_ineq_test, h_eq_test, aux_dofs = _parse_constraints(
             # A list of function names in quadcoil.objective.
             constraint_name = ['f_K', 'K_dot_grad_K', 'K_dot_grad_K'], 
             # A list of strings from ">=", "<=", "==".
@@ -85,7 +85,7 @@ class QuadcoilWrapperTest(unittest.TestCase):
     @unittest.skipIf(not CPF_AVAILABLE, "Skipping quantity scaling test, simsopt.field.CurrentPotentialFourier unavailable.")
     def test_add_quantity_and_scaling(self):
         # Testing a simple quantity first\
-        dofs = {'phi': cp.get_dofs(), 'max_Phi': 66.}
+        dofs = {'phi': cp.get_dofs(), 'scaled_max_phi': 66.}
         (
             val_scaled,
             g_ineq_list_scaled,
@@ -103,8 +103,9 @@ class QuadcoilWrapperTest(unittest.TestCase):
             unit_callable,
             aux_dofs
         ) = _add_quantity('f_max_Phi', test_unit, 'f')
-        print(val_scaled(qp, dofs))
-        self.assertTrue(compare(val_scaled(qp, dofs), dofs['max_Phi']/test_unit))
+        print('val_scaled(qp, dofs)', val_scaled(qp, dofs))
+        print('should be', dofs['scaled_max_phi']/test_unit)
+        self.assertTrue(compare(val_scaled(qp, dofs), dofs['scaled_max_phi']))
         
     
     @unittest.skipIf(not CPF_AVAILABLE, "Skipping objective parser test, simsopt.field.CurrentPotentialFourier unavailable.")
@@ -114,11 +115,11 @@ class QuadcoilWrapperTest(unittest.TestCase):
         test_unit = 1.
 
         # Testing a simple objective without aux vars and constraints
-        f_B_test, _, _, _ = parse_objectives('f_B')
+        f_B_test, _, _, _ = _parse_objectives('f_B')
         self.assertTrue(compare(f_B_test(qp, dofs), f_B_normalized_by_Bnormal_IG(qp, dofs)))
 
         # Testing 2 simple objectives without aux vars and constraints
-        f_BK_test, g_empty, h_empty, aux_empty = parse_objectives(['f_B', 'f_K'], (None, 1.), jnp.array([114, test_weight]))
+        f_BK_test, g_empty, h_empty, aux_empty = _parse_objectives(['f_B', 'f_K'], (None, 1.), jnp.array([114, test_weight]))
         self.assertTrue(g_empty==[])
         self.assertTrue(h_empty==[])
         self.assertTrue(aux_empty=={})
@@ -128,8 +129,8 @@ class QuadcoilWrapperTest(unittest.TestCase):
         ))
 
         # Test a simple objective and a l-inf one
-        dof1 = {'phi': cp.get_dofs(), 'max_Phi': 33}
-        f_1_test, g_1, h_1, aux_1 = parse_objectives(
+        dof1 = {'phi': cp.get_dofs(), 'scaled_max_phi': 33}
+        f_1_test, g_1, h_1, aux_1 = _parse_objectives(
             ['f_B', 'f_max_Phi'], 
             (None, test_unit), 
             jnp.array([17., test_weight])
@@ -139,18 +140,29 @@ class QuadcoilWrapperTest(unittest.TestCase):
         self.assertTrue(f_1_test(qp, dof1) == test_weight * 33 + 17 * f_B_normalized_by_Bnormal_IG(qp, dof1))
         # It creates one auxiliary constraint: 
         # g = [
-        #     g_+ = ( Phi_grid - p)/unit <= 0
-        #     g_- = (-Phi_grid - p)/unit <= 0
+        #     g_+ =  Phi_grid/unit - p <= 0
+        #     g_- = -Phi_grid/unit - p <= 0
         # ]
+        print('g_1', g_1)
         g_aux = g_1[0](qp, dof1)
+        print('g_aux', g_aux)
         g_plus = g_aux[0]
         g_minus = g_aux[1]
         Phi_val = Phi(qp, dofs)
         self.assertTrue(len(g_1) == 1)
         self.assertTrue(g_aux.shape == tuple([2] + list(Phi_val.shape)))
         self.assertTrue(h_1 == [])
-        self.assertTrue(compare(g_plus * test_unit + 33, Phi_val))
-        self.assertTrue(compare(g_minus * test_unit + 33, -Phi_val))
-
+        self.assertTrue(compare((g_plus + 33) * test_unit, Phi_val))
+        self.assertTrue(compare((g_minus + 33) * test_unit, -Phi_val))
+        # Testing the L-1 objective
+        phi_random = np.random.random((len(qp.quadpoints_phi), len(qp.quadpoints_theta)))+2
+        phi_l1 = qp.eval_surface.integrate(phi_random)*qp.nfp
+        dof1 = {'phi': cp.get_dofs(), 'scaled_abs_phi': phi_random}
+        f_2_test, g_2, h_2, aux_2 = _parse_objectives(
+            ['f_B', 'f_l1_Phi'], 
+            (None, test_unit), 
+            jnp.array([17., test_weight])
+        )
+        self.assertTrue(f_2_test(qp, dof1) == test_weight * phi_l1 + 17 * f_B_normalized_by_Bnormal_IG(qp, dof1))
 if __name__ == "__main__":
     unittest.main()
