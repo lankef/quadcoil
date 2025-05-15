@@ -1,10 +1,13 @@
-from . import objective
+import quadcoil.quantity
+from quadcoil.quantity.quantity import _Quantity
 import jax.numpy as jnp
+from jax import jit
+from functools import partial
 
-def get_objective(func_name: str):
+def get_quantity(func_name: str):
     r'''
     Takes a string as input and returns the function with the 
-    same name in ``quadcoil.objective``.
+    same name in ``quadcoil.quantity``.
     throws an error if a function with the same name cannot be found.
     Used to parse ``str`` in ``quadcoil.quadcoil``.
 
@@ -16,17 +19,20 @@ def get_objective(func_name: str):
     Returns
     -------
     callable
-        A callable with the same name in ``quadcoil.objective``.
+        A callable with the same name in ``quadcoil.quantity``.
     '''
     
-    if hasattr(objective, func_name):
-        func = getattr(objective, func_name)
-        if callable(func):
+    if hasattr(quadcoil.quantity, func_name):
+        func = getattr(quadcoil.quantity, func_name)
+        if isinstance(func, _Quantity):
             return func
         else:
-            raise ValueError(f"'{func_name}' exists in quadcoil.objective but is not callable.")
+            raise ValueError(
+                f'\'{func_name}\' exists in quadcoil.quantity but is '\
+                'not properly implemented as an instance of _Quantity. '\
+                f'Instead, it\'s of type: {str(func)}')
     else:
-        raise ValueError(f"Function with name '{func_name}' not found in quadcoil.objective.")
+        raise ValueError(f'\'{func_name}\' not found in quadcoil.quantity.')
 
 def merge_callables(callables):
     r'''
@@ -45,20 +51,117 @@ def merge_callables(callables):
     callable
         A callable that returns a 1D ``array``
     '''
-    def merged_fn(qp, cp_mn):
-        outputs = [fn(qp, cp_mn) for fn in callables]
+    def merged_fn(qp, dofs):
+        outputs = []
+        for fn in callables:
+            if fn is not None:
+                outputs.append(fn(qp, dofs))
         # Convert scalars to 1D arrays
         outputs = [jnp.atleast_1d(out) for out in outputs]
         # Flatten any array outputs
         outputs = [out.ravel() for out in outputs]
         # Concatenate into a single 1D array
         if len(outputs) == 0:
-            return jnp.zeros(1)
+            return jnp.zeros(0)
         return jnp.concatenate(outputs, axis=0)
     
-    return merged_fn
+    return jit(merged_fn)
+
+def _add_quantity(name, unit, use_case):
+    '''
+    Finds a quantity from quadcoil.quantity, unpacks and scales it. 
+    Also checks compatibility.
+
+    Parameters
+    ----------  
+    objective_name : str 
+        The name of the quantity to find
+    unit : scalar or None 
+        The unit of the quantity
+    scaled_aux_dofs : dict{str: None, Tuple or Callable}
+        The accumulator.
+    use_case : str
+        The current type of use case (``'f'``, ``'=='``, ``'<='`` or ``'>='``).
+
+    Returns
+    -------
+    scaled_c2_impl : Callable
+        The "under-the-hood" implementation of the quantity
+    g_ineq, h_eq : List[Callable]
+        The list of inequality and equality constraints.
+    unit_callable : Callable(qp: QuadcoilParams)
+        The unit as a Callable, in case the scaling factor of the quantity 
+        need to be used later, and the scaling mode is set to ``None``.
+        The only place where this is currently used is constraint value scaling. 
+    scaled_aux_dofs : dict{str: None, Tuple or Callable}
+        The accumulator after adding auxiliary variables.
+    '''
+    quantity = get_quantity(name)
+    scaled_c2_impl = quantity.scaled_c2_impl
+    scaled_g_ineq_impl = quantity.scaled_g_ineq_impl
+    scaled_h_eq_impl = quantity.scaled_h_eq_impl
+    scaled_aux_dofs = quantity.scaled_aux_dofs_init
+    compatibility = quantity.compatibility
+    # Checking compatibility
+    if use_case not in compatibility:
+        if use_case == 'f':
+            raise ValueError(f'{name} cannot be used as an objective term.')
+        elif use_case in ['<=', '==', '>=']:
+            raise ValueError(f'{name} cannot be used in a {use_case} constraint.')
+        else:
+            raise ValueError(f'{use_case} is not a valid type of constraint.')
+    # Perform scaling
+    # When the unit of a quantity is left blank,
+    # automatically scale that quantity by its value
+    # with only net poloidal/toroidal currents.
+    # To accommodate this with the shortest amount of code,
+    # we make unit a callable regardless it's a scalar or None.
+    if unit is None:
+        c0_impl = quantity.c0_impl
+        unit_callable = lambda qp: c0_impl(qp, {'phi': jnp.zeros(qp.ndofs)})
+    elif jnp.isscalar(unit):
+        unit_callable = lambda qp: unit
+    else:
+        raise TypeError(
+            f'Unit for {name} has incorrect type. The supported '\
+            f'types are scalar and None. The provided value is a {type(unit)}.'
+        )
+    # Apply units (now known) to a function with signature 
+    # Callable(qp: QuadcoilParams, dofs: dict, unit: float)
+    def apply_unit(fun, unit_callable=unit_callable):
+        return lambda qp, dofs, fun=fun, unit_callable=unit_callable:\
+            fun(qp, dofs, unit=unit_callable(qp))
+        
+    # Scaling value
+    val_scaled = apply_unit(scaled_c2_impl)
     
-def parse_objectives(objective_name, objective_unit=None, objective_weight=None): 
+    # Scaling auxiliary variables' initial values
+    scaled_aux_dofs_out = {}
+    if not (scaled_aux_dofs is None):
+        # We loop over all auxiliary variables' init function, 
+        # and substitute in the value of unit with the presently known value.
+        for key in scaled_aux_dofs:
+            scaled_aux_dofs_new = apply_unit(scaled_aux_dofs[key])
+            scaled_aux_dofs_out[key] = scaled_aux_dofs_new
+    # Scaling g and h
+    if scaled_g_ineq_impl is not None:
+        g_ineq_list_scaled = [apply_unit(scaled_g_ineq_impl)]
+    else:
+        g_ineq_list_scaled = []
+    if scaled_h_eq_impl is not None:
+        h_eq_list_scaled = [apply_unit(scaled_h_eq_impl)]
+    else:
+        h_eq_list_scaled = []
+    return (
+        val_scaled,
+        g_ineq_list_scaled,
+        h_eq_list_scaled,
+        unit_callable,
+        scaled_aux_dofs_out
+    )
+
+
+def _parse_objectives(objective_name, objective_unit=None, objective_weight=1.): 
     r'''
     Parses a tuple of ``str`` quantities names (or a single ``str`` for one objective only), 
     an array of weights, and a tuple of units into a ``callable`` 
@@ -82,46 +185,49 @@ def parse_objectives(objective_name, objective_unit=None, objective_weight=None)
     f_tot : callable(QuadcoilParams, ndarray)
         The weighted objective function that maps a QuadcoilParams 
         and an array of :math:`\Phi_{sv}` Fourier coefficients into a scalar.
+    g_list : List[Callable or None]
+    h_list : List[Callable or None]
+    scaled_aux_dofs : dict{str: None, Tuple or Callable}
     '''
     if isinstance(objective_name, str):
-        def f_tot(
-            a, b, 
-            objective_name=objective_name, 
+        objective_name = (objective_name,)
+        objective_unit = (objective_unit,)
+        objective_weight = jnp.array([1.,])
+    if len(objective_name) != len(objective_weight): # or len(objective_name) != len(objective_unit):
+        raise ValueError('objective, objective_weight and objective_unit must have the same length.')
+    scaled_aux_dofs = {}
+    f_list = []
+    g_list = []
+    h_list = []
+    for i in range(len(objective_name)):
+        (
+            val_scaled,
+            g_ineq_list_scaled,
+            h_eq_list_scaled,
+            _,
+            scaled_aux_dofs_i,   
+        ) = _add_quantity(
+            name=objective_name[i],
+            unit=objective_unit[i],
+            use_case='f',
+        )
+        scaled_aux_dofs = scaled_aux_dofs | scaled_aux_dofs_i
+        f_list.append(val_scaled)
+        g_list = g_list + g_ineq_list_scaled
+        h_list = h_list + h_eq_list_scaled
+    def f_tot(
+            qp, dofs, 
+            f_list=f_list, 
             objective_unit=objective_unit, 
             objective_weight=objective_weight
         ):
-            if objective_unit is None:
-                # If a normalization unit is not provided, automatically 
-                # normalize by the value of the objective with 
-                # only the constant net poloidal and toroidal currents.
-                objective_unit = jnp.abs(get_objective(objective_name)(a, jnp.zeros_like(b)))
-            if objective_weight is None:
-                objective_weight=1.
-            return get_objective(objective_name)(a, b) * objective_weight / objective_unit
-        return(f_tot)
-    else:
-        if len(objective_name) != len(objective_weight): # or len(objective_name) != len(objective_unit):
-            raise ValueError('objective, objective_weight and objective_unit must have the same length.')
-        def f_tot(
-                a, b, 
-                objective_name=objective_name, 
-                objective_unit=objective_unit, 
-                objective_weight=objective_weight
-            ):
-            out = 0
-            for i in range(len(objective_name)):
-                if objective_unit[i] is None:
-                    # If a normalization unit is not provided, automatically 
-                    # normalize by the value of the objective with 
-                    # only the constant net poloidal and toroidal currents.
-                    objective_unit_i = get_objective(objective_name[i])(a, jnp.zeros_like(b))
-                else:
-                    objective_unit_i = objective_unit[i]
-                out = out + get_objective(objective_name[i])(a, b) * objective_weight[i] / objective_unit_i
-            return out
-        return f_tot
+        out = 0
+        for i in range(len(f_list)):
+            out = out + f_list[i](qp, dofs) * objective_weight[i]
+        return out
+    return jit(f_tot), g_list, h_list, scaled_aux_dofs
 
-def parse_constraints(
+def _parse_constraints(
     constraint_name, 
     constraint_type, 
     constraint_unit, 
@@ -146,13 +252,14 @@ def parse_constraints(
         An array of constraint thresholds.
 
     Returns
-    -------
-    g_ineq : callable(QuadcoilParams, ndarray)
-        A ``callable`` for the inequality constraints. Returns will be 
+    -------    
+    g_list : List[Callable or None]
+    h_list : List[Callable or None]
+        A list of ``Callable`` for the inequality/equality constraints. Returns will be 
         greater than 0 when the constraints are violated.
-    h_eq : callable(QuadcoilParams, ndarray)
-        A ``callable`` for the equality constraints. Returns will be 
-        non-zero when the constraints are violated.
+    scaled_aux_dofs : dict{str: None, Tuple or Callable}
+        A dictionary containing the shapes of the auxiliary variables, or the \
+        ``Callables`` required to calculate them
     '''
     # Outputs g_ineq and h_ineq for the augmented lagrangian solver:
     # min f(x)
@@ -172,53 +279,58 @@ def parse_constraints(
     # that maps (QuadcoilParams, cp_mn)
     # to arrays or scalars
     # that are =0 or <=0 when the constraint is satisfied. 
-    scaled_g_ineq_terms = []
-    scaled_h_eq_terms = []
+    g_ineq_list = []
+    h_eq_list = []
+    g_num = 0
+    h_num = 0
+    scaled_aux_dofs = {}
     for i in range(n_cons_total):
-        # Catch empty constraints! When constraint name is an
-        # empty string, the corresponding elements in 
-        # constraint_type, constraint_value, constraint_unit
-        # will all be ignored. We implemented this special behavior 
-        # because DESC.objective.objective_funs._Objective
-        # does not permit empty tuples, static or traced.
-        if not constraint_name[i]:
-            continue
-        cons_func_i = get_objective(constraint_name[i])
         cons_type_i = constraint_type[i]
-        cons_val_i = constraint_value[i]
         cons_unit_i = constraint_unit[i]
+        cons_val_i = constraint_value[i]
+        (
+            cons_func_i_scaled,
+            aux_g_ineq_i_scaled,
+            aux_h_eq_i_scaled,
+            unit_callable_i,
+            scaled_aux_dofs_i
+        ) = _add_quantity(
+            name=constraint_name[i],
+            unit=constraint_unit[i],
+            use_case=cons_type_i,
+        )
+        scaled_aux_dofs = scaled_aux_dofs | scaled_aux_dofs_i
+        g_ineq_list = g_ineq_list + aux_g_ineq_i_scaled
+        h_eq_list = h_eq_list + aux_h_eq_i_scaled
         # Flipping the sign of >= constraints.
         if cons_type_i == '>=':
             sign_i = -1
         else:
             sign_i = 1
         # This is the proper way to generate a list of 
-        # callable without running into the objective_weightbda reference 
+        # callable without running into the lambda reference 
         # issue.
         def cons_func_centered_i(
-                a, b, 
-                cons_func_i=cons_func_i, 
-                cons_unit_i=cons_unit_i, 
+                qp, dofs, 
+                cons_func_i_scaled=cons_func_i_scaled, 
                 cons_val_i=cons_val_i,
+                unit_callable_i=unit_callable_i,
                 sign=sign_i
             ): 
-            # When the unit of a quantity is left blank,
-            # automatically scale that quantity by its value
-            # with only net poloidal/toroidal currents.
-            if cons_unit_i is None:
-                cons_unit_i = jnp.max(jnp.abs(cons_func_i(a, jnp.zeros_like(b))))
             # Scaling and centering constraints
-            return sign * (cons_func_i(a, b) - cons_val_i) / cons_unit_i
+            return sign * (cons_func_i_scaled(qp, dofs) - cons_val_i/unit_callable_i(qp))
         # Creating a list of function in h and g.
         if cons_type_i == '==':
-            scaled_h_eq_terms.append(cons_func_centered_i)
+            h_eq_list.append(cons_func_centered_i)
         elif cons_type_i in ['<=', '>=']:
-            scaled_g_ineq_terms.append(cons_func_centered_i)
+            g_ineq_list.append(cons_func_centered_i)
         else:
             raise ValueError('Constraint type can only be \"<=\", \">=\", or \"==\"')
     
-    # Merging the list of function into one 
-    # callable for both g and h.
-    g_ineq = merge_callables(scaled_g_ineq_terms)
-    h_eq = merge_callables(scaled_h_eq_terms)
-    return g_ineq, h_eq
+    # # Merging the list of function into one 
+    # # callable for both g and h.
+    # # merge_callables already contains jit.
+    # g_ineq = merge_callables(g_ineq_list)
+    # h_eq = merge_callables(h_eq_list)
+    return g_ineq_list, h_eq_list, scaled_aux_dofs
+    

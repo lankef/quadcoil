@@ -9,11 +9,13 @@ QUADCOIL represents a sheet current approximating a coil set, :math:`\mathbf{K}`
 with a "current potential" :math:`\Phi`:
 
 .. math::
+
    \mathbf{K} = \hat{\mathbf{n}} \cdot \nabla \Phi.
 
 :math:`\Phi` can be split into 3 parts:
 
 .. math::
+   
    \Phi = \Phi_{sv} + \frac{G\phi'}{2\pi} + \frac{I\theta'}{2\pi}
 
 The first term represents contributions from a "single-valued" component, :math:`\Phi_{sv}`. 

@@ -1,0 +1,4 @@
+docs/_build/
+*.pyc
+src/quadcoil.egg-info/
+__pycache__/

@@ -6,42 +6,42 @@ This package handles plotting, file input/output, and provides interfaces for DE
 Submodules
 ----------
 
-quadcoil.plotting module
+quadcoil.io.plotting module
 ---------------------------
 
-.. automodule:: quadcoil.plotting
+.. automodule:: quadcoil.io.plotting
    :members:
    :show-inheritance:
    :undoc-members:
 
-quadcoil.file module
+quadcoil.io.file module
 ---------------------------
 
-.. automodule:: quadcoil.file
+.. automodule:: quadcoil.io.file
    :members:
    :show-inheritance:
    :undoc-members:
 
-quadcoil.simsopt module
+quadcoil.io.simsopt module
 ---------------------------
 
-.. automodule:: quadcoil.simsopt
+.. automodule:: quadcoil.io.simsopt
    :members:
    :show-inheritance:
    :undoc-members:
 
-quadcoil.desc module
+quadcoil.io.desc module
 ---------------------------
 
-.. automodule:: quadcoil.desc
+.. automodule:: quadcoil.io.desc
    :members:
    :show-inheritance:
    :undoc-members:
 
-quadcoil.jax module
+quadcoil.io.jax module
 ---------------------------
 
-.. automodule:: quadcoil.jax
+.. automodule:: quadcoil.io.jax
    :members:
    :show-inheritance:
    :undoc-members:

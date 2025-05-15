@@ -1,8 +1,8 @@
 import unittest
 from quadcoil import quadcoil
-from quadcoil.io import quadcoil_for_diff
+from quadcoil.io import gen_quadcoil_for_diff
 import jax.numpy as jnp
-from jax import grad
+from jax import grad, jit
 from load_test_data import load_data, compare
 
 
@@ -30,6 +30,18 @@ class QuadcoilDESCTest(unittest.TestCase):
             # Set the output metrics to f_B and f_K
             metric_name=('f_B', 'f_K')
         )
+        _, quadcoil_for_diff = gen_quadcoil_for_diff(
+            nfp=plasma_surface.nfp,
+            stellsym=plasma_surface.stellsym,
+            mpol=4, # 4 poloidal harmonics for the current potential
+            ntor=4, # 4 toroidal harmonics for the current potential
+            plasma_mpol=plasma_surface.mpol,
+            plasma_ntor=plasma_surface.ntor,
+            objective_name='f_B',
+            objective_weight=None,
+            objective_unit=None,
+            metric_name=('f_B', 'f_K')
+        )
         nescoil_out_dict2 = quadcoil_for_diff(
             plasma_dofs=plasma_surface.get_dofs(),
             net_poloidal_current_amperes=net_poloidal_current_amperes,
@@ -39,22 +51,11 @@ class QuadcoilDESCTest(unittest.TestCase):
             winding_dofs=None,
             objective_weight=None,
             constraint_value=(),
-            nondiff_args={
-                'nfp':plasma_surface.nfp,
-                'stellsym':plasma_surface.stellsym,
-                'mpol':4, # 4 poloidal harmonics for the current potential
-                'ntor':4, # 4 toroidal harmonics for the current potential
-                'plasma_mpol':plasma_surface.mpol,
-                'plasma_ntor':plasma_surface.ntor,
-                'objective_name':'f_B',
-                'objective_weight':None,
-                'objective_unit':None,
-                'metric_name':('f_B', 'f_K')
-            }
         )
     
         # For testing if the custom_jvp rule
         # is working properly
+        @jit
         def test_f_B(plasma_dofs, G):
             nescoil_out_dict = quadcoil_for_diff(
                 plasma_dofs=plasma_dofs,
@@ -65,22 +66,10 @@ class QuadcoilDESCTest(unittest.TestCase):
                 winding_dofs=None,
                 objective_weight=None,
                 constraint_value=(),
-                nondiff_args={
-                    'nfp':plasma_surface.nfp,
-                    'stellsym':plasma_surface.stellsym,
-                    'mpol':4, # 4 poloidal harmonics for the current potential
-                    'ntor':4, # 4 toroidal harmonics for the current potential
-                    'plasma_mpol':plasma_surface.mpol,
-                    'plasma_ntor':plasma_surface.ntor,
-                    'objective_name':'f_B',
-                    'objective_weight':None,
-                    'objective_unit':None,
-                    'metric_name':('f_B', 'f_K')
-                }
             )
             return(nescoil_out_dict['f_B'])
             
-        grad_plasma_dofs = grad(test_f_B)(plasma_surface.get_dofs(), net_poloidal_current_amperes)
+        grad_plasma_dofs = jit(grad(test_f_B))(plasma_surface.get_dofs(), net_poloidal_current_amperes)
         grad_plasma_dofs_ans = nescoil_out_dict['f_B']['grad']['df_dplasma_dofs']
         self.assertTrue(compare(grad_plasma_dofs, grad_plasma_dofs_ans))
         self.assertTrue(compare(nescoil_out_dict['f_B']['value'], test_f_B(plasma_surface.get_dofs(), net_poloidal_current_amperes)))

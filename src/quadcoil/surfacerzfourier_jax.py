@@ -157,6 +157,12 @@ class SurfaceRZFourierJAX:
     
     @lru_cache()
     @jit
+    def area(self):
+        # For integrating a scalar field over this surface.
+        return jnp.sum(self.da())
+    
+    @lru_cache()
+    @jit
     def grad_helper(self):
         # '''
         # This is a helper method that calculates the contravariant 

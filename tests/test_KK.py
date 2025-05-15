@@ -1,6 +1,6 @@
 import unittest
 from quadcoil import QuadcoilParams, SurfaceRZFourierJAX, project_arr_cylindrical
-from quadcoil.objective import K_dot_grad_K, K_dot_grad_K_cyl
+from quadcoil.quantity import K_dot_grad_K, K_dot_grad_K_cyl
 import jax.numpy as jnp
 import numpy as np
 from simsopt.geo import SurfaceRZFourier
@@ -71,8 +71,8 @@ class QuadcoilKKTest(unittest.TestCase):
                 mpol=cp_hi_res.mpol, 
                 ntor=cp_hi_res.ntor, 
             )
-            KK_test = K_dot_grad_K(qp, cp.get_dofs())
-            KK_test_cyl = K_dot_grad_K_cyl(qp, cp.get_dofs())
+            KK_test = K_dot_grad_K(qp, {'phi': cp.get_dofs()})
+            KK_test_cyl = K_dot_grad_K_cyl(qp, {'phi': cp.get_dofs()})
             # Remove the edge of both results because np.gradient
             # is inaccurate at the edges.
             KK = KK[1:-1,1:-1,:]
