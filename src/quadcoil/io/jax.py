@@ -3,6 +3,7 @@ from functools import partial
 from quadcoil import quadcoil
 import jax.numpy as jnp
 import warnings
+import jax
 # A list of differentiable arguments of QUADCOIL.
 # Will be ignored from the kwargs of gen_quadcoil_for_diff
 QUADCOIL_DIFF_ARGS = [
@@ -145,7 +146,7 @@ def gen_quadcoil_for_diff(**kwargs):
                 jvp_i += jnp.sum(out_dict_full[key_i]['grad']['df_dwinding_dofs'] * winding_dofs_dot)
             if objective_weight_dot is not None:
                 # Converting an empty list/tuple to an array will produce a NaN.
-                if len(objective_weight_dot) > 0:
+                if not jnp.isscalar(objective_weight_dot):
                     jvp_i += jnp.sum(out_dict_full[key_i]['grad']['df_dobjective_weight'] * jnp.array(objective_weight_dot))
             if constraint_value_dot is not None:
                 if len(constraint_value_dot) > 0:
