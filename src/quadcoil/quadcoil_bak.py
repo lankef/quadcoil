@@ -9,15 +9,15 @@ from quadcoil.wrapper import _parse_objectives, _parse_constraints
 from functools import partial
 from quadcoil.quantity import Bnormal
 from jax import jacfwd, jacrev, jvp, jit, hessian, block_until_ready
-from jax import config
 from jax import debug
 from jax import flatten_util
 import jax.numpy as jnp
 import lineax as lx
+from jax import config
 config.update('jax_enable_x64', True)
 
-tol_default = 1e-5
-tol_default_last = 1e-8
+tol_default = 1e-6
+tol_default_last = 1e-10
 # The list of all static arguments of 
 # quadcoil. Also used in the DESC interface.
 # All other vars are assumed traced. If you
@@ -69,7 +69,7 @@ def quadcoil(
     # Quadpoints to evaluate objectives at
     quadpoints_phi=None,
     quadpoints_theta=None,
-    phi_init=None, 
+    phi_mn_init=None, 
     # Current potential's normalization constant. 
     # By default will be generated from net total current.
     phi_unit=None,
@@ -108,7 +108,7 @@ def quadcoil(
     # - Solver options
     convex=False,
     c_init:float=1.,
-    c_growth_rate:float=2,
+    c_growth_rate:float=5.,
     xstop_outer:float=tol_default, # convergence rate tolerance
     # gtol_outer:float=1e-7, # gradient tolerance
     ctol_outer:float=tol_default, # constraint tolerance
@@ -155,7 +155,7 @@ def quadcoil(
     quadpoints_theta : ndarray, shape (ntheta,), optional, default=None
         (Traced) The toroidal quadrature points on the winding surface to evaluate the objectives at.
         Uses one period from the winding surface by default.
-    phi_init : ndarray, optional, default=None
+    phi_mn_init : ndarray, optional, default=None
         (Traced) The initial guess. All zeros by default.
     phi_unit : float, optional, default=None
         (Traced) Current potential's normalization constant.
@@ -501,13 +501,13 @@ def quadcoil(
     f_obj, g_ineq, h_eq, n_g, n_h, aux_dofs_init = f_g_ineq_h_eq_from_y(y_dict_current)
     unconstrained = ((n_g == 0) and (n_h == 0))
 
-    if phi_init is None:
-        phi_init = jnp.zeros(qp.ndofs)
+    if phi_mn_init is None:
+        phi_mn_init = jnp.zeros(qp.ndofs)
     # not really used in initialization, but used 
     # to calculate phi scaling, the initial value 
     # of lam and mu, and the initial value of aux 
     # variables.
-    dofs_dict_init = {'phi': phi_init}
+    dofs_dict_init = {'phi': phi_mn_init}
     # ----- Calculating the unit of phi -----
     # phi need to be normalized to ~1 for the optimizer to behave well.
     # by default we do this using the initial value of Bnormal
@@ -530,7 +530,7 @@ def quadcoil(
     # and by the optimizer. The dof that the optimizer operates on is a
     # flattened version of this dictionary.
     x_dict = {
-       'phi_scaled': phi_init/phi_unit,
+       'phi_scaled': phi_mn_init/phi_unit,
        # And auxiliary vars. Because we have already implemented 
        # scaling for them in _add_quantity instances, we do not 
        # need to scale them here.
@@ -541,7 +541,7 @@ def quadcoil(
     for key in aux_dofs_init.keys():
         if callable(aux_dofs_init[key]): 
             # Callable(qp: QuadcoilParams, dofs: dict, f_unit: float)
-            x_dict[key] = aux_dofs_init[key](qp, {'phi': phi_init})
+            x_dict[key] = aux_dofs_init[key](qp, {'phi': phi_mn_init})
         else:
             try:
                 x_dict[key] = jnp.array(aux_dofs_init[key])
@@ -672,18 +672,18 @@ def quadcoil(
         if verbose>0:       
             debug.print(
                 '----- Solver status summary -----\n'\
-                'Final value of f(scaled): {fs}\n'\
+                'Final value of objective f: {f}\n'\
                 'Final Max current potential (dipole density): {max_cp} (A)\n'\
                 'Final Avg current potential (dipole density): {avg_cp} (A)\n'\
                 '* Total L-BFGS iteration number: {niter}\n'\
                 '    Phi scaling constant:  {x_unit_init}(A)\n'\
-                '    Final value of constraint g(scaled): {g}\n'\
-                '    Final value of constraint h(scaled): {h}\n'\
+                '    Final value of constraint g: {g}\n'\
+                '    Final value of constraint h: {h}\n'\
                 '    Outer convergence rate in x (scaled): {dx}\n'\
                 '* Last inner L_BFGS iteration number: {inner_niter}\n'\
                 '    Inner convergence rate in x (scaled): {inner_dx}, {inner_du}\n'\
                 '    Inner convergence rate in l: {dl}\n',
-                fs=block_until_ready(solve_results['inner_fin_f']),
+                f=block_until_ready(solve_results['inner_fin_f']),
                 niter=block_until_ready(solve_results['tot_niter']),
                 g=block_until_ready(solve_results['inner_fin_g']),
                 h=block_until_ready(solve_results['inner_fin_h']),
@@ -920,16 +920,24 @@ def quadcoil(
             # just from A and b. Therefore, we compute both with
             # and without pre-conditioning, and pick the option with 
             # the less error. Is there a way to improve this?
-            vihp_raw = lx.linear_solve(
-                vihp_A_raw, # should be .T but hessian is symmetric 
+            # vihp_raw = lx.linear_solve(
+            #     vihp_A_raw, # should be .T but hessian is symmetric 
+            #     grad_x_f,
+            #     solver=implicit_linear_solver
+            # ).value
+            # vihp_precond = lx.linear_solve(
+            #     vihp_A_precond, # should be .T but hessian is symmetric 
+            #     vihp_b,
+            #     solver=implicit_linear_solver
+            # ).value
+            vihp_raw = jnp.linalg.solve(
+                hess_l_k, # should be .T but hessian is symmetric 
                 grad_x_f,
-                solver=implicit_linear_solver
-            ).value
-            vihp_precond = lx.linear_solve(
-                vihp_A_precond, # should be .T but hessian is symmetric 
+            )
+            vihp_precond = jnp.linalg.solve(
+                Ohess, # should be .T but hessian is symmetric 
                 vihp_b,
-                solver=implicit_linear_solver
-            ).value
+            )
             hess_err = jnp.linalg.norm(hess_l_k @ vihp_raw - grad_x_f)
             Ohess_err = jnp.linalg.norm(hess_l_k @ vihp_precond - grad_x_f)
             vihp = jnp.where(hess_err < Ohess_err, vihp_raw, vihp_precond)

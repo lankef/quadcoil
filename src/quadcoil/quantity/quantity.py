@@ -3,11 +3,23 @@ from jax import jit
 import jax.numpy as jnp
 from functools import partial
 
-def _flatten_first_two_dims(x):
-    shape = x.shape
+def _take_stellsym(field):
+    # First, we flatten the phi/theta dependence
+    # of field. These usually are its first two axes
+    shape = field.shape
     new_shape = (shape[0] * shape[1],) + shape[2:]
-    return jnp.reshape(x, new_shape)
-
+    flat_field = jnp.reshape(field, new_shape)
+    # Then we take only roughly half of the sample points.
+    # Note to developers: It's wrong to take half of the 
+    # sample points naively, because our quadrature points
+    # do not sample from 0 to 1!
+    # Note that the simplest, but also safest choice
+    # is to take (nphi//2 + 1) * ntheta elements. 
+    # This will still introduce O(ntheta) duplicate
+    # elements but it saves us of treating even/odd 
+    # nphi/ntheta cases separately. 
+    return flat_field[:(shape[0]//2+1) * shape[1]]
+    
 class _Quantity: 
     r'''
     Interior point methods require :math:`C^1` objectives. Therefore, 
@@ -224,8 +236,7 @@ class _Quantity:
                 unit_eff = unit
             field = func(qp, dofs)
             if auto_stellsym and qp.stellsym:
-                field = _flatten_first_two_dims(field)
-                field = field[:len(field)//2]
+                field = _take_stellsym(field)
             p_aux = dofs[aux_argname]
             g_plus = field/unit_eff - p_aux #  f - p <=0
             # We need only half of the constraints if f is positive definite
@@ -363,18 +374,24 @@ class _Quantity:
         def scaled_c2_impl(qp, dofs, unit, aux_argname=aux_argname):
             # Because the aux vars are already
             # scaled to O(1), no unit dependence is actually needed here.
-            return qp.eval_surface.integrate(dofs[aux_argname])*qp.nfp
+            da_flat = qp.eval_surface.da()
+            if auto_stellsym and qp.stellsym:
+                da_flat = _take_stellsym(da_flat)
+            return jnp.sum(da_flat * dofs[aux_argname]) * qp.nfp
         # The effective function
         def c0_impl(qp, dofs, func=func):
-            return qp.eval_surface.integrate(jnp.abs(
-                func(qp, dofs)
-            ))*qp.nfp
+            raise NotImplementedError('Not working yet, please don\'t use')
+            da_flat = qp.eval_surface.da()
+            field = func(qp, dofs)
+            if auto_stellsym and qp.stellsym:
+                da_flat = _take_stellsym(da_flat)
+                field = _take_stellsym(field)
+            return jnp.sum(da_flat * field) * qp.nfp
         # The constraints
         def scaled_g_ineq_impl(qp, dofs, unit, func=func, aux_argname=aux_argname, auto_stellsym=auto_stellsym):
             field = func(qp, dofs)
             if auto_stellsym and qp.stellsym:
-                field = _flatten_first_two_dims(field)
-                field = field[:len(field)//2]
+                field = _take_stellsym(field)
             p_aux = dofs[aux_argname]
             g_plus = field/unit - p_aux #  f - p <=0
             # We need only half of the constraints if f is positive definite
@@ -387,15 +404,17 @@ class _Quantity:
         # are (unit). Therefore, g_unit is val_unit \
         # divided by the surface's area.
         def g_unit(qp, unit):
-            return unit / (qp.eval_surface.area() * qp.nfp)
+            da_flat = qp.eval_surface.da()
+            if auto_stellsym and qp.stellsym:
+                da_flat = _take_stellsym(da_flat)
+            return unit / (jnp.sum(da_flat) * qp.nfp)
         # The initial value of the auxiliary variable is the 
         # abs(field) / g_unit. 
         def scaled_aux_dofs_init(qp, dofs, unit, auto_stellsym=auto_stellsym):
             field = func(qp, dofs)
             if auto_stellsym and qp.stellsym:
-                field = _flatten_first_two_dims(field)
-                field = field[:len(field)//2]
-            jnp.abs(field)/g_unit(qp, unit)
+                field = _take_stellsym(field)
+            return jnp.abs(field)/g_unit(qp, unit)
         return _Quantity(
             scaled_c2_impl=scaled_c2_impl,
             c0_impl=c0_impl, 

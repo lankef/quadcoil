@@ -5,8 +5,6 @@ import optax.tree_utils as otu
 from jax import jit, vmap, grad, jacrev
 import jax
 from jax.lax import while_loop
-from jax import config
-config.update('jax_enable_x64', True)
 
 lstsq_vmap = vmap(jnp.linalg.lstsq)
 
@@ -154,8 +152,7 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
                 '    grad:{g}, grad/g0:{gnorm}\n'\
                 '    Stopping criteria - (err > gtol): {a},(dx > xstop or du > xstop): {b},(df > fstop): {c}',
                 a=(err > gtol), #  * g0_norm) # TOLERANCE SCALING! MAY NEED CHANGING!
-                # b=((dx_norm > xstop * params_norm) | (du_norm > xstop * params_norm)),
-                b=((dx_norm > xstop) | (du_norm > xstop)),
+                b=((dx_norm > xstop * params_norm) | (du_norm > xstop * params_norm)),
                 c=(df > fstop),
                 l=value,
                 dx=jnp.max(dx),
@@ -168,8 +165,7 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
         return (iter_num == 0) | (
             (iter_num < maxiter) 
             & (err > gtol) 
-            & ((dx_norm > xstop) | (du_norm > xstop))
-            # & ((dx_norm > xstop * params_norm) | (du_norm > xstop * params_norm))
+            & ((dx_norm > xstop * params_norm) | (du_norm > xstop * params_norm))
             & (df > fstop * value) 
         )
     final_params, final_updates, final_value, final_dx, final_du, final_df, final_state = while_loop(
@@ -330,7 +326,7 @@ def solve_constrained(
     # @jit
     def outer_convergence_criterion(dict_in):
         x_k = dict_in['inner_fin_x']
-        # x_norm = jnp.linalg.norm(x_k)
+        x_norm = jnp.linalg.norm(x_k)
         # lam_k = dict_in['inner_fin_lam']
         # mu_k = dict_in['inner_fin_mu']
         # grad_l = dict_in['outer_grad_l']
@@ -343,9 +339,27 @@ def solve_constrained(
         # This is the convergence condition (True when not converged yet)
         return(
             (tot_niter == 0) | (
+                # Stop if max iter is exceeded
                 (tot_niter < maxiter_tot) 
-                # & (outer_dx >= xstop_outer * x_norm)
-                & (outer_dx >= xstop_outer)
+                # Only stop if reduction in all of f, g, or h
+                # falls below the criterion
+                # & (
+                #     (outer_dgrad_l >= grad_l_stop_outer)
+                #     # | (outer_dg >= grad_l_stop_outer)
+                #     # | (outer_dh >= grad_l_stop_outer)
+                # )
+                # Stop if the iteration convergence 
+                # rate falls below the stopping criterion
+                & (outer_dx >= xstop_outer * x_norm)
+                # KKT criterion, P321 of Nocedal
+                # & (
+                #     KKT1 
+                #     | KKT2 
+                #     | KKT3 
+                #     | KKT4 
+                #     | KKT5 
+                #     | KKT6
+                # )
             )
         )
 
@@ -364,31 +378,29 @@ def solve_constrained(
         f_km1 = dict_in['inner_fin_f']
         g_km1 = dict_in['inner_fin_g']
         h_km1 = dict_in['inner_fin_h']
-        x_unit = dict_in['x_unit']
+        # x_unit = dict_in['x_unit']
         # grad_l_val_km1 = dict_in['outer_grad_l']
         # Eq (10) on p160 of Constrained Optimization and Multiplier Method
-        l_k = lambda x, x_unit=x_unit, mu_k=mu_k, c_k=c_k: (
-            f_obj(x*x_unit) 
-            + lam_k@h_eq(x*x_unit) 
-            + mu_k@gplus(x*x_unit, mu_k, c_k)
+        l_k = lambda x: (
+            f_obj(x) 
+            + lam_k@h_eq(x) 
+            + mu_k@gplus(x, mu_k, c_k)
             + c_k/2 * (
-                jnp.sum(h_eq(x*x_unit)**2) 
-                + jnp.sum(gplus(x*x_unit, mu_k, c_k)**2)
+                jnp.sum(h_eq(x)**2) 
+                + jnp.sum(gplus(x, mu_k, c_k)**2)
             )
         ) 
         # Solving a stage of the problem
-        x_k_raw, val_l_k, grad_l_k, niter_inner_k, dx_k, du_k, dL_k = run_opt(
-            x_km1/x_unit, l_k, maxiter_inner, 
+        x_k, val_l_k, grad_l_k, niter_inner_k, dx_k, du_k, dL_k = run_opt(
+            x_km1, l_k, maxiter_inner, 
             fstop_inner, xstop_inner, gtol_inner,
             verbose
         )
-        x_k = x_k_raw*x_unit
-        x_norm = jnp.linalg.norm(x_k)
-        x_unit_new = jnp.where(x_norm!=0, x_norm, 1.)
         f_k = f_obj(x_k)
         g_k = g_ineq(x_k)
         h_k = h_eq(x_k)
         gp_k = gplus(x_k, mu_k, c_k)
+
         # ----- Upsdating c and the multipliers
         # If constraints are sufficiently 
         # satisfied, or c is too large, 
@@ -407,9 +419,30 @@ def solve_constrained(
         c_k_new = jnp.where(update_multiplier, c_k,               c_k * c_growth_rate) 
         lam_k =   lam_k + c_k * h_k # jnp.where(update_multiplier, lam_k + c_k * h_k, lam_k              )
         mu_k =    mu_k + c_k * gp_k # jnp.where(update_multiplier, mu_k + c_k * gp_k, mu_k               )
-        df = jnp.linalg.norm(f_km1 - f_k)
-        dg = jnp.linalg.norm(g_km1 - g_k)
-        dh = jnp.linalg.norm(h_km1 - h_k)
+        # Calculating the gradient of the 
+        # Actual lagrangian: 
+        #   grad_x L
+        # = grad_x f - lam @ grad_x h_eq + mu @ grad_x g_ineq_active
+        # grad_f_val = grad_f(x_k)
+        # g_active = jnp.where(g_k >= 0., 1., 0.)
+
+        # grad_l_val = (
+        #     grad_f_val 
+        #     - lam_k @ grad_h(x_k)
+        #     - (g_active * mu_k) @ grad_g(x_k)
+        # )
+
+        # If any of the following are True, KKT is NOT satisfied
+        # Nocedal pg321, 12.34
+        # lam_k_active = jnp.where(jnp.abs(h_k) >= ctol_outer, lam_k, 0)
+        # mu_k_active = jnp.where(g_k >= ctol_outer, mu_k, 0)
+        # d_grad_l_val = jnp.linalg.norm(grad_l_val - grad_l_val_km1)
+        # KKT1 = jnp.linalg.norm(grad_l_val) >= gtol_outer # Nocedal 12.34a
+        # KKT2 = jnp.any(jnp.abs(h_k) >= ctol_outer)       # Nocedal 12.34b
+        # KKT3 = jnp.any(g_k >= ctol_outer)                # Nocedal 12.34c
+        # KKT4 = jnp.any(mu_k <= -ctol_outer)              # Nocedal 12.34d
+        # KKT5 = jnp.abs(lam_k @ h_k) >= ctol_outer        # Nocedal 12.34e
+        # KKT6 = jnp.abs(mu_k @ g_k) >= ctol_outer         # Nocedal 12.34e
         if verbose>1:
             jax.debug.print(
                 'OUTER: \n'\
@@ -422,19 +455,20 @@ def solve_constrained(
                 '   |grad g|: {xg}\n'\
                 '   |grad h|: {xh}\n'\
                 '        mu : {mu1}, {mu2}\n'\
-                '        dmu : {dmu}\n'\
                 '        lam: {lam1}, {lam2}\n'\
-                '        dlam: {dlam}\n'\
                 '    Stopping criteria (False = satisfied)\n'\
                 '    Stopping criterion 2: {b}\n'\
                 '        outer_dx    = {outer_dx}\n'\
-                '        outer_df    = {outer_df}\n'\
-                '        outer_dg    = {outer_dg}\n'\
-                '        outer_dh    = {outer_dh}\n'\
                 '        xstop_outer = {xstop_outer}\n'\
                 # '    grad_l_val: {x}, d_grad_l_val: {dx}\n'\
                 '    inner iter #: {z}\n'\
                 '    c_k: {c_k}',
+                # ga=jnp.linalg.norm(grad_f_val),
+                # gb=jnp.linalg.norm(lam_k @ grad_h(x_k)),
+                # gc=jnp.linalg.norm((g_active * mu_k) @ grad_g(x_k)),
+                # gtot=jnp.linalg.norm(grad_l_val),
+                # gtol_outer=gtol_outer,
+                # ctol_outer=ctol_outer,
                 f=f_k,
                 gmin=_print_min_blank(g_k),
                 gmax=_print_max_blank(g_k),
@@ -443,12 +477,12 @@ def solve_constrained(
                 hmin=_print_min_blank(h_k),
                 hmax=_print_max_blank(h_k),
                 c_k=c_k,
+                # x=jnp.linalg.norm(grad_l_val),
                 mu1=_print_min_blank(mu_k),
                 mu2=_print_max_blank(mu_k),
                 lam1=_print_min_blank(lam_k),
                 lam2=_print_max_blank(lam_k),
-                dmu=(c_k * h_k),
-                dlam=(c_k * gp_k),
+                # dx=jnp.linalg.norm(d_grad_l_val),
                 xx=jnp.linalg.norm(grad_f(x_k)),
                 xg=jnp.linalg.norm(grad_g(x_k)),
                 xh=jnp.linalg.norm(grad_h(x_k)),
@@ -456,26 +490,24 @@ def solve_constrained(
                 tot_niter=dict_in['tot_niter']+niter_inner_k,
                 maxiter_tot=maxiter_tot,
                 outer_dx=jnp.linalg.norm(x_k - x_km1),
-                outer_df=df,
-                outer_dg=dg,
-                outer_dh=dh,
                 xstop_outer=xstop_outer * jnp.linalg.norm(x_k),
                 b=(jnp.linalg.norm(x_k - x_km1) >= xstop_outer),
 
             )
-        # There is the possibility that the 
         dict_out = {
             'tot_niter': dict_in['tot_niter']+niter_inner_k,
             'outer_dx': jnp.linalg.norm(x_k - x_km1),
-            'outer_df': df,
-            'outer_dg': dg,
-            'outer_dh': dh,
+            # 'outer_dgrad_l': d_grad_l_val,
+            # 'outer_dg': jnp.max(jnp.abs(g_k - g_km1)),
+            # 'outer_dh': jnp.max(jnp.abs(h_k - h_km1)),
+            # 'outer_grad_l': grad_l_val,
             'inner_fin_f': f_k,
             'inner_fin_g': g_k,
             'inner_fin_h': h_k,
             'inner_fin_x': x_k,
             'inner_fin_l_aug': val_l_k,
             'inner_fin_grad_l_aug': jnp.linalg.norm(grad_l_k),
+            # 'inner_fin_grad_f': jnp.linalg.norm(grad_f_val),
             'inner_fin_c': c_k_new,
             'inner_fin_lam': lam_k,
             'inner_fin_mu': mu_k,
@@ -484,23 +516,32 @@ def solve_constrained(
             'inner_fin_du': du_k,
             'inner_fin_dl': dL_k,
             # The scaling factor for the next iteration
-            'x_unit': x_unit_new,
+            # 'x_unit': jnp.average(jnp.abs(x_k)),
         }
         return(dict_out)
     init_dict = {
         'tot_niter': 0,       
         # Changes in x between the kth and k-1th iteration
         'outer_dx': 0.,
-        'outer_df': 0.,
-        'outer_dg': 0.,
-        'outer_dh': 0.,
+        # Changes in f, g, h between the kth and k-1th iteration
+        # 'outer_dgrad_l': 0., 
+        # 'outer_dg': 0.,
+        # 'outer_dh': 0.,
+        # 'outer_grad_l': jnp.zeros_like(x_init),
         'inner_fin_f': f_obj(x_init), # Value of f, g, h after the kth iteration
         'inner_fin_g': g_ineq(x_init),
         'inner_fin_h': h_eq(x_init),
-        'x_unit': 1.,
+        # 'x_unit': x_unit_init,
         'inner_fin_x': x_init,
         'inner_fin_l_aug': 0.,
         'inner_fin_grad_l_aug': 0.,
+        # 'KKT1': True,
+        # 'KKT2': True,
+        # 'KKT3': True,
+        # 'KKT4': True,
+        # 'KKT5': True,
+        # 'KKT6': True,
+        # 'inner_fin_grad_f': 0.,
         'inner_fin_c': c_init,
         'inner_fin_lam': lam_init,
         'inner_fin_mu': mu_init,
@@ -525,7 +566,7 @@ def solve_constrained(
     return(result_dict)# Changes in f, g, h between the kth and k-1th iteration
 
 def _print_min_blank(a):
-    jnp.min(a) if a.size > 0 else jnp.nan
+    return jnp.min(a) if a.size > 0 else jnp.nan
 
 def _print_max_blank(a):
-    jnp.max(a) if a.size > 0 else jnp.nan
+    return jnp.max(a) if a.size > 0 else jnp.nan
