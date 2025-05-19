@@ -16,8 +16,8 @@ import jax.numpy as jnp
 import lineax as lx
 config.update('jax_enable_x64', True)
 
-tol_default = 1e-5
-tol_default_last = 1e-8
+tol_default = 1e-6
+tol_default_last = 1e-10
 # The list of all static arguments of 
 # quadcoil. Also used in the DESC interface.
 # All other vars are assumed traced. If you
@@ -112,7 +112,10 @@ def quadcoil(
     xstop_outer:float=tol_default, # convergence rate tolerance
     # gtol_outer:float=1e-7, # gradient tolerance
     ctol_outer:float=tol_default, # constraint tolerance
-    fstop_inner:float=0.,
+    # was 0., but we change this because we changed the logic to req x, u, g 
+    # convergence rate to all be smaller than the thres, because sometimes small x results in 
+    # large change in f.
+    fstop_inner:float=tol_default,
     xstop_inner:float=tol_default,
     gtol_inner:float=tol_default,
     fstop_inner_last:float=0.,
@@ -122,6 +125,7 @@ def quadcoil(
     maxiter_tot:int=10000,
     maxiter_inner:int=1000,
     maxiter_inner_last:int=1000,
+    # lx.GMRES(rtol=1e-10, atol=1e-10), # Stagnates with default setting
     implicit_linear_solver=lx.AutoLinearSolver(well_posed=True),
     value_only=False,
     verbose=0,
@@ -677,16 +681,16 @@ def quadcoil(
                 'Final Avg current potential (dipole density): {avg_cp} (A)\n'\
                 '* Total L-BFGS iteration number: {niter}\n'\
                 '    Phi scaling constant:  {x_unit_init}(A)\n'\
-                '    Final value of constraint g(scaled): {g}\n'\
-                '    Final value of constraint h(scaled): {h}\n'\
+                '    Final max constraint g violation(scaled): {g}\n'\
+                '    Final max constraint h violation(scaled): {h}\n'\
                 '    Outer convergence rate in x (scaled): {dx}\n'\
                 '* Last inner L_BFGS iteration number: {inner_niter}\n'\
                 '    Inner convergence rate in x (scaled): {inner_dx}, {inner_du}\n'\
                 '    Inner convergence rate in l: {dl}\n',
                 fs=block_until_ready(solve_results['inner_fin_f']),
                 niter=block_until_ready(solve_results['tot_niter']),
-                g=block_until_ready(solve_results['inner_fin_g']),
-                h=block_until_ready(solve_results['inner_fin_h']),
+                g=block_until_ready(_print_max_blank(solve_results['inner_fin_g'])),
+                h=block_until_ready(_print_max_blank(jnp.abs(solve_results['inner_fin_h']))),
                 x_unit_init=phi_unit,
                 dx=block_until_ready(solve_results['outer_dx']),
                 inner_niter=block_until_ready(solve_results['inner_fin_niter']),
@@ -990,3 +994,10 @@ def _precondition_coordinate_by_matrix(hess):
     x_to_xp = lambda x: (basis @ x) * scale
     xp_to_x = lambda xp: basis.T @ (xp / scale)
     return x_to_xp, xp_to_x
+
+
+def _print_min_blank(a):
+    return jnp.min(a) if a.size > 0 else jnp.nan
+
+def _print_max_blank(a):
+    return jnp.max(a) if a.size > 0 else jnp.nan

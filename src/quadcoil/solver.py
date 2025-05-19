@@ -152,11 +152,16 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
                 'INNER: L: {l}, dx: {dx}, du: {du}, df: {df}, \n'\
                 '    dx - (dx+x-x): {dxn},\n'\
                 '    grad:{g}, grad/g0:{gnorm}\n'\
-                '    Stopping criteria - (err > gtol): {a},(dx > xstop or du > xstop): {b},(df > fstop): {c}',
-                a=(err > gtol), #  * g0_norm) # TOLERANCE SCALING! MAY NEED CHANGING!
-                # b=((dx_norm > xstop * params_norm) | (du_norm > xstop * params_norm)),
-                b=((dx_norm > xstop) | (du_norm > xstop)),
-                c=(df > fstop),
+                '    Stopping criteria: \n'
+                '(iter_num < maxiter): {a}\n'
+                '& (err > gtol) : {b}\n'
+                '& ((dx_norm > xstop) | (du_norm > xstop) | (df > fstop)): {c}, {d}, {e}\n'
+                '',
+                a=(iter_num < maxiter),
+                b=(err > gtol),
+                c=(dx_norm > xstop),
+                d=(du_norm > xstop),
+                e=(df > fstop),
                 l=value,
                 dx=jnp.max(dx),
                 dxn=jnp.linalg.norm(dx - dx1),
@@ -168,9 +173,9 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
         return (iter_num == 0) | (
             (iter_num < maxiter) 
             & (err > gtol) 
-            & ((dx_norm > xstop) | (du_norm > xstop))
+            & ((dx_norm > xstop) | (du_norm > xstop) | (df > fstop)) # The last one is added on May 19
             # & ((dx_norm > xstop * params_norm) | (du_norm > xstop * params_norm))
-            & (df > fstop * value) 
+            # & (df > fstop * value) 
         )
     final_params, final_updates, final_value, final_dx, final_du, final_df, final_state = while_loop(
         continuing_criterion, step, init_carry
@@ -336,16 +341,46 @@ def solve_constrained(
         # grad_l = dict_in['outer_grad_l']
         outer_dx = dict_in['outer_dx']
         tot_niter = dict_in['tot_niter']
+        g_k = dict_in['inner_fin_g']
+        h_k = dict_in['inner_fin_h']
+        c_k = dict_in['inner_fin_c']
         # outer_dgrad_l = dict_in['outer_dgrad_l']
         # outer_dg = dict_in['outer_dg']
         # outer_dh = dict_in['outer_dh']
         # f_k = dict_in['inner_fin_f']
         # This is the convergence condition (True when not converged yet)
+        if verbose>1:
+            jax.debug.print(
+                'OUTER CONVERGENCE CRITERIA\n'\
+                '    (tot_niter == 0): {x1}\n'\
+                '    (tot_niter < maxiter_tot): {x2}\n'\
+                '    (outer_dx >= xstop_outer): {x3}\n'\
+                '    (jnp.any(g_k >= ctol_outer) | jnp.any(jnp.abs(h_k) >= ctol_outer)): {x4}\n'\
+                '    (c_k <= c_k_safe): {x5}\n',
+                x1 = (tot_niter == 0),
+                x2 = (tot_niter < maxiter_tot),
+                x3 = (outer_dx >= xstop_outer),
+                x4 = (jnp.any(g_k >= ctol_outer) | jnp.any(jnp.abs(h_k) >= ctol_outer)),
+                x5 = (c_k <= c_k_safe),
+            )
         return(
             (tot_niter == 0) | (
                 (tot_niter < maxiter_tot) 
                 # & (outer_dx >= xstop_outer * x_norm)
-                & (outer_dx >= xstop_outer)
+                & (
+                    # Continue iteration when dx is significant
+                    (outer_dx >= xstop_outer)
+                    # Or when constraint violation is sufficiently strong,
+                    # because sometimes the iteration terminates before 
+                    # c becomes large enough. However, when c_k exceeds 
+                    # our safe limit, to prevent endless outer iteration, 
+                    # disble the constraint checking.
+                    | (
+                        (jnp.any(g_k >= ctol_outer) | jnp.any(jnp.abs(h_k) >= ctol_outer)) 
+                        & (c_k <= c_k_safe)
+                    )
+                )
+                
             )
         )
 
@@ -422,9 +457,9 @@ def solve_constrained(
                 '   |grad g|: {xg}\n'\
                 '   |grad h|: {xh}\n'\
                 '        mu : {mu1}, {mu2}\n'\
-                '        dmu : {dmu}\n'\
+                '        dmu : {dmu1}, {dmu2}\n'\
                 '        lam: {lam1}, {lam2}\n'\
-                '        dlam: {dlam}\n'\
+                '        dlam: {dlam1}, {dlam2}\n'\
                 '    Stopping criteria (False = satisfied)\n'\
                 '    Stopping criterion 2: {b}\n'\
                 '        outer_dx    = {outer_dx}\n'\
@@ -447,8 +482,10 @@ def solve_constrained(
                 mu2=_print_max_blank(mu_k),
                 lam1=_print_min_blank(lam_k),
                 lam2=_print_max_blank(lam_k),
-                dmu=(c_k * h_k),
-                dlam=(c_k * gp_k),
+                dmu1=_print_min_blank(c_k * gp_k),
+                dmu2=_print_max_blank(c_k * gp_k),
+                dlam1=_print_min_blank(c_k * h_k),
+                dlam2=_print_max_blank(c_k * h_k),
                 xx=jnp.linalg.norm(grad_f(x_k)),
                 xg=jnp.linalg.norm(grad_g(x_k)),
                 xh=jnp.linalg.norm(grad_h(x_k)),
@@ -525,7 +562,7 @@ def solve_constrained(
     return(result_dict)# Changes in f, g, h between the kth and k-1th iteration
 
 def _print_min_blank(a):
-    jnp.min(a) if a.size > 0 else jnp.nan
+    return jnp.min(a) if a.size > 0 else jnp.nan
 
 def _print_max_blank(a):
-    jnp.max(a) if a.size > 0 else jnp.nan
+    return jnp.max(a) if a.size > 0 else jnp.nan
