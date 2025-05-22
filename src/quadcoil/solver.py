@@ -4,7 +4,7 @@ import optax
 import optax.tree_utils as otu
 from jax import jit, vmap, grad, jacrev
 import jax
-from jax.lax import while_loop
+from jax.lax import while_loop, cond
 from jax import config
 config.update('jax_enable_x64', True)
 
@@ -135,7 +135,6 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
             # delta_normalized(value2, value1), 
             state2
         )
-  
     def continuing_criterion(carry):
         params, _, value, dx, du, df, state = carry
         iter_num = otu.tree_get(state, 'count')
@@ -148,8 +147,9 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
         du_norm = jnp.linalg.norm(du)
         params_norm = jnp.linalg.norm(params)
         if verbose>2:
-            jax.debug.print(
-                'INNER: L: {l}, dx: {dx}, du: {du}, df: {df}, \n'\
+            false_fun = lambda *args, **kwargs: None
+            true_fun = lambda *args, **kwargs: jax.debug.print(
+                'INNER iter {n} - L: {l}, dx: {dx}, du: {du}, df: {df}, df/f: {dff}, \n'\
                 '    dx - (dx+x-x): {dxn},\n'\
                 '    grad:{g}, grad/g0:{gnorm}\n'\
                 '    Stopping criteria: \n'
@@ -157,23 +157,28 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
                 '& (err > gtol) : {b}\n'
                 '& ((dx_norm > xstop) | (du_norm > xstop) | (df > fstop)): {c}, {d}, {e}\n'
                 '',
+                n=iter_num,
                 a=(iter_num < maxiter),
                 b=(err > gtol),
                 c=(dx_norm > xstop),
                 d=(du_norm > xstop),
-                e=(df > fstop),
+                e=(df/value > fstop),
                 l=value,
                 dx=jnp.max(dx),
                 dxn=jnp.linalg.norm(dx - dx1),
                 du=jnp.max(du),
                 df=df,
+                dff=df/value,
                 g=err,
                 gnorm=err/g0_norm,
             )
+            # Print at every 10th iter
+            cond(iter_num%10==0, true_fun, false_fun)
         return (iter_num == 0) | (
             (iter_num < maxiter) 
             & (err > gtol) 
-            & ((dx_norm > xstop) | (du_norm > xstop) | (df > fstop)) # The last one is added on May 19
+            & (dx_norm > xstop) # was ((dx_norm > xstop) | (du_norm > xstop))
+            & (df/value > fstop) # The last one is added on May 19
             # & ((dx_norm > xstop * params_norm) | (du_norm > xstop * params_norm))
             # & (df > fstop * value) 
         )
@@ -217,7 +222,8 @@ def solve_constrained(
         # # Enables history and forward diff but disables 
         # # convergence test.
         verbose=0,
-        c_k_safe=1e9
+        c_k_safe=1e9,
+        outer_convergence_criterion=None
     ):
     r'''
     Solves the constrained optimization problem:
@@ -300,6 +306,9 @@ def solve_constrained(
         (Static) The maximum of the outer iteration.
     verbose: int, optional, default=0
         (Static) The verbosity. When >1, outputs outer iteration convergence info.
+    outer_convergence_criterion: Callable, optional, detault=None
+        (Static) A convergence criterion to override the default. For 
+        IPM initial state generation.
 
     Returns
     -------
@@ -333,56 +342,57 @@ def solve_constrained(
     grad_h = jacrev(h_eq)
     # True when non-convergent.
     # @jit
-    def outer_convergence_criterion(dict_in):
-        x_k = dict_in['inner_fin_x']
-        # x_norm = jnp.linalg.norm(x_k)
-        # lam_k = dict_in['inner_fin_lam']
-        # mu_k = dict_in['inner_fin_mu']
-        # grad_l = dict_in['outer_grad_l']
-        outer_dx = dict_in['outer_dx']
-        tot_niter = dict_in['tot_niter']
-        g_k = dict_in['inner_fin_g']
-        h_k = dict_in['inner_fin_h']
-        c_k = dict_in['inner_fin_c']
-        # outer_dgrad_l = dict_in['outer_dgrad_l']
-        # outer_dg = dict_in['outer_dg']
-        # outer_dh = dict_in['outer_dh']
-        # f_k = dict_in['inner_fin_f']
-        # This is the convergence condition (True when not converged yet)
-        if verbose>1:
-            jax.debug.print(
-                'OUTER CONVERGENCE CRITERIA\n'\
-                '    (tot_niter == 0): {x1}\n'\
-                '    (tot_niter < maxiter_tot): {x2}\n'\
-                '    (outer_dx >= xstop_outer): {x3}\n'\
-                '    (jnp.any(g_k >= ctol_outer) | jnp.any(jnp.abs(h_k) >= ctol_outer)): {x4}\n'\
-                '    (c_k <= c_k_safe): {x5}\n',
-                x1 = (tot_niter == 0),
-                x2 = (tot_niter < maxiter_tot),
-                x3 = (outer_dx >= xstop_outer),
-                x4 = (jnp.any(g_k >= ctol_outer) | jnp.any(jnp.abs(h_k) >= ctol_outer)),
-                x5 = (c_k <= c_k_safe),
-            )
-        return(
-            (tot_niter == 0) | (
-                (tot_niter < maxiter_tot) 
-                # & (outer_dx >= xstop_outer * x_norm)
-                & (
-                    # Continue iteration when dx is significant
-                    (outer_dx >= xstop_outer)
-                    # Or when constraint violation is sufficiently strong,
-                    # because sometimes the iteration terminates before 
-                    # c becomes large enough. However, when c_k exceeds 
-                    # our safe limit, to prevent endless outer iteration, 
-                    # disble the constraint checking.
-                    | (
-                        (jnp.any(g_k >= ctol_outer) | jnp.any(jnp.abs(h_k) >= ctol_outer)) 
-                        & (c_k <= c_k_safe)
-                    )
+    if outer_convergence_criterion is None:
+        def outer_convergence_criterion(dict_in):
+            x_k = dict_in['inner_fin_x']
+            # x_norm = jnp.linalg.norm(x_k)
+            # lam_k = dict_in['inner_fin_lam']
+            # mu_k = dict_in['inner_fin_mu']
+            # grad_l = dict_in['outer_grad_l']
+            outer_dx = dict_in['outer_dx']
+            tot_niter = dict_in['tot_niter']
+            g_k = dict_in['inner_fin_g']
+            h_k = dict_in['inner_fin_h']
+            c_k = dict_in['inner_fin_c']
+            # outer_dgrad_l = dict_in['outer_dgrad_l']
+            # outer_dg = dict_in['outer_dg']
+            # outer_dh = dict_in['outer_dh']
+            # f_k = dict_in['inner_fin_f']
+            # This is the convergence condition (True when not converged yet)
+            if verbose>1:
+                jax.debug.print(
+                    'OUTER CONVERGENCE CRITERIA\n'\
+                    '    (tot_niter == 0): {x1}\n'\
+                    '    (tot_niter < maxiter_tot): {x2}\n'\
+                    '    (outer_dx >= xstop_outer): {x3}\n'\
+                    '    (jnp.any(g_k >= ctol_outer) | jnp.any(jnp.abs(h_k) >= ctol_outer)): {x4}\n'\
+                    '    (c_k <= c_k_safe): {x5}\n',
+                    x1 = (tot_niter == 0),
+                    x2 = (tot_niter < maxiter_tot),
+                    x3 = (outer_dx >= xstop_outer),
+                    x4 = (jnp.any(g_k >= ctol_outer) | jnp.any(jnp.abs(h_k) >= ctol_outer)),
+                    x5 = (c_k <= c_k_safe),
                 )
-                
+            return(
+                (tot_niter == 0) | (
+                    (tot_niter < maxiter_tot) 
+                    # & (outer_dx >= xstop_outer * x_norm)
+                    & (
+                        # Continue iteration when dx is significant
+                        (outer_dx >= xstop_outer)
+                        # Or when constraint violation is sufficiently strong,
+                        # because sometimes the iteration terminates before 
+                        # c becomes large enough. However, when c_k exceeds 
+                        # our safe limit, to prevent endless outer iteration, 
+                        # disble the constraint checking.
+                        | (
+                            (jnp.any(g_k >= ctol_outer) | jnp.any(jnp.abs(h_k) >= ctol_outer)) 
+                            & (c_k <= c_k_safe)
+                        )
+                    )
+                    
+                )
             )
-        )
 
     # Recursion
     # @jit

@@ -9,11 +9,11 @@ from quadcoil.wrapper import _parse_objectives, _parse_constraints
 from functools import partial
 from quadcoil.quantity import Bnormal
 from jax import (
-    jacfwd, jacrev, grad,
+    jacfwd, jacrev, 
     jvp, jit, hessian, 
     config,
     debug,
-    flatten_util, eval_shape,
+    flatten_util,
     block_until_ready, make_jaxpr
 )
 import jax.numpy as jnp
@@ -48,9 +48,9 @@ QUADCOIL_STATIC_ARGNAMES=[
     'metric_name',
     # - Solver options
     'convex',
-    # 'maxiter_tot',
-    # 'maxiter_inner',
-    # 'maxiter_inner_last',
+    'maxiter_tot',
+    'maxiter_inner',
+    'maxiter_inner_last',
     'implicit_linear_solver',
     'value_only',
     'verbose',
@@ -111,42 +111,24 @@ def quadcoil(
 
     # - Solver options
     convex=False,
-    tol_barrier=1e-6,
-    auglag_kwargs={
-        'c_init': 1.,
-        'c_growth_rate': 2,
-        'xstop_outer': tol_default, # convergence rate tolerance
-        # gtol_outer:float=1e-7, # gradient tolerance
-        'ctol_outer': tol_default, # constraint tolerance
-        # was 0., but we change this because we changed the logic to req x, u, g 
-        # convergence rate to all be smaller than the thres, because sometimes small x results in 
-        # large change in f.
-        'fstop_inner': tol_default,
-        'xstop_inner': tol_default,
-        'gtol_inner': tol_default,
-        'fstop_inner_last': 0.,
-        'xstop_inner_last': tol_default_last,
-        'gtol_inner_last': tol_default_last,
-        'maxiter_tot': 10000,
-        'maxiter_inner': 1000,
-        # 'maxiter_inner_last': 1000,
-    },
-    auglag_kwargs_feas = {
-        'c_init': 10.,
-        'c_growth_rate': 5,
-        'xstop_outer': tol_default, # convergence rate tolerance
-        'ctol_outer': tol_default, # constraint tolerance
-        'fstop_inner': tol_default,
-        'xstop_inner': tol_default,
-        'gtol_inner': tol_default,
-        'fstop_inner_last': 0.,
-        'xstop_inner_last': tol_default,
-        'gtol_inner_last': tol_default,
-        'maxiter_tot': 5000,
-        'maxiter_inner': 200,
-        # 'maxiter_inner_last': 1,
-    },
-    # svtol: float=tol_default,
+    c_init:float=1.,
+    c_growth_rate:float=2,
+    xstop_outer:float=tol_default, # convergence rate tolerance
+    # gtol_outer:float=1e-7, # gradient tolerance
+    ctol_outer:float=tol_default, # constraint tolerance
+    # was 0., but we change this because we changed the logic to req x, u, g 
+    # convergence rate to all be smaller than the thres, because sometimes small x results in 
+    # large change in f.
+    fstop_inner:float=tol_default,
+    xstop_inner:float=tol_default,
+    gtol_inner:float=tol_default,
+    fstop_inner_last:float=0.,
+    xstop_inner_last:float=tol_default_last,
+    gtol_inner_last:float=tol_default_last,
+    svtol:float=tol_default,
+    maxiter_tot:int=10000,
+    maxiter_inner:int=1000,
+    maxiter_inner_last:int=1000,
     # lx.GMRES(rtol=1e-10, atol=1e-10), # Stagnates with default setting
     implicit_linear_solver=lx.AutoLinearSolver(well_posed=True),
     value_only=False,
@@ -363,7 +345,16 @@ def quadcoil(
             'Objective units: {objective_unit}\n'\
             'Objective weights: {objective_weight}\n'\
             'Numerical parameters:\n'\
-            '    {solver_params}',
+            '    c_init: {c_init}\n'\
+            '    c_growth_rate: {c_growth_rate}\n'\
+            '    xstop_outer: {xstop_outer}\n'\
+            # '    gtol_outer: {gtol_outer}\n'\
+            '    ctol_outer: {ctol_outer}\n'\
+            '    fstop_inner: {fstop_inner}\n'\
+            '    xstop_inner: {xstop_inner}\n'\
+            '    gtol_inner: {gtol_inner}\n'\
+            '    maxiter_tot: {maxiter_tot}\n'\
+            '    maxiter_inner: {maxiter_inner}',
             n_quadpoints_phi=len(quadpoints_phi),
             n_quadpoints_theta=len(quadpoints_theta),
             n_plasma_quadpoints_phi=len(plasma_quadpoints_phi),
@@ -379,7 +370,16 @@ def quadcoil(
             objective_name=objective_name,
             objective_unit=objective_unit,
             objective_weight=objective_weight,
-            solver_params=auglag_kwargs,
+            c_init=c_init,
+            c_growth_rate=c_growth_rate,
+            xstop_outer=xstop_outer,
+            # gtol_outer=gtol_outer,
+            ctol_outer=ctol_outer,
+            fstop_inner=fstop_inner,
+            xstop_inner=xstop_inner,
+            gtol_inner=gtol_inner,
+            maxiter_tot=maxiter_tot,
+            maxiter_inner=maxiter_inner,
         )
     
     # ----- Helper functions -----
@@ -616,10 +616,10 @@ def quadcoil(
         x_flat_opt, val_l_k, grad_l_k, niter_inner_k, dx_k, du_k, dL_k = run_opt_lbfgs(
             init_params=x_flat_init,
             fun=f_scaled,
-            maxiter=auglag_kwargs['maxiter_inner_last'],
-            fstop=auglag_kwargs['fstop_inner_last'],
-            xstop=auglag_kwargs['xstop_inner_last'],
-            gtol=auglag_kwargs['gtol_inner'],
+            maxiter=maxiter_inner_last,
+            fstop=fstop_inner_last,
+            xstop=xstop_inner_last,
+            gtol=gtol_inner,
             verbose=verbose,
         )
         dofs_opt = unravel_unscale_x(x_flat_opt)
@@ -660,21 +660,20 @@ def quadcoil(
             mu_init=mu_init,
             h_eq=h_scaled,
             g_ineq=g_scaled,
-            **auglag_kwargs,
-            # c_init=c_init,
-            # c_growth_rate=c_growth_rate,
-            # ctol_outer=ctol_outer,
-            # xstop_outer=xstop_outer,
-            # # gtol_outer=gtol_outer,
-            # fstop_inner=fstop_inner,
-            # xstop_inner=xstop_inner,
-            # gtol_inner=gtol_inner,
-            # fstop_inner_last=fstop_inner_last,
-            # xstop_inner_last=xstop_inner_last,
-            # gtol_inner_last=gtol_inner_last,
-            # maxiter_tot=maxiter_tot,
-            # maxiter_inner=maxiter_inner,
-            # verbose=verbose
+            c_init=c_init,
+            c_growth_rate=c_growth_rate,
+            ctol_outer=ctol_outer,
+            xstop_outer=xstop_outer,
+            # gtol_outer=gtol_outer,
+            fstop_inner=fstop_inner,
+            xstop_inner=xstop_inner,
+            gtol_inner=gtol_inner,
+            fstop_inner_last=fstop_inner_last,
+            xstop_inner_last=xstop_inner_last,
+            gtol_inner_last=gtol_inner_last,
+            maxiter_tot=maxiter_tot,
+            maxiter_inner=maxiter_inner,
+            verbose=verbose
         )
         # The optimum, unit-less.
         x_flat_opt = solve_results['inner_fin_x']
@@ -730,7 +729,7 @@ def quadcoil(
         # No need in preconditioning x.
         # for more detail, see Step-1 preconditioning.
         x_flat_precond = x_flat_opt
-        z_to_x = lambda x: x
+        xp_to_x = lambda xp: xp
         # 
         grad_x_l_k = jacrev(l_k, argnums=0)
         # When the problem is unconstrained, 
@@ -753,339 +752,242 @@ def quadcoil(
             out_dict['hess_cond'] = hess_cond
             debug.print('Unconstrained Hessian condition number: {x}', x=hess_cond)
     else:  
-        # To use log the log barrier objective for implicit diff
-        # without using an IPM solver, we find a close-by 1/t-feasible 
-        # solution, re-solve an unconstrained barrier problem, and then use
-        # that solution in conjunction 
-        max_violation = jnp.max(g_scaled(x_flat_opt))
-        # QUADCOIL is not exactly convex, so we can't use primal-dual IPM.
-        # Primal path-following IPM relies on Newton's method and is slow.
-        # However, we may be able to directly solve the barrier problem 
-        # using quasi-newton, and that solution is potentially easier for implicit
-        # differentiation.
-        # ----- 1. Solving a feasibility problem to generate initial points -----
-        # Before using the barrier method, we must find a feasible starting point near pur present optimum.
-        # Special stopping criterion for auglag. 
-        # Not used because auglag seems to converge slowly 
-        # for this case.
-        def cond_feas_auglag(dict_in):
-            x_feas = dict_in['inner_fin_x']
-            return jnp.any(g_scaled(x_feas[1:]) >= 0) # Continue until feasible, running out of iter, or convergence.
-        # TODO: add branching to feasible initial state generation
-        # cond(max_violation<=0, true_fun, false_fun)
-        # tightening is a new aux variable.
-        # when tightening is positive, the constraints
-        # are tightened. Otherwise, the constraints are 
-        # relaxed.
-        # If g_ineq represent an open set, tightening 
-        # can grow indefinitely. Therefore, we bound 
-        # its maximum value by the presently known 
-        # maximum violation.
-        def g_ineq_feas(x_feas):
-            tightening = x_feas[0]
-            x_scaled = x_feas[1:]
-            g_ineq_tightened = g_scaled(x_scaled) + tightening
-            tightening_cap = tightening - max_violation
-            return jnp.append(g_ineq_tightened, tightening_cap)
-        # Maximize tightening.
-        def f_feas(x_feas):
-            tightening = x_feas[0]
-            return -tightening
-        x_feas_init = jnp.concatenate([
-            # Set the initial rightening factor 
-            # to relax all constraints by maximum violation x 1.2
-            # to generate a feasible initial state for the 
-            # stage-0 problem
-            jnp.array([jnp.maximum(0, max_violation) * -1.01]), 
-            x_flat_opt
-        ])
-        mu_init_feas = jnp.zeros(eval_shape(g_ineq_feas, x_feas_init).shape)
-        feas_dict = solve_constrained(
-            x_init=x_feas_init,
-            f_obj=f_feas,
-            # lam_init=lam_init,
-            mu_init=mu_init_feas,
-            # h_eq=h_scaled,
-            g_ineq=g_ineq_feas,
-            outer_convergence_criterion=cond_feas_auglag,
-            verbose=verbose,
-            **auglag_kwargs_feas
+        # When solving a constrained optimization problem, an important source of 
+        # ill-conditioning is that the three terms in l_k can have drastically different
+        # orders of magnitudes. This block of code performs the pre-conditioning.
+        c_k = solve_results['inner_fin_c']
+        mu_k = solve_results['inner_fin_mu']
+        lam_k = solve_results['inner_fin_lam']
+        # The pre-conditioning requires that us treat the three 
+        # terms in l_k separately.
+        def l_k_terms(x, y=y_flat, mu=mu_k, lam=lam_k, c=c_k): 
+        # def l_k_terms_raw(x, y=y_flat, mu=mu_k, lam=lam_k, c=c_k): 
+            f_obj_temp, g_ineq_temp, h_eq_temp, _, _, _ = f_g_ineq_h_eq_from_y(unravel_y(y))
+            f_scaled_temp = lambda x_flat: f_obj_temp(unravel_unscale_x(x_flat))
+            g_scaled_temp = lambda x_flat: g_ineq_temp(unravel_unscale_x(x_flat))
+            h_scaled_temp = lambda x_flat: h_eq_temp(unravel_unscale_x(x_flat))
+            gplus = lambda x, mu, c: jnp.max(jnp.array([g_scaled_temp(x), -mu/c]), axis=0)
+            # gplus = lambda x, mu, c: g_scaled_temp(x)
+            return jnp.array([
+                f_scaled_temp(x),
+                lam@h_scaled_temp(x) + mu@gplus(x, mu, c),
+                c/2 * (
+                    jnp.sum(h_scaled_temp(x)**2) 
+                    + jnp.sum(gplus(x, mu, c)**2)
+                )
+            ])
+        # For calculating grad_y_l_k
+        l_k = lambda x, y=y_flat, mu=mu_k, lam=lam_k, c=c_k: jnp.sum(l_k_terms(x=x, y=y, mu=mu_k, lam=lam_k, c=c_k))
+        # hess_l_k = hessian(l_k)(x_flat_opt)
+        x_flat_precond = x_flat_opt
+        xp_to_x = lambda xp: xp
+        # # ----- Step-1 preconditioning -----
+        # l_k_raw = lambda x, y=y_flat, mu=mu_k, lam=lam_k, c=c_k: jnp.sum(l_k_terms_raw(x=x, y=y, mu=mu_k, lam=lam_k, c=c_k))
+        # hess_l_k_raw = hessian(l_k_raw)(x_flat_opt)
+        # # As the first step of the pre-conditioning, we re-define 
+        # # l_k and l_k_terms under a changed coordinate based 
+        # # on the SVD of l_k's hessian. This reduce rounding error 
+        # # during the autodiff process, and improve the conditioning of 
+        # # all three terms in l_k. 
+        # # First, we generate the coordinate transform.
+        # x_to_xp, xp_to_x = _precondition_coordinate_by_matrix(hess_l_k_raw)
+        # # We replace x_flat with its new definition after pre-conditioning.
+        # # We've already unraveled it before this point, so it's okay to replace
+        # # the variable.
+        # x_flat_precond = x_to_xp(x_flat_opt)
+        # # Redefining l_k and l_k_terms. All autodiff will be done 
+        # # with these instead.
+        # l_k_terms = lambda xp, y=y_flat: l_k_terms_raw(xp_to_x(xp), y=y)
+        # l_k = lambda xp, y: jnp.sum(l_k_terms(xp=xp, y=y))
+        # ----- Step-2 preconditioning -----
+        # An important source of ill-conditioning in Hess(l_k)
+        # is the difference in the three terms' orders of magnitude.
+        # Often, each of these terms are singular by themselves, 
+        # but adds up to a non-singular Hess(l_k).
+        # The goal of pre-conditioning is to 
+        # 1. Sort the three Hessians based on the magnitude of their 
+        # SV's, in ascending order as A, B and C.
+        # 2. Stretch B in directions where it's linearly indep from C.
+        # 3. Stretch A in directions where it's linearly indep from B and C.
+        # Because these are symmetric matrices, 
+        hess_l_k_terms_val = hessian(l_k_terms)(x_flat_precond)
+        hess_l_k = jnp.sum(hess_l_k_terms_val, axis=0)
+        # Symmetrizing
+        hess_l_k_terms_val = 0.5 * (
+            hess_l_k_terms_val
+            + jnp.swapaxes(hess_l_k_terms_val, 1, 2)
         )
-        feas_sln = feas_dict['inner_fin_x']
-        # z_raw is a newly introduced variable that is
-        # [obj, x]
-        # zp_barrier is a newly introduced variable that is
-        # a coordinate transformed z_raw
-        # z os a new variable that is the [1:] of zp_barrier
-        # and is a transformed variety of x.
-        z_raw_init = jnp.concatenate([
-            jnp.array([f_scaled(feas_sln[1:]) * (1.01)]),
-            feas_sln[1:]
-        ])
-        # ----- 2. Define the barrier function -----
-        def F(z_raw, f=f_scaled, g_ineq=g_scaled):
-            obj = z_raw[0]
-            dofs = z_raw[1:]
-            F_ineq = -jnp.sum(jnp.log(-g_ineq(dofs))) # Constraints
-            F_obj = -jnp.log(-f(dofs) + obj) # Objectives
-            return F_ineq + F_obj
-        # This barrier function is likely very ill-conditioned already at the starting point,
-        # so we evaluate its hessian to "stretch" our coordinates.
-        # For hessian
-        Ft = lambda z_raw, t=1/tol_barrier: t * z_raw[0] + F(z_raw)
-        hess_Ft = hessian(Ft)
-        # Using the Hessian, we can condition Ft:
-        z_raw_to_z, z_to_z_raw = _precondition_coordinate_by_matrix(hess_Ft(z_raw_init))
-        z_init = z_raw_to_z(z_raw_init)
-        # Conditioned Ft
-        @jit
-        def Ft_cond(zp, y=y_flat, t=1/tol_barrier):
-            f_obj, g_ineq, _, _, _, _ = f_g_ineq_h_eq_from_y(unravel_y(y))
-            z_raw_opt = z_to_z_raw(zp)
-            obj = z_raw_opt[0]
-            f_scaled = lambda x_scaled, f_obj=f_obj: f_obj(unravel_unscale_x(x_scaled))
-            g_scaled = lambda x_scaled, g_ineq=g_ineq: g_ineq(unravel_unscale_x(x_scaled))
-            return t * obj + F(z_raw_opt, f=f_scaled, g_ineq=g_scaled)
-        l_k = lambda z, y: Ft_cond(z, y)
-        z_to_x = lambda zp: z_to_z_raw(zp)[1:]
-        # ----- 3. Solving the log barrier problem with LBFGS -----
-        z_opt, Ft_cond_opt, grad_Ft_cond_opt, niter_cond_barrier_opt, _, _, dFt_cond_opt = run_opt_lbfgs(
-            init_params=z_init, 
-            fun=Ft_cond, 
-            maxiter=1000, 
-            fstop=tol_default, 
-            xstop=tol_default, 
-            gtol=tol_default, 
-            verbose=3
+        # U_i = V_i.
+        # (or U - VH.T = 0)
+        U, s, VH = jnp.linalg.svd(hess_l_k_terms_val)
+        # We use the maximum SV as an estimate of the 
+        # order of magnitude of a matrix
+        s_max = jnp.max(s, axis=1)
+        # A 3 x ndofs boolean array that 
+        # selects singular values bigger than machine 
+        # precision * s_max.
+        s_selection = s>=svtol * s_max[:, None]
+        # We now sort the matrices by their orders of magnitude
+        # We'll refer to the matrices in ascending order as 
+        # A, B, C
+        hess_order = jnp.argsort(s_max)
+        # We first project B's basis' onto C's basis and then remove the projection
+        # from B's basis'. This gives us the "component" of B that are impossible 
+        # to represent with C's basis.
+        A = hess_l_k_terms_val[hess_order[0]]
+        B = hess_l_k_terms_val[hess_order[1]]
+        C = hess_l_k_terms_val[hess_order[2]]
+        VH_A = VH[hess_order[0]]
+        VH_B = VH[hess_order[1]]
+        VH_C = VH[hess_order[2]]
+        s_selection_B = s_selection[hess_order[1]]
+        s_selection_C = s_selection[hess_order[2]]
+        proj_C  = VH_C.T @ (   s_selection_C[:, None] * VH_C)
+        proj_B  = VH_B.T @ (   s_selection_B[:, None] * VH_B)
+        annil_C = VH_C.T @ ((~s_selection_C)[:, None] * VH_C)
+        # annil_C = jnp.identity(len(x_flat_precond)) - proj_C
+        # We now calculate the basis spanned by B abd C combined
+        U_BC, s_BC, VH_BC = jnp.linalg.svd(jnp.concatenate([proj_B, proj_C]))
+        s_BC_selection = s_BC >= svtol * jnp.max(s_BC)
+        # annil_BC and annil_C removes the components spanned by BC and C's basis
+        # proj_BC and proj_C projects a vector in BC and C's basis
+        proj_BC  = VH_BC.T @ (  s_BC_selection [:, None] * VH_BC)
+        annil_BC = VH_BC.T @ ((~s_BC_selection)[:, None] * VH_BC)
+        # This where statement is here in case A (or A and B)'s Hessian is rank-0
+        scale_AC = jnp.where(s_max[hess_order[0]]>0, s_max[hess_order[2]] / s_max[hess_order[0]], 0)
+        scale_BC = jnp.where(s_max[hess_order[1]]>0, s_max[hess_order[2]] / s_max[hess_order[1]], 0)
+        # The appropriate pre-conditioner is:
+        # O \equiv \[\epsilon^-2 (I-P_{BC}) + \epsilon^-1 P_{BC}\](I-P_C) +P_C
+        OC = C
+        OB = scale_BC * proj_BC @ annil_C @ B + proj_C @ B 
+        OA = (
+            scale_AC * annil_BC @ annil_C @ A
+            + scale_BC * proj_BC @ annil_C @ A
+            + proj_C @ A
         )
-        x_flat_refined = z_to_x(z_opt)
-        dofs_opt = unravel_unscale_x(x_flat_opt)
-        # Printing summary
-        if verbose>0:
-            debug.print(
-                '----- Log barrier conversion -----\n'
-                '    Objective of the final state:       {obj}\n'
-                '    Objective after feasibility steps:  {obj2}\n'
-                '    Objective after the barrier method: {obj3}\n'
-                '    Max violation of the final state:       {mv}\n'
-                '    Max violation after feasibility steps:  {mv2}\n'
-                '    Max violation after the barrier method: {mv3}', 
-                obj=f_scaled(x_flat_opt),
-                obj2=f_scaled(feas_sln[1:]),
-                obj3=f_scaled(x_flat_refined),
-                mv=max_violation,
-                mv2=jnp.max(g_scaled(feas_sln[1:])),
-                mv3=jnp.max(g_scaled(x_flat_refined)),
-            )
-        # -------------------------------------------
-        # ----- Differentiating l_k from Auglag -----
-        # -------------------------------------------
-        # VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
-        # # When solving a constrained optimization problem, an important source of 
-        # # ill-conditioning is that the three terms in l_k can have drastically different
-        # # orders of magnitudes. This block of code performs the pre-conditioning.
-        # c_k = solve_results['inner_fin_c']
-        # mu_k = solve_results['inner_fin_mu']
-        # lam_k = solve_results['inner_fin_lam']
-        # # The pre-conditioning requires that us treat the three 
-        # # terms in l_k separately.
-        # def l_k_terms(x, y=y_flat, mu=mu_k, lam=lam_k, c=c_k): 
-        # # def l_k_terms_raw(x, y=y_flat, mu=mu_k, lam=lam_k, c=c_k): 
-        #     f_obj_temp, g_ineq_temp, h_eq_temp, _, _, _ = f_g_ineq_h_eq_from_y(unravel_y(y))
-        #     f_scaled_temp = lambda x_flat: f_obj_temp(unravel_unscale_x(x_flat))
-        #     g_scaled_temp = lambda x_flat: g_ineq_temp(unravel_unscale_x(x_flat))
-        #     h_scaled_temp = lambda x_flat: h_eq_temp(unravel_unscale_x(x_flat))
-        #     gplus = lambda x, mu, c: jnp.max(jnp.array([g_scaled_temp(x), -mu/c]), axis=0)
-        #     # gplus = lambda x, mu, c: g_scaled_temp(x)
-        #     return jnp.array([
-        #         f_scaled_temp(x),
-        #         lam@h_scaled_temp(x) + mu@gplus(x, mu, c),
-        #         c/2 * (
-        #             jnp.sum(h_scaled_temp(x)**2) 
-        #             + jnp.sum(gplus(x, mu, c)**2)
-        #         )
-        #     ])
-        # # For calculating grad_y_l_k
-        # l_k = lambda x, y=y_flat, mu=mu_k, lam=lam_k, c=c_k: jnp.sum(l_k_terms(x=x, y=y, mu=mu_k, lam=lam_k, c=c_k))
-        # # hess_l_k = hessian(l_k)(x_flat_opt)
-        # x_flat_precond = x_flat_opt
-        # z_to_x = lambda xp: xp
-        # # # ----- Step-1 preconditioning -----
-        # # l_k_raw = lambda x, y=y_flat, mu=mu_k, lam=lam_k, c=c_k: jnp.sum(l_k_terms_raw(x=x, y=y, mu=mu_k, lam=lam_k, c=c_k))
-        # # hess_l_k_raw = hessian(l_k_raw)(x_flat_opt)
-        # # # As the first step of the pre-conditioning, we re-define 
-        # # # l_k and l_k_terms under a changed coordinate based 
-        # # # on the SVD of l_k's hessian. This reduce rounding error 
-        # # # during the autodiff process, and improve the conditioning of 
-        # # # all three terms in l_k. 
-        # # # First, we generate the coordinate transform.
-        # # x_to_z, z_to_x = _precondition_coordinate_by_matrix(hess_l_k_raw)
-        # # # We replace x_flat with its new definition after pre-conditioning.
-        # # # We've already unraveled it before this point, so it's okay to replace
-        # # # the variable.
-        # # x_flat_precond = x_to_z(x_flat_opt)
-        # # # Redefining l_k and l_k_terms. All autodiff will be done 
-        # # # with these instead.
-        # # l_k_terms = lambda xp, y=y_flat: l_k_terms_raw(z_to_x(xp), y=y)
-        # # l_k = lambda xp, y: jnp.sum(l_k_terms(xp=xp, y=y))
-        # # ----- Step-2 preconditioning -----
-        # # An important source of ill-conditioning in Hess(l_k)
-        # # is the difference in the three terms' orders of magnitude.
-        # # Often, each of these terms are singular by themselves, 
-        # # but adds up to a non-singular Hess(l_k).
-        # # The goal of pre-conditioning is to 
-        # # 1. Sort the three Hessians based on the magnitude of their 
-        # # SV's, in ascending order as A, B and C.
-        # # 2. Stretch B in directions where it's linearly indep from C.
-        # # 3. Stretch A in directions where it's linearly indep from B and C.
-        # # Because these are symmetric matrices, 
-        # hess_l_k_terms_val = hessian(l_k_terms)(x_flat_precond)
-        # hess_l_k = jnp.sum(hess_l_k_terms_val, axis=0)
-        # # Symmetrizing
-        # hess_l_k_terms_val = 0.5 * (
-        #     hess_l_k_terms_val
-        #     + jnp.swapaxes(hess_l_k_terms_val, 1, 2)
-        # )
-        # # U_i = V_i.
-        # # (or U - VH.T = 0)
-        # U, s, VH = jnp.linalg.svd(hess_l_k_terms_val)
-        # # We use the maximum SV as an estimate of the 
-        # # order of magnitude of a matrix
-        # s_max = jnp.max(s, axis=1)
-        # # A 3 x ndofs boolean array that 
-        # # selects singular values bigger than machine 
-        # # precision * s_max.
-        # s_selection = s>=svtol * s_max[:, None]
-        # # We now sort the matrices by their orders of magnitude
-        # # We'll refer to the matrices in ascending order as 
-        # # A, B, C
-        # hess_order = jnp.argsort(s_max)
-        # # We first project B's basis' onto C's basis and then remove the projection
-        # # from B's basis'. This gives us the "component" of B that are impossible 
-        # # to represent with C's basis.
-        # A = hess_l_k_terms_val[hess_order[0]]
-        # B = hess_l_k_terms_val[hess_order[1]]
-        # C = hess_l_k_terms_val[hess_order[2]]
-        # VH_A = VH[hess_order[0]]
-        # VH_B = VH[hess_order[1]]
-        # VH_C = VH[hess_order[2]]
-        # s_selection_B = s_selection[hess_order[1]]
-        # s_selection_C = s_selection[hess_order[2]]
-        # proj_C  = VH_C.T @ (   s_selection_C[:, None] * VH_C)
-        # proj_B  = VH_B.T @ (   s_selection_B[:, None] * VH_B)
-        # annil_C = VH_C.T @ ((~s_selection_C)[:, None] * VH_C)
-        # # annil_C = jnp.identity(len(x_flat_precond)) - proj_C
-        # # We now calculate the basis spanned by B abd C combined
-        # U_BC, s_BC, VH_BC = jnp.linalg.svd(jnp.concatenate([proj_B, proj_C]))
-        # s_BC_selection = s_BC >= svtol * jnp.max(s_BC)
-        # # annil_BC and annil_C removes the components spanned by BC and C's basis
-        # # proj_BC and proj_C projects a vector in BC and C's basis
-        # proj_BC  = VH_BC.T @ (  s_BC_selection [:, None] * VH_BC)
-        # annil_BC = VH_BC.T @ ((~s_BC_selection)[:, None] * VH_BC)
-        # # This where statement is here in case A (or A and B)'s Hessian is rank-0
-        # scale_AC = jnp.where(s_max[hess_order[0]]>0, s_max[hess_order[2]] / s_max[hess_order[0]], 0)
-        # scale_BC = jnp.where(s_max[hess_order[1]]>0, s_max[hess_order[2]] / s_max[hess_order[1]], 0)
-        # # The appropriate pre-conditioner is:
-        # # O \equiv \[\epsilon^-2 (I-P_{BC}) + \epsilon^-1 P_{BC}\](I-P_C) +P_C
-        # OC = C
-        # OB = scale_BC * proj_BC @ annil_C @ B + proj_C @ B 
-        # OA = (
-        #     scale_AC * annil_BC @ annil_C @ A
-        #     + scale_BC * proj_BC @ annil_C @ A
-        #     + proj_C @ A
-        # )
-        # Ohess = OA + OB + OC
+        Ohess = OA + OB + OC
         
-        # hess_op = lx.MatrixLinearOperator(hess_l_k)
-        # Ohess_op = lx.MatrixLinearOperator(Ohess)
-        # if verbose>0:
-        #     hess_rank = jnp.linalg.matrix_rank(A + B + C)
-        #     Ohess_rank = jnp.linalg.matrix_rank(OA + OB + OC)
-        #     hess_cond = jnp.linalg.cond(A + B + C)
-        #     Ohess_cond = jnp.linalg.cond(OA + OB + OC)
-        #     # out_dict['hess_cond'] = hess_cond
-        #     # out_dict['hess_cond_preconditioned'] = Ohess_cond
-        #     debug.print(
-        #         'Info on Hessian terms (unsorted)\n'\
-        #         '    Rank of term 1, 2 and 3: {a1}\n'\
-        #         '    Max sv of 1, 2 and 3: {a2}\n'\
-        #         'Info on Hessian terms (sorted)\n'\
-        #         '    Rank of A, B and C: {a}\n'\
-        #         '    Max sv of A, B and C: {aa}\n'\
-        #         '    Rank of OA, OB and OC: {b}\n'\
-        #         '    scale_AC and scale_BC: {bb}\n'\
-        #         '    Rank of proj_BC and annil_BC: {c}\n'\
-        #         '    Rank of proj_C  and annil_C:  {d}\n'\
-        #         '    Constrained Hessian before pre-conditioning:\n'\
-        #         '        Rank: {x}\n'\
-        #         '        Cond: {x1}\n'\
-        #         '        Min, max abs: {x2}, {x3}\n'\
-        #         '    Constrained Hessian after pre-conditioning:\n'\
-        #         '        Rank: {y}\n'\
-        #         '        Cond: {y1}\n'\
-        #         '        Min, max abs: {y2}, {y3}\n',
-        #         a1=jnp.linalg.matrix_rank(hess_l_k_terms_val),
-        #         a2=s_max,
-        #         a=jnp.sum(s_selection[hess_order], axis=1),
-        #         aa=s_max[hess_order],
-        #         b=(jnp.linalg.matrix_rank(OA), jnp.linalg.matrix_rank(OB), jnp.linalg.matrix_rank(OC)),
-        #         bb=(scale_AC, scale_BC),
-        #         c=(jnp.linalg.matrix_rank(proj_BC), jnp.linalg.matrix_rank(annil_BC)),
-        #         d=(jnp.linalg.matrix_rank(proj_C), jnp.linalg.matrix_rank(annil_C)),
-        #         x=hess_rank,
-        #         x1=hess_cond,
-        #         x2=jnp.max(jnp.abs(A + B + C)),
-        #         x3=jnp.min(jnp.abs(A + B + C)),
-        #         y=Ohess_rank,
-        #         y1=Ohess_cond,
-        #         y2=jnp.max(jnp.abs(OA + OB + OC)),
-        #         y3=jnp.min(jnp.abs(OA + OB + OC)),
-        #     )
-        # AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-        # -------------------------------------------
-        # ----- Differentiating l_k from Auglag -----
-        # -------------------------------------------
-    # Now attempt to perform implicit differentiation
-    grad_x_l_k = jacrev(l_k, argnums=0)
-    hess_op = lx.JacobianLinearOperator(
-        grad_x_l_k, 
-        z_opt, args=y_flat, 
-        tags=(lx.symmetric_tag, lx.positive_semidefinite_tag)
-    )
+        hess_op = lx.MatrixLinearOperator(hess_l_k)
+        Ohess_op = lx.MatrixLinearOperator(Ohess)
+        if verbose>0:
+            hess_rank = jnp.linalg.matrix_rank(A + B + C)
+            Ohess_rank = jnp.linalg.matrix_rank(OA + OB + OC)
+            hess_cond = jnp.linalg.cond(A + B + C)
+            Ohess_cond = jnp.linalg.cond(OA + OB + OC)
+            # out_dict['hess_cond'] = hess_cond
+            # out_dict['hess_cond_preconditioned'] = Ohess_cond
+            debug.print(
+                'Info on Hessian terms (unsorted)\n'\
+                '    Rank of term 1, 2 and 3: {a1}\n'\
+                '    Max sv of 1, 2 and 3: {a2}\n'\
+                'Info on Hessian terms (sorted)\n'\
+                '    Rank of A, B and C: {a}\n'\
+                '    Max sv of A, B and C: {aa}\n'\
+                '    Rank of OA, OB and OC: {b}\n'\
+                '    scale_AC and scale_BC: {bb}\n'\
+                '    Rank of proj_BC and annil_BC: {c}\n'\
+                '    Rank of proj_C  and annil_C:  {d}\n'\
+                '    Constrained Hessian before pre-conditioning:\n'\
+                '        Rank: {x}\n'\
+                '        Cond: {x1}\n'\
+                '        Min, max abs: {x2}, {x3}\n'\
+                '    Constrained Hessian after pre-conditioning:\n'\
+                '        Rank: {y}\n'\
+                '        Cond: {y1}\n'\
+                '        Min, max abs: {y2}, {y3}\n',
+                a1=jnp.linalg.matrix_rank(hess_l_k_terms_val),
+                a2=s_max,
+                a=jnp.sum(s_selection[hess_order], axis=1),
+                aa=s_max[hess_order],
+                b=(jnp.linalg.matrix_rank(OA), jnp.linalg.matrix_rank(OB), jnp.linalg.matrix_rank(OC)),
+                bb=(scale_AC, scale_BC),
+                c=(jnp.linalg.matrix_rank(proj_BC), jnp.linalg.matrix_rank(annil_BC)),
+                d=(jnp.linalg.matrix_rank(proj_C), jnp.linalg.matrix_rank(annil_C)),
+                x=hess_rank,
+                x1=hess_cond,
+                x2=jnp.max(jnp.abs(A + B + C)),
+                x3=jnp.min(jnp.abs(A + B + C)),
+                y=Ohess_rank,
+                y1=Ohess_cond,
+                y2=jnp.max(jnp.abs(OA + OB + OC)),
+                y3=jnp.min(jnp.abs(OA + OB + OC)),
+            )
     grad_y_l_k = jacrev(l_k, argnums=1)
-    grad_y_l_k_for_hess = lambda z, y_flat=y_flat: grad_y_l_k(z, y_flat)
-    out_dict = {}
+    grad_y_l_k_for_hess = lambda x, y_flat=y_flat: grad_y_l_k(x, y_flat)
     for metric_name_i in metric_name:
-        f_raw = get_quantity(metric_name_i)
-        f_metric = lambda z, y: f_raw(
-            y_to_qp(unravel_y(y)),
-            unravel_unscale_x(z_to_x(z))
+        f_metric = lambda \
+                        xp, y, metric_name_i=metric_name_i, \
+                        unravel_y=unravel_y, xp_to_x=xp_to_x: get_quantity(metric_name_i)(
+            y_to_qp(unravel_y(y)), 
+            unravel_unscale_x(xp_to_x(xp))
         )
-        grad_z_f = jacrev(f_metric, argnums=0)(z_opt, y_flat)
-        grad_y_f = jacrev(f_metric, argnums=1)(z_opt, y_flat)
+        grad_x_f = jacrev(f_metric, argnums=0)(x_flat_precond, y_flat)
+        grad_y_f = jacrev(f_metric, argnums=1)(x_flat_precond, y_flat)
         if unconstrained:
             vihp = lx.linear_solve(
                 Ohess_op, # should be .T but hessian is symmetric 
-                grad_z_f,
+                grad_x_f,
             ).value
         else:
-            vihp = lx.linear_solve(
+            vihp_b = (
+                scale_AC * annil_BC @ annil_C @ grad_x_f
+                + scale_BC * proj_BC @ annil_C @ grad_x_f
+                + proj_C @ grad_x_f
+            )
+            # TODO
+            # It is somewhat hard to tell whether pre-conditioning 
+            # improves accuracy or introduces additional error 
+            # just from A and b. Therefore, we compute both with
+            # and without pre-conditioning, and pick the option with 
+            # the less error. Is there a way to improve this?
+            vihp_raw = lx.linear_solve(
                 hess_op, # should be .T but hessian is symmetric 
-                grad_z_f,
+                grad_x_f,
                 solver=implicit_linear_solver
             ).value
+            vihp_precond = lx.linear_solve(
+                Ohess_op, # should be .T but hessian is symmetric 
+                vihp_b,
+                solver=implicit_linear_solver
+            ).value
+            # TO REMOVE!!!!!
+            vihp_raw2, _, _, _ = jnp.linalg.lstsq(
+                hess_l_k, # should be .T but hessian is symmetric 
+                grad_x_f,
+            )
+            vihp_precond2, _, _, _ = jnp.linalg.lstsq(
+                Ohess, # should be .T but hessian is symmetric 
+                vihp_b,
+            )
+            hess_err = jnp.linalg.norm(hess_l_k @ vihp_raw - grad_x_f)
+            Ohess_err = jnp.linalg.norm(hess_l_k @ vihp_precond - grad_x_f)
+            hess_err2 = jnp.linalg.norm(hess_l_k @ vihp_raw2 - grad_x_f)
+            Ohess_err2 = jnp.linalg.norm(hess_l_k @ vihp_precond2 - grad_x_f)
+            vihp = jnp.where(hess_err < Ohess_err, vihp_raw, vihp_precond)
+            
         # Now we calculate df/dy using vjp
         # \grad_{x_k} f [-H(l_k, x_k)^-1 \grad_{x_k}\grad_{y} l_k]
         # Primal and tangent must be the same shape
-        _, dfdy1 = jvp(grad_y_l_k_for_hess, primals=[z_opt], tangents=[vihp])
+        # _, dfdy1 = jvp(grad_y_l_k_for_hess, primals=[x_flat_precond], tangents=[vihp])
+        _, dfdy1 = jvp(grad_y_l_k_for_hess, primals=[x_flat_precond], tangents=[vihp])
         # \grad_{y} f
         dfdy2 = grad_y_f
         dfdy_arr = -dfdy1 + dfdy2
         dfdy_dict = {f"df_d{key}": value for key, value in unravel_y(dfdy_arr).items()}
-        metric_result_i = f_metric(z_opt, y_flat)
+        metric_result_i = f_metric(x_flat_precond, y_flat)
         if verbose>0:
-            dldy = grad_y_l_k(z_opt, y_flat)
-            dldxdy = jacrev(l_k, argnums=0)(z_opt, y_flat)
+            _, dfdy1a = jvp(grad_y_l_k_for_hess, primals=[x_flat_precond], tangents=[vihp_precond])
+            _, dfdy1b = jvp(grad_y_l_k_for_hess, primals=[x_flat_precond], tangents=[vihp_raw2])
+            _, dfdy1c = jvp(grad_y_l_k_for_hess, primals=[x_flat_precond], tangents=[vihp_precond2])
+            dfdy_arra = -dfdy1a + dfdy2
+            dfdy_arrb = -dfdy1b + dfdy2
+            dfdy_arrc = -dfdy1c + dfdy2
+            dfdy_dicta = {f"df_d{key}": value for key, value in unravel_y(dfdy_arra).items()}
+            dfdy_dictb = {f"df_d{key}": value for key, value in unravel_y(dfdy_arrb).items()}
+            dfdy_dictc = {f"df_d{key}": value for key, value in unravel_y(dfdy_arrc).items()}
+            
+            dldy = grad_y_l_k(x_flat_precond, y_flat)
+            dldxdy = jacrev(l_k, argnums=0)(x_flat_precond, y_flat)
             debug.print(
                 '* Metric evaluated.\n'\
                 '    scaled x min, max = {x1}, {x2}\n'\
@@ -1095,15 +997,23 @@ def quadcoil(
                 '    2nd term (d{n}/dy) min, max:         {dfdy2}, {dfdy22}\n'\
                 '    dL_k/dy min, max:    {dldy2}, {dldy22}\n'\
                 '    d2L_k/dxdy min, max: {dldxdy2}, {dldxdy22}\n'\
-                '    VIHP min, max components (currently chosen): {v1}, {v2}',
-                x1=jnp.min(z_opt), 
-                x2=jnp.max(z_opt), 
+                '    VIHP min, max components (currently chosen): {v1}, {v2}\n'\
+                '    VIHP error, min, max components without pre-conditioning: {a}, {a1}, {a2}\n'\
+                '    VIHP error, min, max components with pre-conditioning:    {b}, {b1}, {b2}\n',
+                x1=jnp.min(x_flat_precond), 
+                x2=jnp.max(x_flat_precond), 
                 n=metric_name_i, 
                 y=metric_result_i,
                 y1=jnp.min(dfdy_arr),
                 y2=jnp.max(dfdy_arr),
                 v1=jnp.min(vihp),
                 v2=jnp.max(vihp),
+                a=hess_err,
+                a1=jnp.min(vihp_raw),
+                a2=jnp.max(vihp_raw),
+                b=Ohess_err,
+                b1=jnp.min(vihp_precond),
+                b2=jnp.max(vihp_precond),
                 dfdy1=jnp.min(dfdy1),
                 dfdy2=jnp.min(dfdy2),
                 dfdy11=jnp.max(dfdy1),
@@ -1116,151 +1026,29 @@ def quadcoil(
         out_dict[metric_name_i] = {
             'value': metric_result_i, 
             'grad': dfdy_dict,
+            'dfdy1': dfdy1,
+            'dfdy2': dfdy2,
         }     
         if verbose>0:
-            hess_test = hessian(l_k)(z_opt, y_flat)
-            h_rank = jnp.linalg.matrix_rank(hess_test)
-            h_cond = jnp.linalg.cond(hess_test)
-            debug.print('***** Hessian matrix rank and cond: {a}, {b}', a=h_rank, b=h_cond)
-            out_dict[metric_name_i]['hess_rank'] = h_rank
-            out_dict[metric_name_i]['hess_cond'] = h_cond
+            out_dict[metric_name_i]['grada'] = dfdy_dicta,
+            out_dict[metric_name_i]['gradb'] = dfdy_dictb,
+            out_dict[metric_name_i]['gradc'] = dfdy_dictc,
+            out_dict[metric_name_i]['hess_err'] = hess_err,
+            out_dict[metric_name_i]['Ohess_err'] = Ohess_err,
+            out_dict[metric_name_i]['hess_err2'] = hess_err2,
+            out_dict[metric_name_i]['Ohess_err2'] = Ohess_err2,
+            out_dict[metric_name_i]['hess_err_norm'] = hess_err/jnp.linalg.norm(vihp_raw),
+            out_dict[metric_name_i]['Ohess_err_norm'] = Ohess_err/jnp.linalg.norm(vihp_precond),
+            out_dict[metric_name_i]['hess_err_norm2'] = hess_err2/jnp.linalg.norm(vihp_raw2),
+            out_dict[metric_name_i]['Ohess_err_norm2'] = Ohess_err2/jnp.linalg.norm(vihp_precond2),
+            out_dict[metric_name_i]['vihp_raw'] = vihp_raw,
+            out_dict[metric_name_i]['hess_rank'] = hess_rank
+            out_dict[metric_name_i]['Ohess_rank'] = Ohess_rank
+            out_dict[metric_name_i]['hess_cond'] = hess_cond
+            out_dict[metric_name_i]['Ohess_cond'] = Ohess_cond
+            out_dict[metric_name_i]['hess_err'] = hess_err
+            out_dict[metric_name_i]['Ohess_err'] = Ohess_err
     return(out_dict, qp, dofs_opt, solve_results)
-    # grad_y_l_k = jacrev(l_k, argnums=1)
-    # grad_y_l_k_for_hess = lambda x, y_flat=y_flat: grad_y_l_k(x, y_flat)
-    # for metric_name_i in metric_name:
-    #     f_metric = lambda \
-    #                     xp, y, metric_name_i=metric_name_i, \
-    #                     unravel_y=unravel_y, z_to_x=z_to_x: get_quantity(metric_name_i)(
-    #         y_to_qp(unravel_y(y)), 
-    #         unravel_unscale_x(z_to_x(xp))
-    #     )
-    #     grad_x_f = jacrev(f_metric, argnums=0)(x_flat_precond, y_flat)
-    #     grad_y_f = jacrev(f_metric, argnums=1)(x_flat_precond, y_flat)
-    #     if unconstrained:
-    #         vihp = lx.linear_solve(
-    #             Ohess_op, # should be .T but hessian is symmetric 
-    #             grad_x_f,
-    #         ).value
-    #     else:
-    #         vihp_b = (
-    #             scale_AC * annil_BC @ annil_C @ grad_x_f
-    #             + scale_BC * proj_BC @ annil_C @ grad_x_f
-    #             + proj_C @ grad_x_f
-    #         )
-    #         # TODO
-    #         # It is somewhat hard to tell whether pre-conditioning 
-    #         # improves accuracy or introduces additional error 
-    #         # just from A and b. Therefore, we compute both with
-    #         # and without pre-conditioning, and pick the option with 
-    #         # the less error. Is there a way to improve this?
-    #         vihp_raw = lx.linear_solve(
-    #             hess_op, # should be .T but hessian is symmetric 
-    #             grad_x_f,
-    #             solver=implicit_linear_solver
-    #         ).value
-    #         vihp_precond = lx.linear_solve(
-    #             Ohess_op, # should be .T but hessian is symmetric 
-    #             vihp_b,
-    #             solver=implicit_linear_solver
-    #         ).value
-    #         # TO REMOVE!!!!!
-    #         vihp_raw2, _, _, _ = jnp.linalg.lstsq(
-    #             hess_l_k, # should be .T but hessian is symmetric 
-    #             grad_x_f,
-    #         )
-    #         vihp_precond2, _, _, _ = jnp.linalg.lstsq(
-    #             Ohess, # should be .T but hessian is symmetric 
-    #             vihp_b,
-    #         )
-    #         hess_err = jnp.linalg.norm(hess_l_k @ vihp_raw - grad_x_f)
-    #         Ohess_err = jnp.linalg.norm(hess_l_k @ vihp_precond - grad_x_f)
-    #         hess_err2 = jnp.linalg.norm(hess_l_k @ vihp_raw2 - grad_x_f)
-    #         Ohess_err2 = jnp.linalg.norm(hess_l_k @ vihp_precond2 - grad_x_f)
-    #         vihp = jnp.where(hess_err < Ohess_err, vihp_raw, vihp_precond)
-            
-    #     # Now we calculate df/dy using vjp
-    #     # \grad_{x_k} f [-H(l_k, x_k)^-1 \grad_{x_k}\grad_{y} l_k]
-    #     # Primal and tangent must be the same shape
-    #     # _, dfdy1 = jvp(grad_y_l_k_for_hess, primals=[x_flat_precond], tangents=[vihp])
-    #     _, dfdy1 = jvp(grad_y_l_k_for_hess, primals=[x_flat_precond], tangents=[vihp_raw])
-    #     _, dfdy1a = jvp(grad_y_l_k_for_hess, primals=[x_flat_precond], tangents=[vihp_precond])
-    #     _, dfdy1b = jvp(grad_y_l_k_for_hess, primals=[x_flat_precond], tangents=[vihp_raw2])
-    #     _, dfdy1c = jvp(grad_y_l_k_for_hess, primals=[x_flat_precond], tangents=[vihp_precond2])
-    #     # \grad_{y} f
-    #     dfdy2 = grad_y_f
-    #     dfdy_arr = -dfdy1 + dfdy2
-    #     dfdy_arra = -dfdy1a + dfdy2
-    #     dfdy_arrb = -dfdy1b + dfdy2
-    #     dfdy_arrc = -dfdy1c + dfdy2
-    #     dfdy_dict = {f"df_d{key}": value for key, value in unravel_y(dfdy_arr).items()}
-    #     dfdy_dicta = {f"df_d{key}": value for key, value in unravel_y(dfdy_arra).items()}
-    #     dfdy_dictb = {f"df_d{key}": value for key, value in unravel_y(dfdy_arrb).items()}
-    #     dfdy_dictc = {f"df_d{key}": value for key, value in unravel_y(dfdy_arrc).items()}
-    #     metric_result_i = f_metric(x_flat_precond, y_flat)
-    #     if verbose>0:
-    #         dldy = grad_y_l_k(x_flat_precond, y_flat)
-    #         dldxdy = jacrev(l_k, argnums=0)(x_flat_precond, y_flat)
-    #         debug.print(
-    #             '* Metric evaluated.\n'\
-    #             '    scaled x min, max = {x1}, {x2}\n'\
-    #             '    {n} = {y}\n'\
-    #             '    d{n}/dy min, max: {y1}, {y2}\n'\
-    #             '    1st term (d{n}/dx* dx*/dy) min, max: {dfdy1}, {dfdy11}\n'\
-    #             '    2nd term (d{n}/dy) min, max:         {dfdy2}, {dfdy22}\n'\
-    #             '    dL_k/dy min, max:    {dldy2}, {dldy22}\n'\
-    #             '    d2L_k/dxdy min, max: {dldxdy2}, {dldxdy22}\n'\
-    #             '    VIHP min, max components (currently chosen): {v1}, {v2}\n'\
-    #             '    VIHP error, min, max components without pre-conditioning: {a}, {a1}, {a2}\n'\
-    #             '    VIHP error, min, max components with pre-conditioning:    {b}, {b1}, {b2}\n',
-    #             x1=jnp.min(x_flat_precond), 
-    #             x2=jnp.max(x_flat_precond), 
-    #             n=metric_name_i, 
-    #             y=metric_result_i,
-    #             y1=jnp.min(dfdy_arr),
-    #             y2=jnp.max(dfdy_arr),
-    #             v1=jnp.min(vihp),
-    #             v2=jnp.max(vihp),
-    #             a=hess_err,
-    #             a1=jnp.min(vihp_raw),
-    #             a2=jnp.max(vihp_raw),
-    #             b=Ohess_err,
-    #             b1=jnp.min(vihp_precond),
-    #             b2=jnp.max(vihp_precond),
-    #             dfdy1=jnp.min(dfdy1),
-    #             dfdy2=jnp.min(dfdy2),
-    #             dfdy11=jnp.max(dfdy1),
-    #             dfdy22=jnp.max(dfdy2),
-    #             dldy2=jnp.min(dldy),
-    #             dldy22=jnp.max(dldy),
-    #             dldxdy2=jnp.min(dldxdy),
-    #             dldxdy22=jnp.max(dldxdy),
-    #         )
-    #     out_dict[metric_name_i] = {
-    #         'value': metric_result_i, 
-    #         'grad': dfdy_dict,
-    #         'grada': dfdy_dicta,
-    #         'gradb': dfdy_dictb,
-    #         'gradc': dfdy_dictc,
-    #         'hess_err': hess_err,
-    #         'Ohess_err': Ohess_err,
-    #         'hess_err2': hess_err2,
-    #         'Ohess_err2': Ohess_err2,
-    #         'hess_err_norm': hess_err/jnp.linalg.norm(vihp_raw),
-    #         'Ohess_err_norm': Ohess_err/jnp.linalg.norm(vihp_precond),
-    #         'hess_err_norm2': hess_err2/jnp.linalg.norm(vihp_raw2),
-    #         'Ohess_err_norm2': Ohess_err2/jnp.linalg.norm(vihp_precond2),
-    #         'vihp_raw': vihp_raw,
-    #         'dfdy1': dfdy1,
-    #         'dfdy2': dfdy2,
-    #     }     
-    #     if verbose>0:
-    #         out_dict[metric_name_i]['hess_rank'] = hess_rank
-    #         out_dict[metric_name_i]['Ohess_rank'] = Ohess_rank
-    #         out_dict[metric_name_i]['hess_cond'] = hess_cond
-    #         out_dict[metric_name_i]['Ohess_cond'] = Ohess_cond
-    #         out_dict[metric_name_i]['hess_err'] = hess_err
-    #         out_dict[metric_name_i]['Ohess_err'] = Ohess_err
-    # return(out_dict, qp, dofs_opt, solve_results)
 
 def _choose_fwd_rev(func, n_in, n_out, argnums):
     '''
@@ -1277,14 +1065,14 @@ def _precondition_coordinate_by_matrix(hess):
     '''
     Takes a symmetric matrix hess, calculates its SVD, 
     and returns two coordinate transform function, 
-    x_to_z and z_to_x, so that 
+    x_to_xp and xp_to_x, so that 
     hess(f(x')) is more well-behaved than hess(f(x)).
     '''
     _, sv, basis = jnp.linalg.svd(hess)
     scale = jnp.sqrt(sv)
-    x_to_z = lambda x: (basis @ x) * scale
-    z_to_x = lambda xp: basis.T @ (xp / scale)
-    return x_to_z, z_to_x
+    x_to_xp = lambda x: (basis @ x) * scale
+    xp_to_x = lambda xp: basis.T @ (xp / scale)
+    return x_to_xp, xp_to_x
 
 
 def _print_min_blank(a):

@@ -6,3 +6,4 @@ from .current import *
 from .helpers import *
 from .dipole import *
 from .quantity import *
+from .regularization import *
