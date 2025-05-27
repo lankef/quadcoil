@@ -104,7 +104,6 @@ def _K_theta(qp, dofs):
 def _f_K(qp, dofs):
     K2_val = _K2(qp, dofs)
     return qp.eval_surface.integrate(K2_val/2)*qp.nfp
-    
 _f_K_desc_unit = lambda scales: _K_desc_unit(scales)**2 * scales["R0"] * scales["a"]
 
 # ----- Wrappers -----

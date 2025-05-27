@@ -611,7 +611,7 @@ def quadcoil(
         x_flat_opt, val_l_k, grad_l_k, niter_inner_k, dx_k, du_k, dL_k = run_opt_lbfgs(
             init_params=x_flat_init,
             fun=f_scaled,
-            maxiter=maxiter_inner_last,
+            maxiter=maxiter_tot,
             fstop=fstop_inner_last,
             xstop=xstop_inner_last,
             gtol=gtol_inner,
@@ -762,14 +762,14 @@ def quadcoil(
             f_scaled_temp = lambda x_flat: f_obj_temp(unravel_unscale_x(x_flat))
             g_scaled_temp = lambda x_flat: g_ineq_temp(unravel_unscale_x(x_flat))
             h_scaled_temp = lambda x_flat: h_eq_temp(unravel_unscale_x(x_flat))
-            gplus = lambda x, mu, c: jnp.max(jnp.array([g_scaled_temp(x), -mu/c]), axis=0)
+            gplus_temp = lambda x, mu, c: jnp.max(jnp.array([g_scaled_temp(x), -mu/c]), axis=0)
             # gplus = lambda x, mu, c: g_scaled_temp(x)
             return jnp.array([
                 f_scaled_temp(x),
-                lam@h_scaled_temp(x) + mu@gplus(x, mu, c),
+                lam@h_scaled_temp(x) + mu@gplus_temp(x, mu, c),
                 c/2 * (
                     jnp.sum(h_scaled_temp(x)**2) 
-                    + jnp.sum(gplus(x, mu, c)**2)
+                    + jnp.sum(gplus_temp(x, mu, c)**2)
                 )
             ])
         # For calculating grad_y_l_k
@@ -899,7 +899,7 @@ def quadcoil(
                 y1=Ohess_cond
             )
     grad_y_l_k = jacrev(l_k, argnums=1)
-    grad_y_l_k_for_hess = lambda x: grad_y_l_k(x, y_flat)
+    grad_y_l_k_for_hess = lambda x, y_flat=y_flat: grad_y_l_k(x, y_flat)
     for metric_name_i in metric_name:
         f_metric = lambda xp, y: get_quantity(metric_name_i)(
             y_to_qp(unravel_y(y)), 
@@ -948,27 +948,59 @@ def quadcoil(
         dfdy_dict = {f"df_d{key}": value for key, value in unravel_y(dfdy_arr).items()}
         metric_result_i = f_metric(x_flat_precond, y_flat)
         if verbose>0:
+            grad_y_l_k_val = grad_y_l_k(x_flat_precond, y_flat)
+            grad_x_grad_y_l_k = jacfwd(grad_y_l_k_for_hess, argnums=0)(x_flat_precond, y_flat)
+            grad_keys = dfdy_dict.keys()
+            grad_avgs = {}
+            for k in grad_keys:
+                item_k = jnp.atleast_1d(dfdy_dict[k])
+                grad_avgs[k] = (
+                    jnp.min(item_k),
+                    jnp.max(item_k)
+                )
             debug.print(
-                '* Metric evaluated.\n'\
-                '    {x} = {y}\n'\
-                '    VIHP error without pre-conditioning: {a}\n'\
-                '    VIHP error with pre-conditioning:    {b}',
+                '* Metric evaluated.\n'
+                '    {x} = {y}\n'
+                '    VIHP        min max: {v1}, {v2}\n'
+                '    df/dy       min max: {gy1}, {gy2}\n'
+                '    df/dx       min max: {gx1}, {gx2}\n'
+                '    df/dx dx/dy min max: {gxy1}, {gxy2}\n'
+                '    dLk/dy min max: {a1}, {a2}\n'
+                # '    d2Lk/dxdy min max: {b1}, {b2}\n'
+                # '    VIHP error without pre-conditioning: {a}\n'
+                # '    VIHP error with pre-conditioning:    {b}\n'
+                '    Gradient min, max: {g}',
+                v1=jnp.min(vihp),
+                v2=jnp.max(vihp),
+                gy1=jnp.min(grad_y_f),
+                gy2=jnp.max(grad_y_f),
+                gx1=jnp.min(grad_x_f),
+                gx2=jnp.max(grad_x_f),
+                gxy1=jnp.min(dfdy1),
+                gxy2=jnp.max(dfdy1),
+                a1=jnp.min(grad_y_l_k_val),
+                a2=jnp.max(grad_y_l_k_val),
+                # b1=jnp.min(grad_x_grad_y_l_k),
+                # b2=jnp.max(grad_x_grad_y_l_k),
                 x=metric_name_i, 
                 y=metric_result_i,
-                a=hess_err,
-                b=Ohess_err,
+                # a=hess_err,
+                # b=Ohess_err,
+                g=grad_avgs,
             )
         out_dict[metric_name_i] = {
             'value': metric_result_i, 
             'grad': dfdy_dict,
         }     
         if verbose>0:
-            out_dict[metric_name_i]['hess_rank'] = hess_rank
-            out_dict[metric_name_i]['Ohess_rank'] = Ohess_rank
-            out_dict[metric_name_i]['hess_cond'] = hess_cond
-            out_dict[metric_name_i]['Ohess_cond'] = Ohess_cond
-            out_dict[metric_name_i]['hess_err'] = hess_err
-            out_dict[metric_name_i]['Ohess_err'] = Ohess_err
+            out_dict[metric_name_i]['vihp'] = vihp
+            if not unconstrained:
+                out_dict[metric_name_i]['hess_rank'] = hess_rank
+                out_dict[metric_name_i]['Ohess_rank'] = Ohess_rank
+                out_dict[metric_name_i]['hess_cond'] = hess_cond
+                out_dict[metric_name_i]['Ohess_cond'] = Ohess_cond
+                out_dict[metric_name_i]['hess_err'] = hess_err
+                out_dict[metric_name_i]['Ohess_err'] = Ohess_err
     return(out_dict, qp, dofs_opt, solve_results)
 
 def _choose_fwd_rev(func, n_in, n_out, argnums):

@@ -1,17 +1,20 @@
 import numpy as np
-def gamma_to_vtk(data, name):
+def gamma_to_vtk(gamma, name):
     '''
     Converts a surface's quadrature points (produced by ``simsopt.Surface.gamma()``)
     into a vtk file.
     '''
+    if name[-4:] != '.vts':
+        name = name + '.vts'
+    gamma = np.array(gamma)
     try:
         import pyvista as pv
     except:
         raise ImportError('pyvista must be installed to save vtk files.')
-    # Assuming 'data' is your array of shape (N, M, 3) with [:,:,0] = r, [:,:,1] = phi, and [:,:,2] = z
-    x = data[:, :, 0]
-    y = data[:, :, 1]
-    z = data[:, :, 2]
+    # Assuming 'gamma' is your array of shape (N, M, 3) with [:,:,0] = r, [:,:,1] = phi, and [:,:,2] = z
+    x = gamma[:, :, 0]
+    y = gamma[:, :, 1]
+    z = gamma[:, :, 2]
 
     # Flatten the arrays for grid points
     points = np.c_[x.ravel(), y.ravel(), z.ravel()]
@@ -29,6 +32,10 @@ def gamma_and_field_to_vtk(gamma, f, name):
     Converts a surface's quadrature points (produced by ``simsopt.Surface.gamma()``)
     and a 3d vector field (xyz) into a vtk file.
     '''
+    if name[-4:] != '.vts':
+        name = name + '.vts'
+    gamma = np.array(gamma)
+    f = np.array(f)
     try:
         import pyvista as pv
     except:
@@ -51,24 +58,28 @@ def gamma_and_field_to_vtk(gamma, f, name):
     # Save the grid to a VTK file for ParaView
     grid.save(name)
 
-def gamma_and_scalar_field_to_vtk(xyz_data, scalar_data, name):
+def gamma_and_scalar_field_to_vtk(gamma, f_scalar, name):
     '''
     Converts a surface's quadrature points (produced by ``simsopt.Surface.gamma()``)
     and a scalar field (xyz) into a vtk file.
     '''
+    if name[-4:] != '.vts':
+        name = name + '.vts'
+    gamma = np.array(gamma)
+    f_scalar = np.array(f_scalar)
     try:
         import pyvista as pv
     except:
         raise ImportError('pyvista must be installed to save vtk files.')
-    # Assuming `xyz_data` is your array of shape (N, M, 3) storing the x, y, z coordinates
-    # and `scalar_data` is your array of shape (N, M) storing the scalar field
-    x = xyz_data[:, :, 0]
-    y = xyz_data[:, :, 1]
-    z = xyz_data[:, :, 2]
+    # Assuming `gamma` is your array of shape (N, M, 3) storing the x, y, z coordinates
+    # and `f_scalar` is your array of shape (N, M) storing the scalar field
+    x = gamma[:, :, 0]
+    y = gamma[:, :, 1]
+    z = gamma[:, :, 2]
 
     # Flatten the coordinate arrays and the scalar field for structured grid points
     points = np.c_[x.ravel(), y.ravel(), z.ravel()]
-    scalars = scalar_data.ravel()
+    scalars = f_scalar.ravel()
 
     # Create the structured grid
     grid = pv.StructuredGrid()

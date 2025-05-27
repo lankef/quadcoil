@@ -34,10 +34,17 @@ def _Phi_with_net_current(qp, dofs):
 @jit
 def _Phi2(qp, dofs):
     return _Phi(qp, dofs)**2
-_Phi2_desc_unit = lambda scales: Phi_desc_unit(scales)**2
-_Phi4_desc_unit = lambda scales: Phi_desc_unit(scales)**4
 
-_f_l1_Phi_desc_unit = lambda scales: Phi_desc_unit(scales) * scales["R0"] * scales["a"]
+@jit 
+def _f_Phi(qp, dofs):
+    _Phi2_val = _Phi2(qp, dofs)
+    return qp.eval_surface.integrate(_Phi2_val/2)*qp.nfp
+_f_Phi_desc_unit = lambda scales: _Phi_desc_unit(scales)**2 * scales["R0"] * scales["a"]
+    
+_Phi2_desc_unit = lambda scales: _Phi_desc_unit(scales)**2
+_Phi4_desc_unit = lambda scales: _Phi_desc_unit(scales)**4
+
+_f_l1_Phi_desc_unit = lambda scales: _Phi_desc_unit(scales) * scales["R0"] * scales["a"]
 
 # ----- Wrappers -----
 # This is a linear scalar field. Again, 
@@ -96,5 +103,12 @@ f_l1_Phi = _Quantity.generate_l1_norm(
     aux_argname='scaled_abs_phi', 
     desc_unit=_f_l1_Phi_desc_unit,
     auto_stellsym=True,
+)
+
+# This is a positive definite quadratic scalar. 
+f_Phi = _Quantity.generate_c2(
+    func=_f_Phi, 
+    compatibility=['f', '<='], 
+    desc_unit=_f_Phi_desc_unit,
 )
     
