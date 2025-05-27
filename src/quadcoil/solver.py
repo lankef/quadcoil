@@ -2,6 +2,7 @@ import warnings
 import jax.numpy as jnp
 import optax
 import optax.tree_utils as otu
+from functools import partial
 from jax import jit, vmap, grad, jacrev
 import jax
 from jax.lax import while_loop
@@ -21,7 +22,7 @@ def delta_normalized(x1, x2):
     max = jnp.maximum(jnp.abs(x1), jnp.abs(x2))
     return jnp.where(max>0, diff/max, max)
 
-def run_opt_lbfgs(init_params, fun, maxiter, fstop, xstop, gtol, verbose):
+def run_opt_lbfgs(init_params, fun, maxiter, fstop, xstop, gtol, verbose, n_history=10):
     r'''
     A wrapper for performing unconstrained optimization using ``optax.lbfgs``.
     
@@ -63,7 +64,7 @@ def run_opt_lbfgs(init_params, fun, maxiter, fstop, xstop, gtol, verbose):
     return run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt=optax.lbfgs(), verbose=verbose)
 
 
-def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
+def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose, n_history=10):
     r'''
     A wrapper for performing unconstrained optimization using ``optax.base.GradientTransformationExtraArgs``.
     
@@ -104,12 +105,17 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
     final_df : float
         The rate of change of f at the optimum.
     '''
+    init_val = fun(init_params)
     init_carry = (
-        init_params, 
-        jnp.zeros_like(init_params),
-        0, jnp.zeros_like(init_params), jnp.zeros_like(init_params), 0,
+        init_params,  # params
+        jnp.zeros_like(init_params), # update
+        init_val, # value
+        jnp.linspace(1000*fstop, 0, n_history) + init_val * 2, # val_rec
+        jnp.zeros_like(init_params), # dx
+        jnp.zeros_like(init_params), # du
+        0, # df
         # 0., 0., 0., 0.,
-        opt.init(init_params)
+        opt.init(init_params) # state1
     )
     g0 = grad(fun)(init_params)
     g0_norm = jnp.linalg.norm(g0)
@@ -117,9 +123,9 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
     value_and_grad_fun = optax.value_and_grad_from_state(fun)
     if verbose>1:
         jax.debug.print('INNER: starting gradient L2 norm: {a}', a=g0_norm)
-    # Carry is params, update, value, dx, du, df, state1
+    # Carry is params, update, value, val_rec, dx, du, df, state1
     def step(carry):
-        params1, updates1, value1, _, _, _, state1 = carry
+        params1, updates1, value1, val_rec, _, _, _, state1 = carry
         value2, grad2 = value_and_grad_fun(params1, state=state1)
         updates2, state2 = opt.update(
             grad2, state1, params1, value=value2, grad=grad2, value_fn=fun
@@ -127,6 +133,7 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
         params2 = optax.apply_updates(params1, updates2)
         return(
             params2, updates2, value2, 
+            jnp.append(val_rec[1:], value2),
             jnp.abs(params2 - params1), # jnp.linalg.norm(params2 - params1), 
             jnp.abs(updates2 - updates1), # jnp.linalg.norm(updates2 - updates1), 
             jnp.abs(value2 - value1), 
@@ -137,7 +144,7 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
         )
   
     def continuing_criterion(carry):
-        params, _, value, dx, du, df, state = carry
+        params, _, value, val_rec, dx, du, df, state = carry
         iter_num = otu.tree_get(state, 'count')
         grad = otu.tree_get(state, 'grad')
         err = otu.tree_l2_norm(grad)
@@ -147,37 +154,49 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
         dx_norm = jnp.linalg.norm(dx)
         du_norm = jnp.linalg.norm(du)
         params_norm = jnp.linalg.norm(params)
+        avg_improvement = jnp.average(val_rec[:-1] - val_rec[1:])
         if verbose>2:
             jax.debug.print(
                 'INNER: L: {l}, dx: {dx}, du: {du}, df: {df}, \n'\
-                '    dx - (dx+x-x): {dxn},\n'\
-                '    grad:{g}, grad/g0:{gnorm}\n'\
+                '    grad:{g}, grad/g0:{gnorm}, Average improvement: {adf}\n'\
+                '    Value record: {val_rec}\n'\
                 '    Stopping criteria: \n'
                 '(iter_num < maxiter): {a}\n'
                 '& (err > gtol) : {b}\n'
+                '& (avg_improvement > fstop): {ff}'
                 '& ((dx_norm > xstop) | (du_norm > xstop) | (df > fstop)): {c}, {d}, {e}\n'
+                '(dx_norm > xstop): {dx_norm} > {xstop})\n'
+                '(du_norm > xstop): {du_norm} > {xstop}\n'
+                '(df > fstop):      {df} > {fstop}\n'
                 '',
+                adf=avg_improvement,
+                val_rec=val_rec,
                 a=(iter_num < maxiter),
                 b=(err > gtol),
                 c=(dx_norm > xstop),
                 d=(du_norm > xstop),
                 e=(df > fstop),
+                ff=(avg_improvement > fstop),
                 l=value,
                 dx=jnp.max(dx),
-                dxn=jnp.linalg.norm(dx - dx1),
                 du=jnp.max(du),
-                df=df,
                 g=err,
                 gnorm=err/g0_norm,
+                dx_norm=dx_norm,
+                du_norm=du_norm,
+                xstop=xstop,
+                df=df,
+                fstop=fstop,
             )
         return (iter_num == 0) | (
             (iter_num < maxiter) 
             & (err > gtol) 
+            & (avg_improvement > fstop) # Added May 27
             & ((dx_norm > xstop) | (du_norm > xstop) | (df > fstop)) # The last one is added on May 19
             # & ((dx_norm > xstop * params_norm) | (du_norm > xstop * params_norm))
             # & (df > fstop * value) 
         )
-    final_params, final_updates, final_value, final_dx, final_du, final_df, final_state = while_loop(
+    final_params, final_updates, final_value, val_rec, final_dx, final_du, final_df, final_state = while_loop(
         continuing_criterion, step, init_carry
     )
     return(
@@ -189,6 +208,23 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose):
         jnp.linalg.norm(final_du),# final_du, # Changes in u
         final_df, # Changes in f
     )
+
+# Thresholding function for g+.
+# The original one is gplus_hard.
+# Introducing soft thresholding may improve differentiation behavior.
+gplus_hard = lambda x, mu, c, g_ineq: jnp.maximum(g_ineq(x), -mu/c)
+
+def gplus_elu(x, mu, c, g_ineq, scale=1):
+    gval_shifted = g_ineq(x) + mu/c
+    return jnp.where(
+        gval_shifted<0,
+        (jnp.exp(scale * gval_shifted) - 1)/scale - mu/c,
+        gval_shifted - mu/c
+    )
+    
+def gplus_softplus(x, mu, c, g_ineq, scale=1):
+    gval_shifted = g_ineq(x) + mu/c
+    return jnp.log(1 + jnp.exp(scale * gval_shifted))/scale - mu/c
 
 def solve_constrained(
         x_init,
@@ -217,7 +253,8 @@ def solve_constrained(
         # # Enables history and forward diff but disables 
         # # convergence test.
         verbose=0,
-        c_k_safe=1e9
+        c_k_safe=1e9,
+        gplus_mask=gplus_hard,
     ):
     r'''
     Solves the constrained optimization problem:
@@ -327,7 +364,8 @@ def solve_constrained(
             }
     '''
     # Has shape n_cons_ineq
-    gplus = lambda x, mu, c: jnp.max(jnp.array([g_ineq(x), -mu/c]), axis=0)
+    # gplus = lambda x, mu, c: jnp.max(jnp.array([g_ineq(x), -mu/c]), axis=0)
+    gplus = partial(gplus_mask, g_ineq=g_ineq)
     grad_f = grad(f_obj)
     grad_g = jacrev(g_ineq)
     grad_h = jacrev(h_eq)
