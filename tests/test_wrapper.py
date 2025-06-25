@@ -1,7 +1,16 @@
 import unittest
 from quadcoil import get_quantity, merge_callables
-from quadcoil.wrapper import _add_quantity, _parse_objectives, _parse_constraints
-from quadcoil.quantity import f_B, f_K, K_dot_grad_K, f_B_normalized_by_Bnormal_IG, Phi
+from quadcoil.wrapper import (
+    _add_quantity,
+    _parse_objectives,
+    _parse_constraints
+)
+from quadcoil.quantity import (
+    f_B, f_K, K_dot_grad_K, 
+    f_B_normalized_by_Bnormal_IG, 
+    Phi, f_l1_Phi
+)
+from quadcoil.quantity.quantity import _compress_by_stellsym, _expand_by_stellsym
 import jax.numpy as jnp
 import numpy as np
 from simsopt import load
@@ -58,8 +67,8 @@ class QuadcoilWrapperTest(unittest.TestCase):
         KK_ans = K_dot_grad_K(qp, dofs)
         pert_f_K = (np.random.random()-0.5) * f_K_ans
         pert_KK = (np.random.random(KK_ans.shape)-0.5) * jnp.max(jnp.abs(KK_ans))
-        unit_f_K = 114
-        unit_KK = 514
+        unit_f_K = np.random.random()*10+10
+        unit_KK = np.random.random()*10+10
         g_ineq_test, h_eq_test, aux_dofs = _parse_constraints(
             # A list of function names in quadcoil.objective.
             constraint_name = ['f_K', 'K_dot_grad_K', 'K_dot_grad_K'], 
@@ -111,58 +120,70 @@ class QuadcoilWrapperTest(unittest.TestCase):
     @unittest.skipIf(not CPF_AVAILABLE, "Skipping objective parser test, simsopt.field.CurrentPotentialFourier unavailable.")
     def test_parse_objectives(self):
         dofs = {'phi': cp.get_dofs()}
-        test_weight = 1.
-        test_unit = 1.
-
+        test_weight = np.random.random()*10 + 10
+        test_weight2 = np.random.random()*10 + 10
+        test_weight3 = np.random.random()*10 + 10
+        test_unit = np.random.random()*10 + 10
+        test_phi = np.random.random()*10 + 10
         # Testing a simple objective without aux vars and constraints
         f_B_test, _, _, _ = _parse_objectives('f_B')
         self.assertTrue(compare(f_B_test(qp, dofs), f_B_normalized_by_Bnormal_IG(qp, dofs)))
 
         # Testing 2 simple objectives without aux vars and constraints
-        f_BK_test, g_empty, h_empty, aux_empty = _parse_objectives(['f_B', 'f_K'], (None, 1.), jnp.array([114, test_weight]))
+        f_BK_test, g_empty, h_empty, aux_empty = _parse_objectives(['f_B', 'f_K'], (None, 1.), jnp.array([test_weight3, test_weight]))
         self.assertTrue(g_empty==[])
         self.assertTrue(h_empty==[])
         self.assertTrue(aux_empty=={})
         self.assertTrue(compare(
             f_BK_test(qp, dofs), 
-            114 * f_B_normalized_by_Bnormal_IG(qp, dofs) + test_weight * f_K(qp, dofs)
+            test_weight3 * f_B_normalized_by_Bnormal_IG(qp, dofs) + test_weight * f_K(qp, dofs)
         ))
 
         # Test a simple objective and a l-inf one
-        dof1 = {'phi': cp.get_dofs(), 'scaled_max_phi': 33}
+        dof1 = {'phi': cp.get_dofs(), 'scaled_max_phi': test_phi}
         f_1_test, g_1, h_1, aux_1 = _parse_objectives(
             ['f_B', 'f_max_Phi'], 
             (None, test_unit), 
-            jnp.array([17., test_weight])
+            jnp.array([test_weight2, test_weight])
         )
         # The "behind-the-hood" of the L-inf norm function returns 
         # the auxiliary var.
-        self.assertTrue(f_1_test(qp, dof1) == test_weight * 33 + 17 * f_B_normalized_by_Bnormal_IG(qp, dof1))
-        # It creates one auxiliary constraint: 
-        # g = [
-        #     g_+ =  Phi_grid/unit - p <= 0
-        #     g_- = -Phi_grid/unit - p <= 0
-        # ]
-        print('g_1', g_1)
-        g_aux = g_1[0](qp, dof1)
-        print('g_aux', g_aux)
-        g_plus = g_aux[0]
-        g_minus = g_aux[1]
-        Phi_val = Phi(qp, dofs)
-        self.assertTrue(len(g_1) == 1)
-        self.assertTrue(g_aux.shape == tuple([2] + list(Phi_val.shape)))
-        self.assertTrue(h_1 == [])
-        self.assertTrue(compare((g_plus + 33) * test_unit, Phi_val))
-        self.assertTrue(compare((g_minus + 33) * test_unit, -Phi_val))
+        self.assertTrue(f_1_test(qp, dof1) == test_weight * test_phi + test_weight2 * f_B_normalized_by_Bnormal_IG(qp, dof1))
+        phi_ans = Phi(
+            qp, {'phi': cp.get_dofs()}
+        )
+        print('max phi ans', jnp.max(jnp.abs(phi_ans)))
+        phi_l1 = f_l1_Phi(
+            qp, {'phi': cp.get_dofs()}
+        )
         # Testing the L-1 objective
-        phi_random = np.random.random((len(qp.quadpoints_phi), len(qp.quadpoints_theta)))+2
-        phi_l1 = qp.eval_surface.integrate(phi_random)*qp.nfp
-        dof1 = {'phi': cp.get_dofs(), 'scaled_abs_phi': phi_random}
+        # Unscaled
+        self.assertTrue(compare(
+            phi_l1, 
+            f_l1_Phi.scaled_c2_impl(
+                qp, 
+                {
+                    'phi': cp.get_dofs(), 
+                    'scaled_abs_phi': _compress_by_stellsym(phi_ans)
+                }, 
+                unit=1.
+            )
+        ))
+        dof_scaled = {
+            'phi': cp.get_dofs(), 
+            'scaled_abs_phi': _compress_by_stellsym(phi_ans) / test_unit
+        }
         f_2_test, g_2, h_2, aux_2 = _parse_objectives(
             ['f_B', 'f_l1_Phi'], 
             (None, test_unit), 
-            jnp.array([17., test_weight])
+            jnp.array([test_weight2, test_weight])
         )
-        self.assertTrue(f_2_test(qp, dof1) == test_weight * phi_l1 + 17 * f_B_normalized_by_Bnormal_IG(qp, dof1))
+        self.assertTrue(compare(
+            f_2_test(qp, dof_scaled), 
+            (
+                test_weight * phi_l1 / test_unit 
+                + test_weight2 * f_B_normalized_by_Bnormal_IG(qp, dof_scaled)
+            )
+        ))
 if __name__ == "__main__":
     unittest.main()
