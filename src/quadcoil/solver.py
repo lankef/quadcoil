@@ -253,7 +253,7 @@ def solve_constrained(
         # # Enables history and forward diff but disables 
         # # convergence test.
         verbose=0,
-        c_k_safe=1e9,
+        c_k_safe=1e15,
         gplus_mask=gplus_hard,
     ):
     r'''
@@ -477,9 +477,9 @@ def solve_constrained(
             | (c_k >= c_k_safe) 
             | (niter_inner_k >= maxiter_inner)
         )
-        c_k_new = jnp.where(update_multiplier, c_k,               c_k * c_growth_rate) 
-        lam_k =   lam_k + c_k * h_k # jnp.where(update_multiplier, lam_k + c_k * h_k, lam_k              )
-        mu_k =    mu_k + c_k * gp_k # jnp.where(update_multiplier, mu_k + c_k * gp_k, mu_k               )
+        c_k_new = jnp.where(update_multiplier, c_k, c_k * c_growth_rate) 
+        lam_k = lam_k + c_k * h_k
+        mu_k = mu_k + c_k * gp_k
         df = jnp.linalg.norm(f_km1 - f_k)
         dg = jnp.linalg.norm(g_km1 - g_k)
         dh = jnp.linalg.norm(h_km1 - h_k)

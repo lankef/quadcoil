@@ -1,24 +1,51 @@
 from typing import Callable, List, Any
-from jax import jit
+from jax import jit, eval_shape
 import jax.numpy as jnp
-from functools import partial
 
-def _take_stellsym(field):
-    # First, we flatten the phi/theta dependence
-    # of field. These usually are its first two axes
-    shape = field.shape
-    new_shape = (shape[0] * shape[1],) + shape[2:]
-    flat_field = jnp.reshape(field, new_shape)
-    # Then we take only roughly half of the sample points.
-    # Note to developers: It's wrong to take half of the 
-    # sample points naively, because our quadrature points
-    # do not sample from 0 to 1!
-    # Note that the simplest, but also safest choice
-    # is to take (nphi//2 + 1) * ntheta elements. 
-    # This will still introduce O(ntheta) duplicate
-    # elements but it saves us of treating even/odd 
-    # nphi/ntheta cases separately. 
-    return flat_field[:(shape[0]//2+1) * shape[1]]
+import numpy as np
+from functools import partial, lru_cache
+# For compressing a [npol, ntor, ...] array 
+# into a [n_unique, ...] array based on stellarator
+# symmetry.
+def _get_unique_indices(n_phi, n_theta):
+    i_grid, j_grid = np.meshgrid(np.arange(n_theta), np.arange(n_phi), indexing='ij')
+    i_sym = (n_theta - i_grid) % n_theta
+    j_sym = (n_phi - j_grid) % n_phi
+    mask = (i_grid < i_sym) | ((i_grid == i_sym) & (j_grid <= j_sym))
+    indices = np.column_stack((i_grid[mask], j_grid[mask]))
+    return indices
+
+@jit
+def _compress_by_stellsym(f):
+    # f: (..., n_theta, n_phi, trailing dims...)
+    f_shape = f.shape
+    n_phi, n_theta = f_shape[:2]
+    trailing_shape = f_shape[2:]  # any dimensions beyond theta, phi
+    unique_indices = _get_unique_indices(n_phi, n_theta)
+    i_idx = unique_indices[:, 0]
+    j_idx = unique_indices[:, 1]
+    # Gather f at (i_idx, j_idx) along first two axes, keep trailing dims
+    f_unique = f[i_idx, j_idx, ...]  # shape: (N_unique, ...trailing dims...)
+
+    return f_unique
+
+@partial(jit, static_argnames=('f_shape'))
+def _expand_by_stellsym(f_unique, f_shape):
+    n_phi, n_theta = f_shape[:2]
+    unique_indices = _get_unique_indices(n_phi, n_theta)
+    trailing_shape = f_shape[2:]
+    # Initialize full array
+    f_full = jnp.zeros(f_shape)
+    i_idx = unique_indices[:, 0]
+    j_idx = unique_indices[:, 1]
+    i_sym = (n_theta - i_idx) % n_theta
+    j_sym = (n_phi - j_idx) % n_phi
+    # Set unique values
+    f_full = f_full.at[i_idx, j_idx, ...].set(f_unique)
+    # Apply symmetry for non-fixed points
+    mask = (i_sym != i_idx) | (j_sym != j_idx)
+    f_full = f_full.at[i_sym[mask], j_sym[mask], ...].set(-f_unique[mask])
+    return f_full
     
 class _Quantity: 
     r'''
@@ -236,7 +263,9 @@ class _Quantity:
                 unit_eff = unit
             field = func(qp, dofs)
             if auto_stellsym and qp.stellsym:
-                field = _take_stellsym(field)
+                field = _compress_by_stellsym(field)
+            else:
+                field = field.flatten()
             p_aux = dofs[aux_argname]
             g_plus = field/unit_eff - p_aux #  f - p <=0
             # We need only half of the constraints if f is positive definite
@@ -374,24 +403,27 @@ class _Quantity:
         def scaled_c2_impl(qp, dofs, unit, aux_argname=aux_argname):
             # Because the aux vars are already
             # scaled to O(1), no unit dependence is actually needed here.
-            da_flat = qp.eval_surface.da()
+            da = qp.eval_surface.da()
+            f_shape = eval_shape(func, qp, dofs).shape
             if auto_stellsym and qp.stellsym:
-                da_flat = _take_stellsym(da_flat)
-            return jnp.sum(da_flat * dofs[aux_argname]) * qp.nfp
+                field = _expand_by_stellsym(dofs[aux_argname], f_shape)
+            else:
+                field = dofs[aux_argname].reshape(f_shape)
+            integrand = jnp.broadcast_to(da, field.shape) * jnp.abs(field)
+            return jnp.sum(integrand) * qp.nfp
         # The effective function
         def c0_impl(qp, dofs, func=func):
-            raise NotImplementedError('Not working yet, please don\'t use')
-            da_flat = qp.eval_surface.da()
+            da = qp.eval_surface.da()
             field = func(qp, dofs)
-            if auto_stellsym and qp.stellsym:
-                da_flat = _take_stellsym(da_flat)
-                field = _take_stellsym(field)
-            return jnp.sum(da_flat * field) * qp.nfp
+            integrand = jnp.broadcast_to(da, field.shape) * jnp.abs(field)
+            return jnp.sum(integrand) * qp.nfp
         # The constraints
         def scaled_g_ineq_impl(qp, dofs, unit, func=func, aux_argname=aux_argname, auto_stellsym=auto_stellsym):
             field = func(qp, dofs)
             if auto_stellsym and qp.stellsym:
-                field = _take_stellsym(field)
+                field = _compress_by_stellsym(field)
+            else:
+                field = field.flatten()
             p_aux = dofs[aux_argname]
             g_plus = field/unit - p_aux #  f - p <=0
             # We need only half of the constraints if f is positive definite
@@ -404,16 +436,15 @@ class _Quantity:
         # are (unit). Therefore, g_unit is val_unit \
         # divided by the surface's area.
         def g_unit(qp, unit):
-            da_flat = qp.eval_surface.da()
-            if auto_stellsym and qp.stellsym:
-                da_flat = _take_stellsym(da_flat)
-            return unit / (jnp.sum(da_flat) * qp.nfp)
+            return unit
         # The initial value of the auxiliary variable is the 
         # abs(field) / g_unit. 
         def scaled_aux_dofs_init(qp, dofs, unit, auto_stellsym=auto_stellsym):
             field = func(qp, dofs)
             if auto_stellsym and qp.stellsym:
-                field = _take_stellsym(field)
+                field = _compress_by_stellsym(field)
+            else:
+                field = field.flatten()
             return jnp.abs(field)/g_unit(qp, unit)
         return _Quantity(
             scaled_c2_impl=scaled_c2_impl,

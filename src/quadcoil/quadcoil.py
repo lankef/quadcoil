@@ -4,6 +4,7 @@ from quadcoil import (
     SurfaceRZFourierJAX, QuadcoilParams, 
     solve_constrained, run_opt_lbfgs,
     is_ndarray, tree_len,
+    gplus_hard, gplus_elu, gplus_softplus
 )
 from quadcoil.wrapper import _parse_objectives, _parse_constraints
 from functools import partial
@@ -47,6 +48,7 @@ QUADCOIL_STATIC_ARGNAMES=[
     'maxiter_tot',
     'maxiter_inner',
     'maxiter_inner_last',
+    'gplus_mask',
     'implicit_linear_solver',
     'value_only',
     'verbose',
@@ -125,6 +127,7 @@ def quadcoil(
     maxiter_tot:int=10000,
     maxiter_inner:int=1000,
     maxiter_inner_last:int=1000,
+    gplus_mask=gplus_hard, # gplus_elu,
     # lx.GMRES(rtol=1e-10, atol=1e-10), # Stagnates with default setting
     implicit_linear_solver=lx.AutoLinearSolver(well_posed=True),
     value_only=False,
@@ -228,6 +231,8 @@ def quadcoil(
         (Static) The maximum of the outer iteration.
     maxiter_inner, maxiter_inner_last : int, optional, default=500
         (Static) The maximum of the inner iteration.
+    gplus_mask : Callable, optional, default=quadcoil.gplus_hard
+        (Static) The form of g+. Soft thresholding may improve derivative effectiveness.
     implicit_linear_solver : lineax.AbstractLinearSolver, optional, default=lineax.AutoLinearSolver(well_posed=True)
         (Static) The lineax linear solver choice for implicit differentiation.
     value_only : bool, optional, default=False
@@ -762,7 +767,8 @@ def quadcoil(
             f_scaled_temp = lambda x_flat: f_obj_temp(unravel_unscale_x(x_flat))
             g_scaled_temp = lambda x_flat: g_ineq_temp(unravel_unscale_x(x_flat))
             h_scaled_temp = lambda x_flat: h_eq_temp(unravel_unscale_x(x_flat))
-            gplus_temp = lambda x, mu, c: jnp.max(jnp.array([g_scaled_temp(x), -mu/c]), axis=0)
+            gplus_temp = partial(gplus_mask, g_ineq=g_scaled_temp)
+            # gplus_temp = lambda x, mu, c: jnp.max(jnp.array([g_scaled_temp(x), -mu/c]), axis=0)
             # gplus = lambda x, mu, c: g_scaled_temp(x)
             return jnp.array([
                 f_scaled_temp(x),
@@ -773,7 +779,7 @@ def quadcoil(
                 )
             ])
         # For calculating grad_y_l_k
-        l_k = lambda x, y=y_flat, mu=mu_k, lam=lam_k, c=c_k: jnp.sum(l_k_terms(x=x, y=y, mu=mu_k, lam=lam_k, c=c_k))
+        l_k = lambda x, y=y_flat, mu=mu_k, lam=lam_k, c=c_k: jnp.sum(l_k_terms(x=x, y=y, mu=mu, lam=lam, c=c))
         # hess_l_k = hessian(l_k)(x_flat_opt)
         x_flat_precond = x_flat_opt
         xp_to_x = lambda xp: xp

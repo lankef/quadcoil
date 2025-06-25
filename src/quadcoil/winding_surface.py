@@ -7,6 +7,8 @@ from functools import partial
 from .surfacerzfourier_jax import dof_to_rz_op, SurfaceRZFourierJAX
 import lineax as lx
 
+
+
 # @partial(jit, static_argnames=['nfp', 'stellsym', 'mpol', 'ntor', 'lam_tikhonov',])
 def fit_surfacerzfourier(
         phi_grid, theta_grid, 
@@ -199,6 +201,92 @@ def polygon_self_intersection(r_pol, z_pol):
     weight = jnp.where(jnp.roll(weight, 1)==0, 0, 1)
     return(weight)
 
+def graham_scan(r_expand, z_expand):
+    N = r_expand.shape[0]
+
+    # Step 1: Find P0 (lowest z, then leftmost r)
+    min_idx = jnp.lexsort((r_expand, z_expand))[0]
+    P0 = jnp.array([r_expand[min_idx], z_expand[min_idx]])
+
+    # Step 2: Compute polar angles and distances
+    delta_r = r_expand - P0[0]
+    delta_z = z_expand - P0[1]
+    angles = jnp.arctan2(delta_z, delta_r)
+    dists = delta_r**2 + delta_z**2
+
+    # Step 3: Sort indices by angle, break ties with farthest distance
+    sort_idx = jnp.lexsort((-dists, angles))
+    angles_sorted = angles[sort_idx]
+
+    # Step 4: Keep only the farthest point per unique angle using fixed-size buffer
+    def keep_unique_angles():
+        init_kept = jnp.zeros(N, dtype=jnp.int32).at[0].set(sort_idx[0])
+        init_angle = angles[sort_idx[0]]
+        init_count = jnp.array(1, dtype=jnp.int32)
+
+        def body(i, carry):
+            kept_indices, last_angle, count = carry
+            idx = sort_idx[i]
+            angle = angles[idx]
+            is_new = angle != last_angle
+
+            kept_indices = lax.cond(
+                is_new,
+                lambda k: k.at[count].set(idx),
+                lambda k: k,
+                kept_indices
+            )
+            last_angle = lax.cond(is_new, lambda _: angle, lambda a: a, last_angle)
+            count = count + is_new.astype(jnp.int32)
+            return (kept_indices, last_angle, count)
+
+        kept_indices, _, count = lax.fori_loop(1, N, body, (init_kept, init_angle, init_count))
+        kept_indices = lax.dynamic_slice(kept_indices, (0,), (count,))
+        return kept_indices, count
+
+    kept_idx, M = keep_unique_angles()
+
+    # Step 5: Sort r, z arrays by remaining indices
+    r_sorted = r_expand[kept_idx]
+    z_sorted = z_expand[kept_idx]
+
+    # Step 6: Graham scan using lax.while_loop
+    stack = jnp.zeros(M, dtype=jnp.int32).at[:2].set(jnp.array([0, 1]))
+    top = jnp.array(2, dtype=jnp.int32)
+
+    def ccw(i, j, k):
+        xi, yi = r_sorted[i], z_sorted[i]
+        xj, yj = r_sorted[j], z_sorted[j]
+        xk, yk = r_sorted[k], z_sorted[k]
+        return (xj - xi) * (yk - yi) - (xk - xi) * (yj - yi)
+
+    def cond(state):
+        i, top, stack = state
+        return i < M
+
+    def body(state):
+        i, top, stack = state
+
+        def inner_cond(inner_state):
+            top, stack = inner_state
+            return jnp.logical_and(top > 1, ccw(stack[top - 2], stack[top - 1], i) <= 0)
+
+        def inner_body(inner_state):
+            top, stack = inner_state
+            return (top - 1, stack)
+
+        top_new, stack_new = lax.while_loop(inner_cond, inner_body, (top, stack))
+        stack_new = stack_new.at[top_new].set(i)
+        return (i + 1, top_new + 1, stack_new)
+
+    _, final_top, final_stack = lax.while_loop(cond, body, (2, top, stack))
+
+    # Step 7: Map final hull indices back to original array
+    hull_idx = kept_idx[final_stack[:final_top]]
+    is_on_hull = jnp.zeros(N, dtype=bool).at[hull_idx].set(True)
+    return is_on_hull
+
+
 @partial(jit, static_argnames=[
     'nfp',
     'stellsym',
@@ -282,7 +370,7 @@ def gen_winding_surface_atan(
     'ntor',
     'pol_interp',
     'tor_interp',
-    # 'lam_tikhonov'
+    'rule',
 ])
 def gen_winding_surface_arc(
         plasma_gamma, d_expand, 
@@ -292,6 +380,7 @@ def gen_winding_surface_arc(
         pol_interp=2,
         tor_interp=2,
         lam_tikhonov=1e-5,
+        rule='self-intersection',
     ):
     
     # ----- Create uniform offset -----
@@ -336,7 +425,14 @@ def gen_winding_surface_arc(
     r_expand = jnp.sqrt(gamma_uniform[:, :, 1]**2 + gamma_uniform[:, :, 0]**2)
     z_expand = gamma_uniform[:, :, 2]
     ''' Removing self-intersection '''
-    weight_remove_invalid = vmap(polygon_self_intersection, in_axes=0)(r_expand, z_expand)
+    if rule == 'self-intersection':
+        rule_f = polygon_self_intersection
+    elif rule == 'hull':
+        rule_f = graham_scan
+    else:
+        raise ValueError('rule must to be \'intersection\' '
+                         'or \'hull\'. The current value is: '+ rule)
+    weight_remove_invalid = vmap(rule_f, in_axes=0)(r_expand, z_expand)
     
     # ----- Calculating parameterization -----
     r_wrapped = jnp.pad(r_expand, pad_width=((0, 0), (0, 1)), mode='wrap')
