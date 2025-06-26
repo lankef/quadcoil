@@ -9,43 +9,48 @@ from functools import partial, lru_cache
 # symmetry.
 def _get_unique_indices(n_phi, n_theta):
     i_grid, j_grid = np.meshgrid(np.arange(n_theta), np.arange(n_phi), indexing='ij')
-    i_sym = (n_theta - i_grid) % n_theta
-    j_sym = (n_phi - j_grid) % n_phi
+    i_sym = (n_theta - i_grid) % n_theta # (n_theta - i_grid - 1) % n_theta
+    j_sym = (n_phi - j_grid) % n_phi # (n_phi - j_grid - 1) % n_phi
     mask = (i_grid < i_sym) | ((i_grid == i_sym) & (j_grid <= j_sym))
     indices = np.column_stack((i_grid[mask], j_grid[mask]))
     return indices
 
 @jit
 def _compress_by_stellsym(f):
-    # f: (..., n_theta, n_phi, trailing dims...)
-    f_shape = f.shape
-    n_phi, n_theta = f_shape[:2]
-    trailing_shape = f_shape[2:]  # any dimensions beyond theta, phi
-    unique_indices = _get_unique_indices(n_phi, n_theta)
-    i_idx = unique_indices[:, 0]
-    j_idx = unique_indices[:, 1]
-    # Gather f at (i_idx, j_idx) along first two axes, keep trailing dims
-    f_unique = f[i_idx, j_idx, ...]  # shape: (N_unique, ...trailing dims...)
-
-    return f_unique
+    # # f: (..., n_theta, n_phi, trailing dims...)
+    # f_shape = f.shape
+    # n_phi, n_theta = f_shape[:2]
+    # print('f_shape', f_shape)
+    # print('n_phi, n_theta', n_phi, n_theta)
+    # trailing_shape = f_shape[2:]  # any dimensions beyond theta, phi
+    # unique_indices = _get_unique_indices(n_phi, n_theta)
+    # i_idx = unique_indices[:, 0]
+    # j_idx = unique_indices[:, 1]
+    # # Gather f at (i_idx, j_idx) along first two axes, keep trailing dims
+    # f_unique = f[i_idx, j_idx, ...]  # shape: (N_unique, ...trailing dims...)
+    # return f_unique
+    return f.flatten()
 
 @partial(jit, static_argnames=('f_shape'))
 def _expand_by_stellsym(f_unique, f_shape):
-    n_phi, n_theta = f_shape[:2]
-    unique_indices = _get_unique_indices(n_phi, n_theta)
-    trailing_shape = f_shape[2:]
-    # Initialize full array
-    f_full = jnp.zeros(f_shape)
-    i_idx = unique_indices[:, 0]
-    j_idx = unique_indices[:, 1]
-    i_sym = (n_theta - i_idx) % n_theta
-    j_sym = (n_phi - j_idx) % n_phi
-    # Set unique values
-    f_full = f_full.at[i_idx, j_idx, ...].set(f_unique)
-    # Apply symmetry for non-fixed points
-    mask = (i_sym != i_idx) | (j_sym != j_idx)
-    f_full = f_full.at[i_sym[mask], j_sym[mask], ...].set(-f_unique[mask])
-    return f_full
+    # n_phi, n_theta = f_shape[:2]
+    # print('f_shape', f_shape)
+    # print('n_phi, n_theta', n_phi, n_theta)
+    # unique_indices = _get_unique_indices(n_phi, n_theta)
+    # trailing_shape = f_shape[2:]
+    # # Initialize full array
+    # f_full = jnp.zeros(f_shape)
+    # i_idx = unique_indices[:, 0]
+    # j_idx = unique_indices[:, 1]
+    # i_sym = (n_theta - i_idx) % n_theta
+    # j_sym = (n_phi - j_idx) % n_phi
+    # # Set unique values
+    # f_full = f_full.at[i_idx, j_idx, ...].set(f_unique)
+    # # Apply symmetry for non-fixed points
+    # mask = (i_sym != i_idx) | (j_sym != j_idx)
+    # f_full = f_full.at[i_sym[mask], j_sym[mask], ...].set(-f_unique[mask])
+    # return f_full.reshape(f_shape)
+    return f_unique.reshape(f_shape)
     
 class _Quantity: 
     r'''
