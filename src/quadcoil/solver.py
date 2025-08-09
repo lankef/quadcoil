@@ -369,6 +369,12 @@ def solve_constrained(
     grad_f = grad(f_obj)
     grad_g = jacrev(g_ineq)
     grad_h = jacrev(h_eq)
+    if verbose>0:
+        jax.debug.print(
+            'SOLVER INITIALIZED. \nginit = {g} \nviolating elements: {c}', 
+            g = g_ineq(x_init), 
+            c = jnp.sum(jnp.where(g_ineq(x_init) > 0, 1., 0))
+        )
     # True when non-convergent.
     # @jit
     def outer_convergence_criterion(dict_in):
