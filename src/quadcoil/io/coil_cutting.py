@@ -218,7 +218,7 @@ def simsopt_curves_from_xyz(
     return(coils)
 
 def simsopt_coil_from_qp(
-    qp, dofs, coils_per_half_period, theta_shift,
+    qp, dofs, coils_per_half_period, theta_shift=0,
     method=coil_xyz_from_qp,
     order=10, ppp=40):
     (
