@@ -16,10 +16,10 @@ def coil_zeta_theta_from_qp(
     coils_per_half_period=5,
     theta_shift=0): 
     stellsym = qp.stellsym
-    nzeta_coil = len(qp.winding_surface.quadpoints_phi)
-    nfp = qp.winding_surface.nfp 
-    theta = qp.winding_surface.quadpoints_theta * 2 * np.pi 
-    zeta = qp.winding_surface.quadpoints_phi[:nzeta_coil // nfp] * 2 * np.pi 
+    nzeta_coil = len(qp.quadpoints_phi)
+    nfp = qp.nfp 
+    theta = qp.quadpoints_theta * 2 * np.pi 
+    zeta = qp.quadpoints_phi * 2 * np.pi 
     net_poloidal_current_amperes = qp.net_poloidal_current_amperes 
 
     # ------------------------
@@ -117,7 +117,7 @@ def coil_xyz_from_qp(
         theta_shift=theta_shift
     )
     num_coils = len(contour_zeta)    
-    nfp = qp.winding_surface.nfp 
+    nfp = qp.nfp 
     net_poloidal_current_amperes = qp.net_poloidal_current_amperes 
 
     # ------------------------
