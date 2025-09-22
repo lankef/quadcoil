@@ -91,6 +91,7 @@ class QuadcoilParams:
         ntor=4, 
         quadpoints_phi=None,
         quadpoints_theta=None, 
+        stellsym=None
         ):
         
         # Writing peroperties 
@@ -101,7 +102,8 @@ class QuadcoilParams:
         self.net_toroidal_current_amperes = net_toroidal_current_amperes
         self.Bnormal_plasma = Bnormal_plasma
         self.nfp = winding_surface.nfp
-        self.stellsym = winding_surface.stellsym
+        if stellsym is None:
+            self.stellsym = winding_surface.stellsym and plasma_surface.stellsym
         self.mpol = mpol
         self.ntor = ntor
         self.ndofs, self.ndofs_half = cp_ndofs(self.stellsym, self.mpol, self.ntor)

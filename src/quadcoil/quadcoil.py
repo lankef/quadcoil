@@ -47,7 +47,7 @@ QUADCOIL_STATIC_ARGNAMES=[
     'convex',
     'maxiter_tot',
     'maxiter_inner',
-    'maxiter_inner_last',
+    # 'maxiter_inner_last',
     'gplus_mask',
     'implicit_linear_solver',
     'value_only',
@@ -126,9 +126,7 @@ def quadcoil(
     svtol:float=tol_default,
     maxiter_tot:int=10000,
     maxiter_inner:int=1000,
-    maxiter_inner_last:int=1000,
     gplus_mask=gplus_hard, # gplus_elu,
-    # lx.GMRES(rtol=1e-10, atol=1e-10), # Stagnates with default setting
     implicit_linear_solver=lx.AutoLinearSolver(well_posed=True),
     value_only=False,
     verbose=0,
@@ -263,40 +261,18 @@ def quadcoil(
          raise ValueError('At least one of plasma_coil_distance and winding_dofs must be provided.')
     if plasma_coil_distance is not None and winding_dofs is not None:
          raise ValueError('Only one of plasma_coil_distance and winding_dofs can be provided.')
-    
-    # ----- Type checking -----
-    if not isinstance(objective_name, str):
-        if not isinstance(objective_name, tuple):
-            raise TypeError('objective_name must be a tuple or string. It is:', type(objective_name))
-        if not is_ndarray(objective_weight, 1):
-            raise TypeError('objective_weight must be an 1d array. It is:', type(objective_weight))
-        # if not isinstance(objective_unit, tuple):
-        #     raise TypeError('objective_unit must be a tuple. It is:', type(objective_unit))
-        if len(objective_name) != len(objective_weight) or len(objective_name) != len(objective_unit):
-            raise ValueError('objective_name, objective_weight, and objective_unit must have the same len')
-    else:
-        objective_weight = 1.
     if isinstance(metric_name, str):
         metric_name = (metric_name,)
-    if not isinstance(constraint_name, tuple):
-        raise TypeError('constraint_name must be a tuple. It is:', type(constraint_name))
-    if not isinstance(constraint_type, tuple):
-        raise TypeError('constraint_type must be a tuple. It is:', type(constraint_type))
-    # if not isinstance(constraint_unit, tuple):
-    #     raise TypeError('constraint_unit must be a tuple. It is:', type(constraint_unit))
-    if (
-        len(constraint_name) != len(constraint_type) 
-        or len(constraint_name) != len(constraint_unit)
-        or len(constraint_name) != len(constraint_value)
-    ):
-        raise ValueError('constraint_name, constraint_type, constraint_unit, '\
-                     'and constraint_value must have the same len. They each '\
-                     'are: '
-                     + str(constraint_name) + ', ' 
-                     + str(constraint_type) + ', ' 
-                     + str(constraint_unit) + ', ' 
-                     + str(constraint_value) + '.')    
-   
+    # Type checking and error throwing
+    _input_checking(
+        objective_name=objective_name,
+        objective_weight=objective_weight,
+        objective_unit=objective_unit,
+        constraint_name=constraint_name,
+        constraint_type=constraint_type,
+        constraint_unit=constraint_unit,
+        constraint_value=constraint_value,
+    )
     # A dictionary containing all parameters that the problem depends on.
     # These elements will always be in y.
     y_dict_current = {
@@ -1039,3 +1015,44 @@ def _print_min_blank(a):
 
 def _print_max_blank(a):
     return jnp.max(a) if a.size > 0 else jnp.nan
+
+def _input_checking(
+    objective_name,
+    objective_weight,
+    objective_unit,
+    constraint_name,
+    constraint_type,
+    constraint_unit,
+    constraint_value,
+):
+    
+    # ----- Type checking -----
+    if not isinstance(objective_name, str):
+        if not isinstance(objective_name, tuple):
+            raise TypeError('objective_name must be a tuple or string. It is:', type(objective_name))
+        if not is_ndarray(objective_weight, 1):
+            raise TypeError('objective_weight must be an 1d array. It is:', type(objective_weight))
+        # if not isinstance(objective_unit, tuple):
+        #     raise TypeError('objective_unit must be a tuple. It is:', type(objective_unit))
+        if len(objective_name) != len(objective_weight) or len(objective_name) != len(objective_unit):
+            raise ValueError('objective_name, objective_weight, and objective_unit must have the same len')
+    else:
+        objective_weight = 1.
+    if not isinstance(constraint_name, tuple):
+        raise TypeError('constraint_name must be a tuple. It is:', type(constraint_name))
+    if not isinstance(constraint_type, tuple):
+        raise TypeError('constraint_type must be a tuple. It is:', type(constraint_type))
+    # if not isinstance(constraint_unit, tuple):
+    #     raise TypeError('constraint_unit must be a tuple. It is:', type(constraint_unit))
+    if (
+        len(constraint_name) != len(constraint_type) 
+        or len(constraint_name) != len(constraint_unit)
+        or len(constraint_name) != len(constraint_value)
+    ):
+        raise ValueError('constraint_name, constraint_type, constraint_unit, '\
+                     'and constraint_value must have the same len. They each '\
+                     'are: '
+                     + str(constraint_name) + ', ' 
+                     + str(constraint_type) + ', ' 
+                     + str(constraint_unit) + ', ' 
+                     + str(constraint_value) + '.')    
