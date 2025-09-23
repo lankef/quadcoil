@@ -6,9 +6,6 @@ from scipy.fft import rfft
 # Importing simsopt 
 from quadcoil import QuadcoilParams
 from quadcoil.quantity import Phi_with_net_current
-from simsopt.field import Current, Coil
-from simsopt.field.coil import coils_via_symmetries
-from simsopt.geo import CurveXYZFourier
 
 def coil_zeta_theta_from_qp(
     qp:QuadcoilParams,
@@ -190,6 +187,10 @@ def simsopt_curves_from_xyz(
     contour_Z, 
     order=None, ppp=20):
     num_coils = len(contour_X)
+    try:     
+        from simsopt.geo import CurveXYZFourier
+    except:
+        raise ImportError('Simsopt is required to use the coil-cutting features.')
     # Calculating order
     if not order:
         order=float('inf')
@@ -221,6 +222,11 @@ def simsopt_coil_from_qp(
     qp, dofs, coils_per_half_period, theta_shift=0,
     method=coil_xyz_from_qp,
     order=10, ppp=40):
+    try:     
+        from simsopt.field import Current # , Coil
+        from simsopt.field.coil import coils_via_symmetries
+    except:
+        raise ImportError('Simsopt is required to use the coil-cutting features.')
     (
         contour_X,
         contour_Y,
