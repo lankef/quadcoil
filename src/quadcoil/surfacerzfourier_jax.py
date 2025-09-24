@@ -38,11 +38,28 @@ class SurfaceRZFourierJAX:
             dofs=simsopt_surf.get_dofs(),
         )
 
+    def to_simsopt(self):
+        try:
+            from simsopt.geo import SurfaceRZFourier
+        except:
+            raise ModuleNotFoundError('Simsopt must be installed to export surface to simsopt.')
+        surf = SurfaceRZFourier(
+            nfp=self.nfp,
+            stellsym=self.stellsym,
+            mpol=self.mpol,
+            ntor=self.ntor,
+            quadpoints_phi=self.quadpoints_phi,
+            quadpoints_theta=self.quadpoints_theta,
+        )
+        surf.set_dofs(self.dofs)
+        return surf
+
+    # May not be jittable
     def from_desc(desc_surf, quadpoints_phi, quadpoints_theta):
         try:
             from desc.vmec_utils import ptolemy_identity_rev
         except:
-            raise ModuleNotFoundError('')
+            raise ModuleNotFoundError('DESC must be installed to load surface from DESC.')
         # mm, nn is the same as mc, nc from make_rzfourier_mc_ms_nc_ns
         # ms, ns are just mc, nc with the first zero removed.
         # R modes
@@ -83,19 +100,52 @@ class SurfaceRZFourierJAX:
             quadpoints_theta=quadpoints_theta,
             dofs=dofs,
         )
-
-    def to_simsopt(self):
-        from simsopt.geo import SurfaceRZFourier
-        surf = SurfaceRZFourier(
-            nfp=self.nfp,
-            stellsym=self.stellsym,
-            mpol=self.mpol,
-            ntor=self.ntor,
-            quadpoints_phi=self.quadpoints_phi,
-            quadpoints_theta=self.quadpoints_theta,
+    
+    def to_desc(self):
+        try:
+            from desc.vmec_utils import ptolemy_identity_fwd
+            from desc.geometry import FourierRZToroidalSurface
+        except:
+            raise ModuleNotFoundError('DESC must be installed to export surface to DESC.')
+        if self.stellsym:
+            # The dofs contain rc, zs, and rc has one more element than zs.
+            len_sin = len(self.dofs)//2
+            rc = self.dofs[:-len_sin]
+            zs = self.dofs[-len_sin:]
+            zs = jnp.insert(zs, 0, 0.)
+            zc = jnp.zeros_like(rc)
+            rs = jnp.zeros_like(rc)
+        else:
+            # The dofs contain rc, rs, zc, zs, and rc has one more element than zs.
+            half_len = len(self.dofs)//2
+            len_sin = half_len//2
+            rcrs = self.dofs[:half_len//2]
+            zczs = self.dofs[half_len//2:]
+            rc = rcrs[:-len_sin]
+            rs = rcrs[-len_sin:]
+            rs = jnp.insert(rs, 0, 0.)
+            zc = zczs[:-len_sin]
+            zs = zczs[-len_sin:]
+            zs = jnp.insert(zs, 0, 0.)
+        mc, _, nc, _ = make_rzfourier_mc_ms_nc_ns(self.mpol, self.ntor)
+        Rm, Rn, R_lmn = ptolemy_identity_fwd(mc, nc, rs, rc)
+        Zm, Zn, Z_lmn = ptolemy_identity_fwd(mc, nc, zs, zc)
+        R_lmn = R_lmn.flatten()
+        Z_lmn = Z_lmn.flatten()
+        modes_R = jnp.vstack([Rm, Rn]).T
+        modes_Z = jnp.vstack([Zm, Zn]).T
+        print(
+            'R_lmn', R_lmn.shape,
+            'Z_lmn', Z_lmn.shape,
+            'modes_R', modes_R.shape,
+            'modes_Z', modes_Z.shape,
         )
-        surf.set_dofs(self.dofs)
-        return surf
+        return FourierRZToroidalSurface(
+            R_lmn, Z_lmn, 
+            modes_R.astype(int), modes_Z.astype(int), 
+            NFP=self.nfp, sym=self.stellsym, 
+            M=self.mpol, N=self.ntor, rho=1
+        )
 
     def get_dofs(self):
         return(self.dofs.copy())

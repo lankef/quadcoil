@@ -103,7 +103,8 @@ class QuadcoilParams:
         self.Bnormal_plasma = Bnormal_plasma
         self.nfp = winding_surface.nfp
         if stellsym is None:
-            self.stellsym = winding_surface.stellsym and plasma_surface.stellsym
+            stellsym = winding_surface.stellsym and plasma_surface.stellsym
+        self.stellsym = stellsym
         self.mpol = mpol
         self.ntor = ntor
         self.ndofs, self.ndofs_half = cp_ndofs(self.stellsym, self.mpol, self.ntor)
