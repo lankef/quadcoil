@@ -9,10 +9,7 @@ from quadcoil import (
 from quadcoil.wrapper import _parse_objectives, _parse_constraints
 from functools import partial
 from quadcoil.quantity import Bnormal
-from jax import jacfwd, jacrev, jvp, jit, hessian, block_until_ready
-from jax import config
-from jax import debug
-from jax import flatten_util
+from jax import jacfwd, jacrev, jvp, jit, hessian, block_until_ready, config, debug, flatten_util, eval_shape
 import jax.numpy as jnp
 import lineax as lx
 config.update('jax_enable_x64', True)
@@ -559,8 +556,9 @@ def quadcoil(
     f_scaled = lambda x_scaled, f_obj=f_obj: f_obj(unravel_unscale_x(x_scaled))
     g_scaled = lambda x_scaled, g_ineq=g_ineq: g_ineq(unravel_unscale_x(x_scaled))
     h_scaled = lambda x_scaled, h_eq=h_eq: h_eq(unravel_unscale_x(x_scaled))
-    mu_init = jnp.zeros_like(g_scaled(x_flat_init))
-    lam_init = jnp.zeros_like(h_scaled(x_flat_init))
+    
+    mu_init = jnp.zeros(eval_shape(g_scaled, x_flat_init).size)
+    lam_init = jnp.zeros(eval_shape(h_scaled, x_flat_init).size)
     
     # ----- Summarizing initialization -----
     if verbose>0:
