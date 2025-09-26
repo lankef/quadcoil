@@ -1,4 +1,5 @@
 import jax.numpy as jnp
+import numpy as np
 from .surfacerzfourier_jax import SurfaceRZFourierJAX
 from .math_utils import sin_or_cos, norm_helper
 from jax import jit, tree_util
@@ -134,24 +135,25 @@ class QuadcoilParams:
         )
 
         # Calculating m, n
+        # These are static quantities and must be 
+        # numpy (not jax.numpy) arrays
         mpol = self.mpol
         ntor = self.ntor
         stellsym = self.stellsym
-        m1d = jnp.arange(mpol + 1)
-        n1d = jnp.arange(-ntor, ntor + 1)
-        n2d, m2d = jnp.meshgrid(n1d, m1d)
+        m1d = np.arange(mpol + 1)
+        n1d = np.arange(-ntor, ntor + 1)
+        n2d, m2d = np.meshgrid(n1d, m1d)
         m0 = m2d.flatten()[ntor:]
         n0 = n2d.flatten()[ntor:]
         m = m0[1::]
         n = n0[1::]
-
         if not stellsym:
-            m_first = jnp.append(m, 0)
-            n_first = jnp.append(n, 0)
-            m = jnp.append(m_first, m)
-            n = jnp.append(n_first, n)
-        self.m = m
-        self.n = n
+            m_first = np.append(m, 0)
+            n_first = np.append(n, 0)
+            m = np.append(m_first, m)
+            n = np.append(n_first, n)
+        self.m = tuple(m)
+        self.n = tuple(n)
 
     # -- JAX prereqs --
     # Update this if you ever change the constructor!
@@ -311,7 +313,7 @@ class QuadcoilParams:
             must be performed with trig_m_i_n_i and trig_diff_m_i_n_i (see above).
         '''
         nfp = self.nfp
-        cp_m, cp_n = self.m, self.n
+        cp_m, cp_n = jnp.array(self.m), jnp.array(self.n)
         if winding_surface_mode:
             quadpoints_phi = self.winding_surface.quadpoints_phi
             quadpoints_theta = self.winding_surface.quadpoints_theta

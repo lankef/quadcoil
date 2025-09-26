@@ -49,20 +49,19 @@ def _K(qp, dofs, winding_surface_mode=False):
     return b_K@phi_mn + c_K
 _K_desc_unit = lambda scales: scales["B"] / mu_0 # based on infinite solenoid: B = mu_0 K_pol.
 
-@jit
+# @jit # Not needed because _K is jitted and this can make compile time excessive
 def _K2(qp, dofs):
     return(jnp.sum(_K(qp, dofs)**2, axis=-1))
 _K2_desc_unit = lambda scales: _K_desc_unit(scales)**2
 
 @jit
 def _K_theta(qp, dofs):
-    phi_mn = dofs['phi']
     ''' 
     K in the theta direction. Used to eliminate windowpane coils.  
     by K_theta >= -G. (Prevents current from flowing against G).
     '''
     phi_mn = dofs['phi']
-    cp_m, cp_n = qp.m, qp.n
+    cp_m, cp_n = jnp.array(qp.m), jnp.array(qp.n)
     stellsym = qp.stellsym
     nfp = qp.nfp
     n_harmonic = len(cp_m)

@@ -1,5 +1,5 @@
 import jax.numpy as jnp
-import numpy as numpy
+import numpy as np
 from functools import partial, lru_cache
 from jax import jit, tree_util
 from jax.scipy.special import factorial
@@ -128,6 +128,8 @@ class SurfaceRZFourierJAX:
             zs = zczs[-len_sin:]
             zs = jnp.insert(zs, 0, 0.)
         mc, _, nc, _ = make_rzfourier_mc_ms_nc_ns(self.mpol, self.ntor)
+        mc = jnp.array(mc)
+        nc = jnp.array(nc)
         Rm, Rn, R_lmn = ptolemy_identity_fwd(mc, nc, rs, rc)
         Zm, Zn, Z_lmn = ptolemy_identity_fwd(mc, nc, zs, zc)
         R_lmn = R_lmn.flatten()
@@ -369,19 +371,20 @@ class SurfaceRZFourierJAX:
             dofs=children[2],
         )
 
+
 def make_rzfourier_mc_ms_nc_ns(mpol, ntor):
     # Make a list of mc, ms, nc, ns
-    ms = jnp.concatenate([
-        jnp.zeros(ntor),
-        jnp.repeat(jnp.arange(1, mpol+1), ntor*2+1)
+    ms = np.concatenate([
+        np.zeros(ntor),
+        np.repeat(np.arange(1, mpol+1), ntor*2+1)
     ])
-    ns = jnp.concatenate([
-        jnp.arange(1, ntor+1),
-        jnp.tile(jnp.arange(-ntor, ntor+1), mpol)
+    ns = np.concatenate([
+        np.arange(1, ntor+1),
+        np.tile(np.arange(-ntor, ntor+1), mpol)
     ])
-    mc = jnp.concatenate([jnp.zeros(1), ms])
-    nc = jnp.concatenate([jnp.zeros(1), ns])
-    return mc, ms, nc, ns
+    mc = np.concatenate([np.zeros(1), ms])
+    nc = np.concatenate([np.zeros(1), ns])
+    return tuple(mc), tuple(ms), tuple(nc), tuple(ns)
 
 # ''' Backends '''
 def dof_to_rz_op(
@@ -392,6 +395,10 @@ def dof_to_rz_op(
     # maps a [ndof] array
     # to a [nphi, ntheta, 2(r, z)] array.
     mc, ms, nc, ns = make_rzfourier_mc_ms_nc_ns(mpol, ntor)
+    mc = jnp.array(mc)
+    ms = jnp.array(ms)
+    nc = jnp.array(nc)
+    ns = jnp.array(ns)
     total_neg = (dash1_order + dash2_order)//2
     derivative_factor_c = (
         (- nc[:, None, None] * jnp.pi * 2 * nfp) ** dash1_order 

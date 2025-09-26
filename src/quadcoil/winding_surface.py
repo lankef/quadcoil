@@ -29,11 +29,6 @@ def fit_surfacerzfourier(
     )
     
     b_lstsq = jnp.concatenate([r_fit[:, :, None], z_fit[:, :, None]], axis=2)
-    # Weight each point by the sum of the length of the two 
-    # poloidal segments that each vertex is attached to
-    # weight = jacobian # 
-    max_r_slice = jnp.max(r_fit, axis=1)[:, None]
-    min_r_slice = jnp.min(r_fit, axis=1)[:, None]
     # A and b of the lstsq problem.
     # A_lstsq is a function of phi_grid and theta_grid
     # b_lstsq is differentiable.

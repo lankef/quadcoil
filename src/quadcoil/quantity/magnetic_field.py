@@ -11,14 +11,11 @@ def _winding_surface_B(qp, dofs):
     # Array WindingSurfaceB(Array& points, Array& ws_points, Array& ws_normal, Array& K)
     # NOTE: Bnormal_plasma is not necessarily stellarator 
     # symmetric even for stellarator symmetric equilibria.
-    phi_mn = dofs['phi']
     gamma = qp.plasma_surface.gamma() # The shapes will be used later
     points = gamma.reshape((-1, 3))
-    num_points = points.shape[0]
     ws_gamma = qp.winding_surface.gamma()
     ws_points = ws_gamma.reshape((-1, 3))
     ws_normal = qp.winding_surface.normal().reshape((-1, 3))
-    num_ws_points = ws_points.shape[0]
     nphi = ws_gamma.shape[0]
     ntheta = ws_gamma.shape[1]
     fak = 1e-7  # mu0 divided by 4 * pi factor
