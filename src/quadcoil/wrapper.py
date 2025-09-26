@@ -21,7 +21,6 @@ def get_quantity(func_name: str):
     callable
         A callable with the same name in ``quadcoil.quantity``.
     '''
-    
     if hasattr(quadcoil.quantity, func_name):
         func = getattr(quadcoil.quantity, func_name)
         if isinstance(func, _Quantity):
@@ -218,7 +217,6 @@ def _parse_objectives(objective_name, objective_unit=None, objective_weight=1.):
     def f_tot(
             qp, dofs, 
             f_list=f_list, 
-            objective_unit=objective_unit, 
             objective_weight=objective_weight
         ):
         out = 0
@@ -281,12 +279,9 @@ def _parse_constraints(
     # that are =0 or <=0 when the constraint is satisfied. 
     g_ineq_list = []
     h_eq_list = []
-    g_num = 0
-    h_num = 0
     scaled_aux_dofs = {}
     for i in range(n_cons_total):
         cons_type_i = constraint_type[i]
-        cons_unit_i = constraint_unit[i]
         cons_val_i = constraint_value[i]
         (
             cons_func_i_scaled,

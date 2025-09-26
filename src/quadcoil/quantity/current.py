@@ -23,9 +23,6 @@ def _K(qp, dofs, winding_surface_mode=False):
         dg2 = qp.eval_surface.gammadash2()
     net_poloidal_current_amperes = qp.net_poloidal_current_amperes
     net_toroidal_current_amperes = qp.net_toroidal_current_amperes
-    nfp = qp.nfp
-    cp_m, cp_n = qp.make_mn()
-    stellsym = qp.stellsym
     inv_normN_prime_2d = 1/jnp.linalg.norm(normal, axis=-1)
     G = net_poloidal_current_amperes
     I = net_toroidal_current_amperes
@@ -65,11 +62,9 @@ def _K_theta(qp, dofs):
     by K_theta >= -G. (Prevents current from flowing against G).
     '''
     phi_mn = dofs['phi']
-    cp_m, cp_n = qp.make_mn()
+    cp_m, cp_n = qp.m, qp.n
     stellsym = qp.stellsym
     nfp = qp.nfp
-    quadpoints_phi = qp.eval_surface.quadpoints_phi
-    quadpoints_theta = qp.eval_surface.quadpoints_theta
     n_harmonic = len(cp_m)
     iden = jnp.identity(n_harmonic)
     # When stellsym is enabled, Phi is a sin fourier series.
@@ -81,8 +76,6 @@ def _K_theta(qp, dofs):
     else:
         trig_choice = jnp.repeat([1,-1], n_harmonic//2)
     partial_phi = -cp_n*trig_choice*iden*nfp*2*jnp.pi
-    phi_grid = jnp.pi*2*quadpoints_phi[:, None]
-    theta_grid = jnp.pi*2*quadpoints_theta[None, :]
     stellsym = qp.stellsym
     (
         _, # trig_m_i_n_i,

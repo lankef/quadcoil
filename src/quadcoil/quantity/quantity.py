@@ -146,13 +146,13 @@ class _Quantity:
         desc_unit
     ):
         if isinstance(scaled_c2_impl, _Quantity):
-            raise TyperError('scaled_c2_impl must not be a _Quantity.')
+            raise TypeError('scaled_c2_impl must not be a _Quantity.')
         if isinstance(c0_impl, _Quantity):
-            raise TyperError('c0_impl must not be a _Quantity.')
+            raise TypeError('c0_impl must not be a _Quantity.')
         if isinstance(scaled_g_ineq_impl, _Quantity):
-            raise TyperError('scaled_g_ineq_impl must not be a _Quantity.')
+            raise TypeError('scaled_g_ineq_impl must not be a _Quantity.')
         if isinstance(scaled_h_eq_impl, _Quantity):
-            raise TyperError('scaled_h_eq_impl must not be a _Quantity.')
+            raise TypeError('scaled_h_eq_impl must not be a _Quantity.')
         # Checking whether the auxiliary variable name has already been used elsewhere.
         if scaled_aux_dofs_init is not None:
             if not isinstance(scaled_aux_dofs_init, dict):
@@ -197,8 +197,10 @@ class _Quantity:
         return self.c0_impl(qp, {'phi': dofs['phi']})
 
     def generate_c2(func, compatibility, desc_unit):
+        def scaled_c2_impl(qp, dofs, unit):
+            return func(qp, dofs)/unit
         return _Quantity(
-            scaled_c2_impl=lambda qp, dofs, unit: func(qp, dofs)/unit, 
+            scaled_c2_impl=scaled_c2_impl, 
             c0_impl=func, 
             scaled_g_ineq_impl=None,
             scaled_h_eq_impl=None,

@@ -3,7 +3,6 @@ from .surfacerzfourier_jax import SurfaceRZFourierJAX
 from .math_utils import sin_or_cos, norm_helper
 from jax import jit, tree_util
 from functools import lru_cache, partial
-
 # Contains
 # - The plasma surface
 # - The winding surface
@@ -133,24 +132,8 @@ class QuadcoilParams:
             quadpoints_theta=self.quadpoints_theta, 
             dofs=self.winding_surface.dofs
         )
-    
-    # -- Cached quantites -- 
-    # == Helpers == 
-    @lru_cache()
-    @jit
-    def make_mn(self):
-        r'''
-        Generates 2 ``array(int)`` of Fourier mode numbers, :math:`m` and :math:`n`, that
-        gives the :math:`m` and :math:`n` of the corresponding element in 
-        ``self.dofs``. Equivalent to CurrentPotential.make_mn. Caches. 
 
-        Returns
-        -------
-        m : ndarray
-            An array of ints storing the poloidal Fourier mode numbers. Shape: (ndofs)
-        n : ndarray
-            An array of ints storing the toroidal Fourier mode numbers. Shape: (ndofs)
-        '''
+        # Calculating m, n
         mpol = self.mpol
         ntor = self.ntor
         stellsym = self.stellsym
@@ -163,9 +146,52 @@ class QuadcoilParams:
         n = n0[1::]
 
         if not stellsym:
-            m = jnp.append(m, m)
-            n = jnp.append(n, n)
-        return m, n
+            m_first = jnp.append(m, 0)
+            n_first = jnp.append(n, 0)
+            m = jnp.append(m_first, m)
+            n = jnp.append(n_first, n)
+        self.m = m
+        self.n = n
+
+    # -- JAX prereqs --
+    # Update this if you ever change the constructor!
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        return cls(
+            plasma_surface=children[0],
+            winding_surface=children[1],
+            net_poloidal_current_amperes=children[3],
+            net_toroidal_current_amperes=children[4],
+            Bnormal_plasma=children[5],
+            mpol=aux_data['mpol'],
+            ntor=aux_data['ntor'],
+            quadpoints_phi=children[6],
+            quadpoints_theta=children[7],
+            stellsym=aux_data['stellsym']
+        )
+
+    def tree_flatten(self):
+        children = (
+            self.plasma_surface,
+            self.winding_surface,
+            self.eval_surface,
+            self.net_poloidal_current_amperes,
+            self.net_toroidal_current_amperes,
+            self.Bnormal_plasma,
+            self.quadpoints_phi,
+            self.quadpoints_theta,
+        )
+        aux_data = {
+            'nfp': self.nfp,
+            'stellsym': self.stellsym,
+            'mpol': self.mpol,
+            'ntor': self.ntor,
+            'ndofs': self.ndofs,
+            'ndofs_half': self.ndofs_half,
+            'm': self.m,
+            'n': self.n,
+        }
+        return children, aux_data
     
     @lru_cache()
     @jit
@@ -284,16 +310,14 @@ class QuadcoilParams:
             into the simsopt conventions. Therefore, IFT for such derivatives 
             must be performed with trig_m_i_n_i and trig_diff_m_i_n_i (see above).
         '''
-        
         nfp = self.nfp
-        cp_m, cp_n = self.make_mn()
+        cp_m, cp_n = self.m, self.n
         if winding_surface_mode:
             quadpoints_phi = self.winding_surface.quadpoints_phi
             quadpoints_theta = self.winding_surface.quadpoints_theta
         else:    
             quadpoints_phi = self.quadpoints_phi
             quadpoints_theta = self.quadpoints_theta
-        stellsym = self.stellsym
         # The uniform index for phi contains first sin Fourier 
         # coefficients, then optionally cos is stellsym=False.
         n_harmonic = len(cp_m)
@@ -303,12 +327,12 @@ class QuadcoilParams:
         theta_grid = jnp.pi*2*quadpoints_theta[None, :]
         # When stellsym is enabled, Phi is a sin fourier series.
         # After a derivative, it becomes a cos fourier series.
-        if stellsym:
+        if self.stellsym:
             trig_choice = 1
         # Otherwise, it's a sin-cos series. After a derivative,
         # it becomes a cos-sin series.
         else:
-            trig_choice = jnp.repeat([1,-1], n_harmonic//2)
+            trig_choice = jnp.append(jnp.repeat(jnp.array([1,-1]), n_harmonic//2), -1)
         # Inverse Fourier transform that transforms a dof 
         # array to grid values. trig_diff_m_i_n_i acts on 
         # odd-order derivatives of dof, where the sin coeffs 
@@ -328,7 +352,6 @@ class QuadcoilParams:
             -(cp_n*nfp)[None, None, :]*phi_grid[:, :, None],
             -trig_choice
         )
-    
         # Fourier derivatives
         partial_theta = cp_m*trig_choice*iden*2*jnp.pi
         partial_phi = -cp_n*trig_choice*iden*nfp*2*jnp.pi
@@ -344,48 +367,13 @@ class QuadcoilParams:
             partial_phi_theta,
             partial_theta_theta,
         )
-        
-    # -- JAX prereqs --
-    def tree_flatten(self):
-        children = (
-            self.plasma_surface,
-            self.winding_surface,
-            self.eval_surface,
-            self.net_poloidal_current_amperes,
-            self.net_toroidal_current_amperes,
-            self.Bnormal_plasma,
-            self.quadpoints_phi,
-            self.quadpoints_theta,
-        )
-        aux_data = {
-            'nfp': self.nfp,
-            'stellsym': self.stellsym,
-            'mpol': self.mpol,
-            'ntor': self.ntor,
-            'ndofs': self.ndofs,
-            'ndofs_half': self.ndofs_half,
-        }
-        return children, aux_data
-
-    @classmethod
-    def tree_unflatten(cls, aux_data, children):
-        return cls(
-            plasma_surface=children[0],
-            winding_surface=children[1],
-            net_poloidal_current_amperes=children[3],
-            net_toroidal_current_amperes=children[4],
-            Bnormal_plasma=children[5],
-            mpol=aux_data['mpol'],
-            ntor=aux_data['ntor'],
-            quadpoints_phi=children[6],
-            quadpoints_theta=children[7],
-        )
+    
 def cp_ndofs(stellsym, mpol, ntor):
     ndofs = 2 * mpol * ntor + mpol + ntor
     if stellsym:
         ndofs = ndofs
         ndofs_half = ndofs
     else:
-        ndofs = 2 * ndofs
-        ndofs_half = ndofs//2
+        ndofs_half = ndofs
+        ndofs = 2 * ndofs + 1
     return(ndofs, ndofs_half)

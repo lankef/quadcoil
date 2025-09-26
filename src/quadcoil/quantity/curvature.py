@@ -9,18 +9,8 @@ from .quantity import _Quantity
 def _K_dot_grad_K(qp, dofs):
     phi_mn = dofs['phi']
     normal = qp.eval_surface.normal()
-    gammadash1 = qp.eval_surface.gammadash1()
-    gammadash2 = qp.eval_surface.gammadash2()
-    gammadash1dash1 = qp.eval_surface.gammadash1dash1()
-    gammadash1dash2 = qp.eval_surface.gammadash1dash2()
-    gammadash2dash2 = qp.eval_surface.gammadash2dash2()
     net_poloidal_current_amperes = qp.net_poloidal_current_amperes
     net_toroidal_current_amperes = qp.net_toroidal_current_amperes
-    quadpoints_phi = qp.quadpoints_phi
-    quadpoints_theta = qp.quadpoints_theta
-    nfp = qp.nfp
-    stellsym = qp.stellsym
-    cp_m, cp_n = qp.make_mn()
     # Partial derivatives of K
     (
         Kdash1_sv_op, 
@@ -38,7 +28,7 @@ def _K_dot_grad_K(qp, dofs):
         _, # partial_phi_theta,
         _, # partial_theta_theta,
     ) = qp.diff_helper()
-    normN_prime_2d, inv_normN_prime_2d = norm_helper(normal)
+    _, inv_normN_prime_2d = norm_helper(normal)
     G = net_poloidal_current_amperes
     I = net_toroidal_current_amperes
     ''' Pointwise product with partial r/partial phi or theta'''
