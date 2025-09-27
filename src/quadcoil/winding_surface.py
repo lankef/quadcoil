@@ -9,7 +9,7 @@ import lineax as lx
 
 
 
-# @partial(jit, static_argnames=['nfp', 'stellsym', 'mpol', 'ntor', 'lam_tikhonov',])
+@partial(jit, static_argnames=['nfp', 'stellsym', 'mpol', 'ntor', 'lam_tikhonov',])
 def fit_surfacerzfourier(
         phi_grid, theta_grid, 
         r_fit, z_fit, 
@@ -27,7 +27,6 @@ def fit_surfacerzfourier(
         mpol=mpol, 
         ntor=ntor
     )
-    
     b_lstsq = jnp.concatenate([r_fit[:, :, None], z_fit[:, :, None]], axis=2)
     # A and b of the lstsq problem.
     # A_lstsq is a function of phi_grid and theta_grid

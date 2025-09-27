@@ -147,7 +147,7 @@ def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose, n
         params, _, value, val_rec, dx, du, df, state = carry
         iter_num = otu.tree_get(state, 'count')
         grad = otu.tree_get(state, 'grad')
-        err = otu.tree_l2_norm(grad)
+        err = otu.tree_norm(grad)
         # DEBUG 
         param2 = dx + params
         dx1 = param2 - params
