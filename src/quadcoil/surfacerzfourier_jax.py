@@ -25,6 +25,17 @@ class SurfaceRZFourierJAX:
         self.theta_mesh, self.phi_mesh = jnp.meshgrid(quadpoints_theta, quadpoints_phi)
         self.dphi = (quadpoints_phi[1] - quadpoints_phi[0])
         self.dtheta = (quadpoints_theta[1] - quadpoints_theta[0])
+    
+    def copy_and_set_quadpoints(self, quadpoints_phi, quadpoints_theta):
+        return SurfaceRZFourierJAX(
+            nfp=self.nfp, 
+            stellsym=self.stellsym, 
+            mpol=self.mpol, 
+            ntor=self.ntor, 
+            quadpoints_phi=quadpoints_phi, 
+            quadpoints_theta=quadpoints_theta, 
+            dofs=self.dofs
+        )
 
     def from_simsopt(simsopt_surf):
         return SurfaceRZFourierJAX(

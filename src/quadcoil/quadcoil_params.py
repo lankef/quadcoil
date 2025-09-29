@@ -4,15 +4,64 @@ from .surfacerzfourier_jax import SurfaceRZFourierJAX
 from .math_utils import sin_or_cos, norm_helper
 from jax import jit, tree_util
 from functools import lru_cache, partial
+
+
 # Contains
 # - The plasma surface
 # - The winding surface
 # - The evaluation surface
 # - The net currents
 # - Numerical parameters
+class _Params:
+    r'''
+    An abstract class for different types of QuadcoilParams. 
+    (The default one uses fourier basis. A new one that uses 
+    will be added.)
+    '''
+    def __init__(
+        self,
+        plasma_surface: SurfaceRZFourierJAX, 
+        winding_surface: SurfaceRZFourierJAX, 
+        net_poloidal_current_amperes: float, 
+        net_toroidal_current_amperes: float,
+        Bnormal_plasma=None,
+        quadpoints_phi=None,
+        quadpoints_theta=None, 
+        stellsym=None
+        ):
+        
+        # Writing peroperties 
+        self.plasma_surface = plasma_surface
+        self.winding_surface = winding_surface
+        self.net_poloidal_current_amperes = net_poloidal_current_amperes
+        self.net_toroidal_current_amperes = net_toroidal_current_amperes
+        self.Bnormal_plasma = Bnormal_plasma
+        self.nfp = winding_surface.nfp
+        if stellsym is None:
+            stellsym = winding_surface.stellsym and plasma_surface.stellsym
+        self.stellsym = stellsym
+
+        # Generating evaluation surface 
+        if quadpoints_phi is None:
+            len_phi = len(winding_surface.quadpoints_phi)//winding_surface.nfp
+            self.quadpoints_phi = winding_surface.quadpoints_phi[:len_phi]
+        else:
+            self.quadpoints_phi = quadpoints_phi
+        if quadpoints_theta is None:
+            self.quadpoints_theta = winding_surface.quadpoints_theta
+        else:
+            self.quadpoints_theta = quadpoints_theta
+        if Bnormal_plasma is None:
+            self.Bnormal_plasma = jnp.zeros((len(plasma_surface.quadpoints_phi), len(plasma_surface.quadpoints_theta)))
+        # Evaluation surface. Winding surface is used for integration, 
+        # and eval_surface is used for evaluating quantities on a grid
+        self.eval_surface = self.winding_surface.copy_and_set_quadpoints(
+            quadpoints_phi=self.quadpoints_phi, 
+            quadpoints_theta=self.quadpoints_theta, 
+        )
 
 @tree_util.register_pytree_node_class
-class QuadcoilParams:
+class QuadcoilParams(_Params):
     r'''
     A class storing all informations required to solve a quadcoil 
     problem. These includes plasma info, winding surface info, but 
@@ -66,7 +115,6 @@ class QuadcoilParams:
         (Traced) The toroidal quadrature points to evaluate quantities at. 
     quadpoints_theta : ndarray, shape (ntheta,)
         (Traced) The poloidal quadrature points to evaluate quantities at. 
-    
     nfp : int
         (Static) The number of field periods.
     stellsym : bool
@@ -82,8 +130,8 @@ class QuadcoilParams:
     '''
     def __init__(
         self,
-        plasma_surface: SurfaceRZFourierJAX, 
-        winding_surface: SurfaceRZFourierJAX, 
+        plasma_surface, 
+        winding_surface, 
         net_poloidal_current_amperes: float, 
         net_toroidal_current_amperes: float,
         Bnormal_plasma=None,
@@ -95,65 +143,20 @@ class QuadcoilParams:
         ):
         
         # Writing peroperties 
-        
-        self.plasma_surface = plasma_surface
-        self.winding_surface = winding_surface
-        self.net_poloidal_current_amperes = net_poloidal_current_amperes
-        self.net_toroidal_current_amperes = net_toroidal_current_amperes
-        self.Bnormal_plasma = Bnormal_plasma
-        self.nfp = winding_surface.nfp
-        if stellsym is None:
-            stellsym = winding_surface.stellsym and plasma_surface.stellsym
-        self.stellsym = stellsym
+        super().__init__(
+            plasma_surface=plasma_surface,
+            winding_surface=winding_surface,
+            net_poloidal_current_amperes=net_poloidal_current_amperes,
+            net_toroidal_current_amperes=net_toroidal_current_amperes,
+            Bnormal_plasma=Bnormal_plasma,
+            quadpoints_phi=quadpoints_phi,
+            quadpoints_theta=quadpoints_theta,
+            stellsym=stellsym,
+        )
         self.mpol = mpol
         self.ntor = ntor
         self.ndofs, self.ndofs_half = cp_ndofs(self.stellsym, self.mpol, self.ntor)
-
-        # Generating evaluation surface 
-
-        if quadpoints_phi is None:
-            len_phi = len(winding_surface.quadpoints_phi)//winding_surface.nfp
-            self.quadpoints_phi = winding_surface.quadpoints_phi[:len_phi]
-        else:
-            self.quadpoints_phi = quadpoints_phi
-        if quadpoints_theta is None:
-            self.quadpoints_theta = winding_surface.quadpoints_theta
-        else:
-            self.quadpoints_theta = quadpoints_theta
-        if Bnormal_plasma is None:
-            self.Bnormal_plasma = jnp.zeros((len(plasma_surface.quadpoints_phi), len(plasma_surface.quadpoints_theta)))
-        # Evaluation surface. Winding surface is used for integration, 
-        # and eval_surface is used for evaluating quantities on a grid
-        self.eval_surface = SurfaceRZFourierJAX(
-            nfp=self.winding_surface.nfp, 
-            stellsym=self.winding_surface.stellsym, 
-            mpol=self.winding_surface.mpol, 
-            ntor=self.winding_surface.ntor, 
-            quadpoints_phi=self.quadpoints_phi, 
-            quadpoints_theta=self.quadpoints_theta, 
-            dofs=self.winding_surface.dofs
-        )
-
-        # # Calculating m, n
-        # # These are static quantities and must be 
-        # # numpy (not jax.numpy) arrays
-        # mpol = self.mpol
-        # ntor = self.ntor
-        # stellsym = self.stellsym
-        # m1d = np.arange(mpol + 1)
-        # n1d = np.arange(-ntor, ntor + 1)
-        # n2d, m2d = np.meshgrid(n1d, m1d)
-        # m0 = m2d.flatten()[ntor:]
-        # n0 = n2d.flatten()[ntor:]
-        # m = m0[1::]
-        # n = n0[1::]
-        # if not stellsym:
-        #     m_first = np.append(m, 0)
-        #     n_first = np.append(n, 0)
-        #     m = np.append(m_first, m)
-        #     n = np.append(n_first, n)
-        # self.m = tuple(m)
-        # self.n = tuple(n)
+        
 
     # -- JAX prereqs --
     # Update this if you ever change the constructor!
@@ -417,3 +420,66 @@ def cp_ndofs(stellsym, mpol, ntor):
         ndofs_half = ndofs
         ndofs = 2 * ndofs + 1
     return(ndofs, ndofs_half)
+
+@tree_util.register_pytree_node_class
+class QuadcoilParamsFiniteElement(_Params):
+    def __init__(
+        self,
+        plasma_surface, 
+        winding_surface, 
+        net_poloidal_current_amperes: float, 
+        net_toroidal_current_amperes: float,
+        Bnormal_plasma=None,
+        quadpoints_phi=None,
+        quadpoints_theta=None, 
+        stellsym=None
+        ):
+        
+        # Writing peroperties 
+        super().__init__(
+            plasma_surface=plasma_surface,
+            winding_surface=winding_surface,
+            net_poloidal_current_amperes=net_poloidal_current_amperes,
+            net_toroidal_current_amperes=net_toroidal_current_amperes,
+            Bnormal_plasma=Bnormal_plasma,
+            quadpoints_phi=quadpoints_phi,
+            quadpoints_theta=quadpoints_theta,
+            stellsym=stellsym,
+        )
+        
+
+    # -- JAX prereqs --
+    # Update this if you ever change the constructor!
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        return cls(
+            plasma_surface=children[0],
+            winding_surface=children[1],
+            net_poloidal_current_amperes=children[3],
+            net_toroidal_current_amperes=children[4],
+            Bnormal_plasma=children[5],
+            quadpoints_phi=children[6],
+            quadpoints_theta=children[7],
+            stellsym=aux_data['stellsym']
+        )
+
+    def tree_flatten(self):
+        children = (
+            self.plasma_surface,
+            self.winding_surface,
+            self.eval_surface,
+            self.net_poloidal_current_amperes,
+            self.net_toroidal_current_amperes,
+            self.Bnormal_plasma,
+            self.quadpoints_phi,
+            self.quadpoints_theta,
+        )
+        aux_data = {
+            'nfp': self.nfp,
+            'stellsym': self.stellsym,
+            'ndofs': self.ndofs,
+            'ndofs_half': self.ndofs_half,
+            # 'm': self.m,
+            # 'n': self.n,
+        }
+        return children, aux_data
