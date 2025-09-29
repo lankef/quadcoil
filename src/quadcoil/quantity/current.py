@@ -61,7 +61,7 @@ def _K_theta(qp, dofs):
     by K_theta >= -G. (Prevents current from flowing against G).
     '''
     phi_mn = dofs['phi']
-    cp_m, cp_n = jnp.array(qp.m), jnp.array(qp.n)
+    cp_m, cp_n = qp.make_mn()
     stellsym = qp.stellsym
     nfp = qp.nfp
     n_harmonic = len(cp_m)

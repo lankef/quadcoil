@@ -363,7 +363,8 @@ class SurfaceRZFourierJAX:
         )
 
 
-def make_rzfourier_mc_ms_nc_ns(mpol, ntor):
+@partial(jit, static_argnames=['mpol', 'ntor'])
+def make_rzfourier_mc_ms_nc_ns(mpol:int, ntor:int):
     # Make a list of mc, ms, nc, ns
     ms = jnp.concatenate([
         jnp.zeros(ntor),
@@ -378,9 +379,10 @@ def make_rzfourier_mc_ms_nc_ns(mpol, ntor):
     return mc, ms, nc, ns
 
 # ''' Backends '''
+@partial(jit, static_argnames=['nfp', 'stellsym', 'dash1_order', 'dash2_order', 'mpol', 'ntor'])
 def dof_to_rz_op(
         phi_grid, theta_grid, 
-        nfp, stellsym,
+        nfp:int, stellsym:bool,
         dash1_order=0, dash2_order=0,
         mpol:int=10, ntor:int=10):
     # maps a [ndof] array
@@ -469,8 +471,8 @@ def dof_to_gamma_op(
     # Generates an operator with shape [ndof, nphi, ntheta, 3(x, y, z)]
     # that calculates gamma from a surface's dofs.
     # '''
-    dof_to_x = 0
-    dof_to_y = 0
+    dof_to_x = 0.
+    dof_to_y = 0.
     for dash1_order_rz in range(dash1_order + 1):
         # Applying chain rule to 
         # dof_to_r * jnp.cos(phi_grid * jnp.pi * 2)[:, :, None].

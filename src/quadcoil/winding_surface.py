@@ -7,8 +7,6 @@ from functools import partial
 from .surfacerzfourier_jax import dof_to_rz_op, SurfaceRZFourierJAX
 import lineax as lx
 
-
-
 @partial(jit, static_argnames=['nfp', 'stellsym', 'mpol', 'ntor', 'lam_tikhonov',])
 def fit_surfacerzfourier(
         phi_grid, theta_grid, 
@@ -18,7 +16,6 @@ def fit_surfacerzfourier(
         lam_tikhonov=0., 
         custom_weight=None,):
     # Fits r and z with a surface
-
     A_lstsq, m_2_n_2 = dof_to_rz_op(
         theta_grid=theta_grid, 
         phi_grid=phi_grid,
@@ -45,10 +42,8 @@ def fit_surfacerzfourier(
         b_lstsq = b_lstsq * custom_weight[:, :, None]
     A_lstsq = A_lstsq.reshape(-1, A_lstsq.shape[-1])
     b_lstsq = b_lstsq.flatten()
-
     # tikhonov regularization for higher harmonics
     lam = lam_tikhonov * jnp.diag(m_2_n_2)
-    
     # The lineax call fulfills the same purpose as the following:
     # dofs_expand, resid, rank, s = jnp.linalg.lstsq(A_lstsq.T.dot(A_lstsq) + lam, A_lstsq.T.dot(b_lstsq))
     # but is faster and more robust to gradients.
@@ -56,7 +51,10 @@ def fit_surfacerzfourier(
     # solver = lx.QR()  # or lx.AutoLinearSolver(well_posed=None)
     solver = lx.AutoLinearSolver(well_posed=False)
     solution = lx.linear_solve(operator, A_lstsq.T.dot(b_lstsq), solver)
-    return(solution.value)
+    print('A_lstsq', A_lstsq.shape)
+    print('b_lstsq', b_lstsq.shape)
+    print('solution', solution.value.shape)
+    return solution.value
 
 # An approximation for unit normal.
 # and include the endpoints
@@ -279,7 +277,6 @@ def graham_scan(r_expand, z_expand):
     hull_idx = kept_idx[final_stack[:final_top]]
     is_on_hull = jnp.zeros(N, dtype=bool).at[hull_idx].set(True)
     return is_on_hull
-
 
 @partial(jit, static_argnames=[
     'nfp',
