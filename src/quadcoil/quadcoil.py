@@ -887,106 +887,103 @@ def quadcoil(
             y_to_qp(unravel_y(y)), 
             unravel_unscale_x(xp_to_x(xp))
         )
-        debug.print("GG {x}", x=f_metric(x_flat_precond, y_flat))
         grad_x_f = jacrev(f_metric, argnums=0)(x_flat_precond, y_flat)
-        # TODO TODO ERROR IS IN NEXT BLOCK
         grad_y_f = jacrev(f_metric, argnums=1)(x_flat_precond, y_flat)
-        # TODO TODO ERROR IS IN LAST BLOCK
-#         if unconstrained:
-#             vihp = lx.linear_solve(
-#                 vihp_A_precond, # should be .T but hessian is symmetric 
-#                 grad_x_f,
-#             ).value
-#         else:
-#             vihp_b = (
-#                 scale_AC * annil_BC @ annil_C @ grad_x_f
-#                 + scale_BC * proj_BC @ annil_C @ grad_x_f
-#                 + proj_C @ grad_x_f
-#             )
-#             # TODO
-#             # It is somewhat hard to tell whether pre-conditioning 
-#             # improves accuracy or introduces additional error 
-#             # just from A and b. Therefore, we compute both with
-#             # and without pre-conditioning, and pick the option with 
-#             # the less error. Is there a way to improve this?
-#             vihp_raw = lx.linear_solve(
-#                 vihp_A_raw, # should be .T but hessian is symmetric 
-#                 grad_x_f,
-#                 solver=implicit_linear_solver
-#             ).value
-#             vihp_precond = lx.linear_solve(
-#                 vihp_A_precond, # should be .T but hessian is symmetric 
-#                 vihp_b,
-#                 solver=implicit_linear_solver
-#             ).value
-#             hess_err = jnp.linalg.norm(hess_l_k @ vihp_raw - grad_x_f)
-#             Ohess_err = jnp.linalg.norm(hess_l_k @ vihp_precond - grad_x_f)
-#             vihp = jnp.where(hess_err < Ohess_err, vihp_raw, vihp_precond)
+        if unconstrained:
+            vihp = lx.linear_solve(
+                vihp_A_precond, # should be .T but hessian is symmetric 
+                grad_x_f,
+            ).value
+        else:
+            vihp_b = (
+                scale_AC * annil_BC @ annil_C @ grad_x_f
+                + scale_BC * proj_BC @ annil_C @ grad_x_f
+                + proj_C @ grad_x_f
+            )
+            # TODO
+            # It is somewhat hard to tell whether pre-conditioning 
+            # improves accuracy or introduces additional error 
+            # just from A and b. Therefore, we compute both with
+            # and without pre-conditioning, and pick the option with 
+            # the less error. Is there a way to improve this?
+            vihp_raw = lx.linear_solve(
+                vihp_A_raw, # should be .T but hessian is symmetric 
+                grad_x_f,
+                solver=implicit_linear_solver
+            ).value
+            vihp_precond = lx.linear_solve(
+                vihp_A_precond, # should be .T but hessian is symmetric 
+                vihp_b,
+                solver=implicit_linear_solver
+            ).value
+            hess_err = jnp.linalg.norm(hess_l_k @ vihp_raw - grad_x_f)
+            Ohess_err = jnp.linalg.norm(hess_l_k @ vihp_precond - grad_x_f)
+            vihp = jnp.where(hess_err < Ohess_err, vihp_raw, vihp_precond)
             
-#         # Now we calculate df/dy using vjp
-#         # \grad_{x_k} f [-H(l_k, x_k)^-1 \grad_{x_k}\grad_{y} l_k]
-#         # Primal and tangent must be the same shape
-#         _, dfdy1 = jvp(grad_y_l_k_for_hess, primals=[x_flat_precond], tangents=[vihp])
-#         # \grad_{y} f
-#         dfdy2 = grad_y_f
-#         dfdy_arr = -dfdy1 + dfdy2
-#         dfdy_dict = {f"df_d{key}": value for key, value in unravel_y(dfdy_arr).items()}
-#         metric_result_i = f_metric(x_flat_precond, y_flat)
-#         if verbose>0:
-#             grad_y_l_k_val = grad_y_l_k(x_flat_precond, y_flat)
-#             grad_x_grad_y_l_k = jacfwd(grad_y_l_k_for_hess, argnums=0)(x_flat_precond, y_flat)
-#             grad_keys = dfdy_dict.keys()
-#             grad_avgs = {}
-#             for k in grad_keys:
-#                 item_k = jnp.atleast_1d(dfdy_dict[k])
-#                 grad_avgs[k] = (
-#                     jnp.min(item_k),
-#                     jnp.max(item_k)
-#                 )
-#             debug.print(
-#                 '* Metric evaluated.\n'
-#                 '    {x} = {y}\n'
-#                 '    VIHP        min max: {v1}, {v2}\n'
-#                 '    df/dy       min max: {gy1}, {gy2}\n'
-#                 '    df/dx       min max: {gx1}, {gx2}\n'
-#                 '    df/dx dx/dy min max: {gxy1}, {gxy2}\n'
-#                 '    dLk/dy min max: {a1}, {a2}\n'
-#                 # '    d2Lk/dxdy min max: {b1}, {b2}\n'
-#                 # '    VIHP error without pre-conditioning: {a}\n'
-#                 # '    VIHP error with pre-conditioning:    {b}\n'
-#                 '    Gradient min, max: {g}',
-#                 v1=jnp.min(vihp),
-#                 v2=jnp.max(vihp),
-#                 gy1=jnp.min(grad_y_f),
-#                 gy2=jnp.max(grad_y_f),
-#                 gx1=jnp.min(grad_x_f),
-#                 gx2=jnp.max(grad_x_f),
-#                 gxy1=jnp.min(dfdy1),
-#                 gxy2=jnp.max(dfdy1),
-#                 a1=jnp.min(grad_y_l_k_val),
-#                 a2=jnp.max(grad_y_l_k_val),
-#                 # b1=jnp.min(grad_x_grad_y_l_k),
-#                 # b2=jnp.max(grad_x_grad_y_l_k),
-#                 x=metric_name_i, 
-#                 y=metric_result_i,
-#                 # a=hess_err,
-#                 # b=Ohess_err,
-#                 g=grad_avgs,
-#             )
-#         out_dict[metric_name_i] = {
-#             'value': metric_result_i, 
-#             'grad': dfdy_dict,
-#         }     
-#         if verbose>0:
-#             out_dict[metric_name_i]['vihp'] = vihp
-#             if not unconstrained:
-#                 out_dict[metric_name_i]['hess_rank'] = hess_rank
-#                 out_dict[metric_name_i]['Ohess_rank'] = Ohess_rank
-#                 out_dict[metric_name_i]['hess_cond'] = hess_cond
-#                 out_dict[metric_name_i]['Ohess_cond'] = Ohess_cond
-#                 out_dict[metric_name_i]['hess_err'] = hess_err
-#                 out_dict[metric_name_i]['Ohess_err'] = Ohess_err
-#     return(out_dict, qp, dofs_opt, solve_results)
+        # Now we calculate df/dy using vjp
+        # \grad_{x_k} f [-H(l_k, x_k)^-1 \grad_{x_k}\grad_{y} l_k]
+        # Primal and tangent must be the same shape
+        _, dfdy1 = jvp(grad_y_l_k_for_hess, primals=[x_flat_precond], tangents=[vihp])
+        # \grad_{y} f
+        dfdy2 = grad_y_f
+        dfdy_arr = -dfdy1 + dfdy2
+        dfdy_dict = {f"df_d{key}": value for key, value in unravel_y(dfdy_arr).items()}
+        metric_result_i = f_metric(x_flat_precond, y_flat)
+        if verbose>0:
+            grad_y_l_k_val = grad_y_l_k(x_flat_precond, y_flat)
+            grad_x_grad_y_l_k = jacfwd(grad_y_l_k_for_hess, argnums=0)(x_flat_precond, y_flat)
+            grad_keys = dfdy_dict.keys()
+            grad_avgs = {}
+            for k in grad_keys:
+                item_k = jnp.atleast_1d(dfdy_dict[k])
+                grad_avgs[k] = (
+                    jnp.min(item_k),
+                    jnp.max(item_k)
+                )
+            debug.print(
+                '* Metric evaluated.\n'
+                '    {x} = {y}\n'
+                '    VIHP        min max: {v1}, {v2}\n'
+                '    df/dy       min max: {gy1}, {gy2}\n'
+                '    df/dx       min max: {gx1}, {gx2}\n'
+                '    df/dx dx/dy min max: {gxy1}, {gxy2}\n'
+                '    dLk/dy min max: {a1}, {a2}\n'
+                # '    d2Lk/dxdy min max: {b1}, {b2}\n'
+                # '    VIHP error without pre-conditioning: {a}\n'
+                # '    VIHP error with pre-conditioning:    {b}\n'
+                '    Gradient min, max: {g}',
+                v1=jnp.min(vihp),
+                v2=jnp.max(vihp),
+                gy1=jnp.min(grad_y_f),
+                gy2=jnp.max(grad_y_f),
+                gx1=jnp.min(grad_x_f),
+                gx2=jnp.max(grad_x_f),
+                gxy1=jnp.min(dfdy1),
+                gxy2=jnp.max(dfdy1),
+                a1=jnp.min(grad_y_l_k_val),
+                a2=jnp.max(grad_y_l_k_val),
+                # b1=jnp.min(grad_x_grad_y_l_k),
+                # b2=jnp.max(grad_x_grad_y_l_k),
+                x=metric_name_i, 
+                y=metric_result_i,
+                # a=hess_err,
+                # b=Ohess_err,
+                g=grad_avgs,
+            )
+        out_dict[metric_name_i] = {
+            'value': metric_result_i, 
+            'grad': dfdy_dict,
+        }     
+        if verbose>0:
+            out_dict[metric_name_i]['vihp'] = vihp
+            if not unconstrained:
+                out_dict[metric_name_i]['hess_rank'] = hess_rank
+                out_dict[metric_name_i]['Ohess_rank'] = Ohess_rank
+                out_dict[metric_name_i]['hess_cond'] = hess_cond
+                out_dict[metric_name_i]['Ohess_cond'] = Ohess_cond
+                out_dict[metric_name_i]['hess_err'] = hess_err
+                out_dict[metric_name_i]['Ohess_err'] = Ohess_err
+    return(out_dict, qp, dofs_opt, solve_results)
 
 def _choose_fwd_rev(func, n_in, n_out, argnums):
     '''

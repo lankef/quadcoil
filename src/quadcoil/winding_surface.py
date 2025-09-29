@@ -51,9 +51,6 @@ def fit_surfacerzfourier(
     # solver = lx.QR()  # or lx.AutoLinearSolver(well_posed=None)
     solver = lx.AutoLinearSolver(well_posed=False)
     solution = lx.linear_solve(operator, A_lstsq.T.dot(b_lstsq), solver)
-    print('A_lstsq', A_lstsq.shape)
-    print('b_lstsq', b_lstsq.shape)
-    print('solution', solution.value.shape)
     return solution.value
 
 # An approximation for unit normal.
