@@ -23,7 +23,7 @@ def _Phi(qp, dofs):
     return trig_m_i_n_i@phi_mn
 _Phi_desc_unit = lambda scales: _K_desc_unit(scales) * scales["a"]
 
-@jit
+# @jit
 def _Phi_with_net_current(qp, dofs):
     theta2d, phi2d = qp.eval_surface.theta_mesh, qp.eval_surface.phi_mesh
     Phi_val = _Phi(qp, dofs) \
@@ -31,11 +31,11 @@ def _Phi_with_net_current(qp, dofs):
         + theta2d * qp.net_toroidal_current_amperes
     return(Phi_val)
 
-@jit
+# @jit
 def _Phi2(qp, dofs):
     return _Phi(qp, dofs)**2
 
-@jit 
+# @jit 
 def _f_Phi(qp, dofs):
     _Phi2_val = _Phi2(qp, dofs)
     return qp.eval_surface.integrate(_Phi2_val/2)*qp.nfp

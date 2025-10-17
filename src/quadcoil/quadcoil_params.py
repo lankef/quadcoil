@@ -225,15 +225,11 @@ class QuadcoilParams(_Params):
         n0 = n2d.flatten()[ntor:]
         m = m0[1::]
         n = n0[1::]
-        # Incorrect, from commit 542fb26
         if not stellsym:
-            m = jnp.append(m, m)
-            n = jnp.append(n, n)
-        # if not stellsym:
-        #     m_first = jnp.append(m, 0)
-        #     n_first = jnp.append(n, 0)
-        #     m = jnp.append(m_first, m)
-        #     n = jnp.append(n_first, n)
+            m_first = jnp.append(m, 0)
+            n_first = jnp.append(n, 0)
+            m = jnp.append(m_first, m)
+            n = jnp.append(n_first, n)
         return m, n
     
     @lru_cache()

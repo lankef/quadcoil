@@ -31,10 +31,12 @@ QUADCOIL_STATIC_ARGNAMES=[
     # - Plasma options
     'plasma_mpol',
     'plasma_ntor',
+    'plasma_stellsym',
     # - WS options
     'winding_surface_generator',
     'winding_mpol',
     'winding_ntor',
+    'winding_stellsym',
     # - Objectives
     'objective_name',
     # - Constraints 
@@ -76,6 +78,7 @@ def quadcoil(
     phi_unit=None,
     
     # - Plasma parameters
+    plasma_stellsym=True,
     plasma_quadpoints_phi=None,
     plasma_quadpoints_theta=None,
     Bnormal_plasma=None,
@@ -90,6 +93,7 @@ def quadcoil(
     winding_ntor:int=5,
     winding_quadpoints_phi=None,
     winding_quadpoints_theta=None,
+    winding_stellsym=True,
 
     # - Problem setup
     # Quadcoil objective terms, weights, and units
@@ -126,7 +130,7 @@ def quadcoil(
     maxiter_tot:int=10000,
     maxiter_inner:int=1000,
     gplus_mask=gplus_hard, # gplus_elu,
-    implicit_linear_solver=lx.AutoLinearSolver(well_posed=True),
+    implicit_linear_solver=None,
     value_only=False,
     verbose=0,
 ):
@@ -262,6 +266,11 @@ def quadcoil(
          raise ValueError('Only one of plasma_coil_distance and winding_dofs can be provided.')
     if isinstance(metric_name, str):
         metric_name = (metric_name,)
+    if implicit_linear_solver is None:
+        # The bool conversion here is to make sure that stellsym is bool instead 
+        # of numpy bools. This is because desc.Equilibrium.sym is a numpy.bool
+        # and can cause issues with lineax.
+        implicit_linear_solver = lx.AutoLinearSolver(well_posed=False)# bool(stellsym))
     # Type checking and error throwing
     _input_checking(
         objective_name=objective_name,
@@ -373,7 +382,7 @@ def quadcoil(
     # gradients wrt coil-plasma distances if the winding surface is given. 
     def y_to_qp(y_dict):
         plasma_surface = SurfaceRZFourierJAX(
-            nfp=nfp, stellsym=stellsym, 
+            nfp=nfp, stellsym=plasma_stellsym, 
             mpol=plasma_mpol, ntor=plasma_ntor, 
             quadpoints_phi=plasma_quadpoints_phi, 
             quadpoints_theta=plasma_quadpoints_theta,
@@ -383,7 +392,7 @@ def quadcoil(
         # Its dofs will be among x.
         if plasma_coil_distance is None:
             winding_surface = SurfaceRZFourierJAX(
-                nfp=nfp, stellsym=stellsym, 
+                nfp=nfp, stellsym=winding_stellsym, 
                 mpol=winding_mpol, ntor=winding_ntor, 
                 quadpoints_phi=winding_quadpoints_phi, 
                 quadpoints_theta=winding_quadpoints_theta,
@@ -426,6 +435,7 @@ def quadcoil(
             ntor=ntor, 
             quadpoints_phi=quadpoints_phi,
             quadpoints_theta=quadpoints_theta, 
+            stellsym=stellsym,
         )
         return qp_temp
 
