@@ -40,7 +40,7 @@ def gen_quadcoil_for_diff(**kwargs):
     # A partial of quadcoil taking only the 
     # differentiable arguments, and does not 
     # output derivatives
-    quadcoil_temp = partial(
+    quadcoil_values = partial(
         quadcoil, 
         value_only=True,
         **partial_kwargs
@@ -67,7 +67,7 @@ def gen_quadcoil_for_diff(**kwargs):
         objective_weight,
         constraint_value,
     ):
-        out_dict, qp, cp_mn, solve_results = quadcoil_temp(
+        out_dict, qp, cp_mn, solve_results = quadcoil_values(
             plasma_dofs=plasma_dofs,
             net_poloidal_current_amperes=net_poloidal_current_amperes,
             net_toroidal_current_amperes=net_toroidal_current_amperes,
@@ -113,7 +113,7 @@ def gen_quadcoil_for_diff(**kwargs):
             constraint_value_dot,
         ) = tangents
 
-        out_dict_full, qp, cp_mn, solve_results = quadcoil_full(
+        out_dict_full, _, _, _ = quadcoil_full(
             plasma_dofs=plasma_dofs,
             net_poloidal_current_amperes=net_poloidal_current_amperes,
             net_toroidal_current_amperes=net_toroidal_current_amperes,
@@ -160,4 +160,4 @@ def gen_quadcoil_for_diff(**kwargs):
         # solve_results_dot = None
         # return (out_dict_primal, qp, cp_mn, solve_results), (out_dict_dot, qp, cp_mn, solve_results)
         return (out_dict_primal), (out_dict_dot)
-    return quadcoil_full, quadcoil_for_diff
+    return quadcoil_values, quadcoil_for_diff

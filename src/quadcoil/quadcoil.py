@@ -509,15 +509,15 @@ def quadcoil(
         # Scaling current potential dofs to ~1
         # By default, we use the Bnormal value when 
         # phi=0 to generate this scaling factor.
-        B_normal_estimate = jnp.average(jnp.abs(Bnormal(qp, dofs_dict_init))) # Unit: T
+        Bnormal_estimate = jnp.average(jnp.abs(Bnormal(qp, dofs_dict_init))) # Unit: T
         if plasma_coil_distance is not None:
-            phi_unit = B_normal_estimate * 1e7 * jnp.abs(plasma_coil_distance)
+            phi_unit = Bnormal_estimate * 1e7 * jnp.abs(plasma_coil_distance)
         else:
             # The minor radius can be estimated from the 
             # n=0, m=1 rc mode of the surface.
             plasma_minor = plasma_dofs[plasma_ntor*2 + 1]
             winding_minor = winding_dofs[winding_ntor*2 + 1]
-            phi_unit = B_normal_estimate * 1e7 * jnp.abs(plasma_minor - winding_minor)
+            phi_unit = Bnormal_estimate * 1e7 * jnp.abs(plasma_minor - winding_minor)
 
     # ----- Creating scaled, flattened dof, 'x_flat_init' -----
     # The actual, unit-free, variable used for initialization,
@@ -550,6 +550,7 @@ def quadcoil(
     # Here we perform the unraveling. 
     # *** x_flat_init is the actual dof manipulated by the optimizers! ***
     x_flat_init, unravel_x = flatten_util.ravel_pytree(x_dict)
+    
     ndofs_tot = len(x_flat_init) # This counts the aux vars too
     ny = tree_len(y_dict_current)
     # This block prints out a summary on the auxiliary vars and 
@@ -941,7 +942,7 @@ def quadcoil(
         metric_result_i = f_metric(x_flat_precond, y_flat)
         if verbose>0:
             grad_y_l_k_val = grad_y_l_k(x_flat_precond, y_flat)
-            grad_x_grad_y_l_k = jacfwd(grad_y_l_k_for_hess, argnums=0)(x_flat_precond, y_flat)
+            # grad_x_grad_y_l_k = jacfwd(grad_y_l_k_for_hess, argnums=0)(x_flat_precond, y_flat)
             grad_keys = dfdy_dict.keys()
             grad_avgs = {}
             for k in grad_keys:
