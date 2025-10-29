@@ -50,7 +50,8 @@ def merge_callables(callables):
     callable
         A callable that returns a 1D ``array``
     '''
-    def merged_fn(qp, dofs):
+    @partial(jit, static_argnums=(2,))
+    def merged_fn(qp, dofs, callables=callables):
         outputs = []
         for fn in callables:
             if fn is not None:
@@ -64,7 +65,7 @@ def merge_callables(callables):
             return jnp.zeros(0)
         return jnp.concatenate(outputs, axis=0)
     
-    return jit(merged_fn)
+    return merged_fn
 
 def _add_quantity(name, unit, use_case):
     '''
