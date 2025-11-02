@@ -11,10 +11,11 @@ from quadcoil import (
 from quadcoil.wrapper import _parse_objectives, _parse_constraints
 from functools import partial
 from quadcoil.quantity import Bnormal
-from jax import jacfwd, jacrev, jvp, jit, hessian, block_until_ready, config, debug, flatten_util, eval_shape
+from jax import jacfwd, jacrev, jvp, jit, hessian, block_until_ready, debug, flatten_util, eval_shape
+from jax import config as config_jax
 import jax.numpy as jnp
 import lineax as lx
-config.update('jax_enable_x64', True)
+config_jax.update('jax_enable_x64', True)
 
 tol_default = 1e-6
 tol_default_last = 1e-10

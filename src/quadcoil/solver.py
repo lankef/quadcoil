@@ -6,8 +6,8 @@ from functools import partial
 from jax import jit, vmap, grad, jacrev
 import jax
 from jax.lax import while_loop
-from jax import config
-config.update('jax_enable_x64', True)
+from jax import config as config_jax
+config_jax.update('jax_enable_x64', True)
 
 lstsq_vmap = vmap(jnp.linalg.lstsq)
 

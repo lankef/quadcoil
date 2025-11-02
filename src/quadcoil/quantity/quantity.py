@@ -1,9 +1,12 @@
 from typing import Callable, List, Any
 from jax import jit, eval_shape
 import jax.numpy as jnp
-
 import numpy as np
 from functools import partial, lru_cache
+# This imports the module instead of the config object!
+from quadcoil import conf as qc
+from quadcoil import linf_lse
+
 # For compressing a [npol, ntor, ...] array 
 # into a [n_unique, ...] array based on stellarator
 # symmetry.
@@ -54,8 +57,8 @@ def _expand_by_stellsym(f_unique, f_shape):
     
 class _Quantity: 
     r'''
-    Interior point methods require :math:`C^1` objectives. Therefore, 
-    QUADCOIL has to convert non-:math:`C^1`, convex objectives, such as 
+    Interior point methods and order-2 methods like BFGS requires :math:`C^1` objectives. Therefore, 
+    QUADCOIL has to convert :math:`C0` but not :math:`C^1`, convex objectives, such as 
     L-:math:`\infty` or L1 norms, into a combination of :math:`C^1` objectives, constraints
     and auxiliary variables. For example, the L-:math:`\infty` norm 
     :math:`\max_{ws}\Phi`, is actually:
@@ -95,13 +98,13 @@ class _Quantity:
     
     Parameters
     ----------
-    scaled_c2_impl : Callable(qp: QuadcoilParams, dofs: dict)
-        The value of the quantity. Must be :math:`C^1`.
     c0_impl : Callable(qp: QuadcoilParams, dofs: dict, unit: float)
         A "real" implementation of the quantity that can directly be calculated from :math:`\Phi_{sv}`
         without using auxiliary variables. Can be :math:`C^0` rather than :math:`C^1`. This is the 
         "surface-level" imnplementation that works across different problems, and that 
         QUADCOIL users will typically access. Scale dependence must be included.
+    scaled_c2_impl : Callable(qp: QuadcoilParams, dofs: dict)
+        The value of the quantity. Must be :math:`C^1`.
     scaled_g_ineq_impl : Callable(qp: QuadcoilParams, dofs: dict, unit: float)
         The auxiliary inequality constraints required by the objective, in the form 
         of :math:`g(x)\leq0`. Note the inclusion of ``unit`` as an argument. 
@@ -184,7 +187,7 @@ class _Quantity:
     @partial(jit, static_argnames=('self',))
     def __call__(self, qp, dofs):
         r'''
-        Evaluate this quantity. For  convenience.
+        Evaluate this quantity. For convenience.
         
         Parameters
         ----------
@@ -200,8 +203,8 @@ class _Quantity:
         def scaled_c2_impl(qp, dofs, unit):
             return func(qp, dofs)/unit
         return _Quantity(
-            scaled_c2_impl=scaled_c2_impl, 
             c0_impl=func, 
+            scaled_c2_impl=scaled_c2_impl, 
             scaled_g_ineq_impl=None,
             scaled_h_eq_impl=None,
             scaled_aux_dofs_init=None, 
@@ -254,49 +257,74 @@ class _Quantity:
         # Because the aux var is already scaled to O(1),
         # scaled_c2_impl doesn't acually need to have unit dependence.
         if square:
-            scaled_c2_impl = lambda qp, dofs, unit, aux_argname=aux_argname: dofs[aux_argname]**2
-            # The effective function
             c0_impl = lambda qp, dofs, func=func: jnp.max(jnp.abs(func(qp, dofs)))**2
         else:
-            scaled_c2_impl = lambda qp, dofs, unit, aux_argname=aux_argname: dofs[aux_argname]
-            # The effective function
             c0_impl = lambda qp, dofs, func=func: jnp.max(jnp.abs(func(qp, dofs)))
-        # The constraints
-        def scaled_g_ineq_impl(qp, dofs, unit, func=func, aux_argname=aux_argname):
-            # When square==True, the specified by the user is field^2.
+        # Alternative implementations
+        if qc.config.smoothing == 'slack':
             if square:
-                unit_eff = jnp.sqrt(unit)
+                scaled_c2_impl = lambda qp, dofs, unit, aux_argname=aux_argname: dofs[aux_argname]**2
             else:
-                unit_eff = unit
-            field = func(qp, dofs)
-            if auto_stellsym and qp.stellsym:
-                field = _compress_by_stellsym(field)
+                scaled_c2_impl = lambda qp, dofs, unit, aux_argname=aux_argname: dofs[aux_argname]
+            # The constraints
+            def scaled_g_ineq_impl(qp, dofs, unit, func=func, aux_argname=aux_argname):
+                # When square==True, the specified by the user is field^2.
+                if square:
+                    unit_eff = jnp.sqrt(unit)
+                else:
+                    unit_eff = unit
+                field = func(qp, dofs)
+                if auto_stellsym and qp.stellsym:
+                    field = _compress_by_stellsym(field)
+                else:
+                    field = field.flatten()
+                p_aux = dofs[aux_argname]
+                g_plus = field/unit_eff - p_aux #  f - p <=0
+                # We need only half of the constraints if f is positive definite
+                if positive_definite:
+                    return g_plus
+                g_minus = -field/unit_eff - p_aux # -f - p <=0
+                return jnp.stack([g_plus,g_minus], axis=0)
+            
+            # The initial value of the auxiliary variable is the 
+            # c0_impl / unit. 
+            if square:
+                scaled_aux_dofs_init = lambda qp, dofs, unit: c0_impl(qp, dofs)/jnp.sqrt(unit)
             else:
-                field = field.flatten()
-            p_aux = dofs[aux_argname]
-            g_plus = field/unit_eff - p_aux #  f - p <=0
-            # We need only half of the constraints if f is positive definite
-            if positive_definite:
-                return g_plus
-            g_minus = -field/unit_eff - p_aux # -f - p <=0
-            return jnp.stack([g_plus,g_minus], axis=0)
-        
-        # The initial value of the auxiliary variable is the 
-        # c0_impl / unit. 
-        if square:
-            scaled_aux_dofs_init = lambda qp, dofs, unit: c0_impl(qp, dofs)/jnp.sqrt(unit)
+                scaled_aux_dofs_init = lambda qp, dofs, unit: c0_impl(qp, dofs)/unit
+            return _Quantity(
+                c0_impl=c0_impl, 
+                scaled_c2_impl=scaled_c2_impl,
+                scaled_g_ineq_impl=scaled_g_ineq_impl,
+                scaled_h_eq_impl=None, 
+                # The auxiliary dofs' names and initial values
+                scaled_aux_dofs_init={aux_argname: scaled_aux_dofs_init},
+                compatibility=['f', '<='], 
+                desc_unit=desc_unit,
+            )
+        elif qc.config.smoothing is None:
+            return _Quantity.generate_c2(
+                func=c0_impl, 
+                compatibility=['f', '<='], 
+                desc_unit=desc_unit
+            )
+        elif qc.config.smoothing == 'approx':
+            if square:
+                scaled_c2_impl = lambda qp, dofs, unit: linf_lse(func(qp, dofs)/unit, qc.config.log_sum_exp_param)
+            else:
+                scaled_c2_impl = lambda qp, dofs, unit: linf_lse(func(qp, dofs)/unit, qc.config.log_sum_exp_param)**2
+            return _Quantity(
+                c0_impl=c0_impl, 
+                scaled_c2_impl=scaled_c2_impl,
+                scaled_g_ineq_impl=None,
+                scaled_h_eq_impl=None, 
+                # The auxiliary dofs' names and initial values
+                scaled_aux_dofs_init=None,
+                compatibility=['f', '<='], 
+                desc_unit=desc_unit,
+            )
         else:
-            scaled_aux_dofs_init = lambda qp, dofs, unit: c0_impl(qp, dofs)/unit
-        return _Quantity(
-            scaled_c2_impl=scaled_c2_impl,
-            c0_impl=c0_impl, 
-            scaled_g_ineq_impl=scaled_g_ineq_impl,
-            scaled_h_eq_impl=None, 
-            # The auxiliary dofs' names and initial values
-            scaled_aux_dofs_init={aux_argname: scaled_aux_dofs_init},
-            compatibility=['f', '<='], 
-            desc_unit=desc_unit,
-        )
+            raise NotImplementedError('Unknown smoothing method found in quadcoil.config: ' + str(qc.config.smoothing))
     
     def generate_linf_norm_4(func, aux_argname, desc_unit):
         r'''
@@ -334,35 +362,57 @@ class _Quantity:
         -------
         A ``_Quantity``.
         '''
-        # The objective/constraint form of this L-infinity
-        # norm is just a function that returns the auxiliary variable.
-        # Because the aux var is already scaled to O(1),
-        # scaled_c2_impl doesn't acually need to have unit dependence.
-        scaled_c2_impl = lambda qp, dofs, unit, aux_argname=aux_argname: dofs[aux_argname]**2
         # The effective function
         c0_impl = lambda qp, dofs, func=func: jnp.max(func(qp, dofs)**4)
-        # The constraints
-        def scaled_g_ineq_impl(qp, dofs, unit, func=func, aux_argname=aux_argname):
-            # The unit specified by the user is field^4
-            unit_sq = jnp.sqrt(unit)
-            field = func(qp, dofs)
-            p_aux = dofs[aux_argname]
-            g_sq = field**2/unit_sq - p_aux
-            return g_sq
-        
-        # The initial value of the auxiliary variable is the 
-        # max(|field|^2) / unit_sq. 
-        scaled_aux_dofs_init = lambda qp, dofs, unit: jnp.max(func(qp, dofs)**2)/jnp.sqrt(unit)
-        return _Quantity(
-            scaled_c2_impl=scaled_c2_impl,
-            c0_impl=c0_impl, 
-            scaled_g_ineq_impl=scaled_g_ineq_impl,
-            scaled_h_eq_impl=None, 
-            # The auxiliary dofs' names and initial values
-            scaled_aux_dofs_init={aux_argname: scaled_aux_dofs_init},
-            compatibility=['f', '<='], 
-            desc_unit=desc_unit,
-        )
+        # Alternative implementations
+        if qc.config.smoothing == 'slack':
+            # The objective/constraint form of this L-infinity
+            # norm is just a function that returns the auxiliary variable.
+            # Because the aux var is already scaled to O(1),
+            # scaled_c2_impl doesn't acually need to have unit dependence.
+            scaled_c2_impl = lambda qp, dofs, unit, aux_argname=aux_argname: dofs[aux_argname]**2
+            # The constraints
+            def scaled_g_ineq_impl(qp, dofs, unit, func=func, aux_argname=aux_argname):
+                # The unit specified by the user is field^4
+                unit_sq = jnp.sqrt(unit)
+                field = func(qp, dofs)
+                p_aux = dofs[aux_argname]
+                g_sq = field**2/unit_sq - p_aux
+                return g_sq
+            
+            # The initial value of the auxiliary variable is the 
+            # max(|field|^2) / unit_sq. 
+            scaled_aux_dofs_init = lambda qp, dofs, unit: jnp.max(func(qp, dofs)**2)/jnp.sqrt(unit)
+            return _Quantity(
+                c0_impl=c0_impl, 
+                scaled_c2_impl=scaled_c2_impl,
+                scaled_g_ineq_impl=scaled_g_ineq_impl,
+                scaled_h_eq_impl=None, 
+                # The auxiliary dofs' names and initial values
+                scaled_aux_dofs_init={aux_argname: scaled_aux_dofs_init},
+                compatibility=['f', '<='], 
+                desc_unit=desc_unit,
+            )
+        elif qc.config.smoothing is None:
+            return _Quantity.generate_c2(
+                func=c0_impl, 
+                compatibility=['f', '<='], 
+                desc_unit=desc_unit
+            )
+        elif qc.config.smoothing == 'approx':
+            scaled_c2_impl = lambda qp, dofs, unit: linf_lse(func(qp, dofs)**2/(unit**2), qc.config.log_sum_exp_param)**2
+            return _Quantity(
+                c0_impl=c0_impl, 
+                scaled_c2_impl=scaled_c2_impl,
+                scaled_g_ineq_impl=None,
+                scaled_h_eq_impl=None, 
+                # The auxiliary dofs' names and initial values
+                scaled_aux_dofs_init=None,
+                compatibility=['f', '<='], 
+                desc_unit=desc_unit,
+            )
+        else:
+            raise NotImplementedError('Unknown smoothing method found in quadcoil.config: ' + str(qc.config.smoothing))
     
     def generate_l1_norm(func, aux_argname, desc_unit, positive_definite=False, square=False, auto_stellsym=False):
         r'''
@@ -405,60 +455,94 @@ class _Quantity:
         -------
         A ``_Quantity``.
         '''
-        # The objective/constraint form of this L-1
-        # norm is the surface integral pf the aux variable.
-        def scaled_c2_impl(qp, dofs, unit, aux_argname=aux_argname):
-            # Because the aux vars are already
-            # scaled to O(1), no unit dependence is actually needed here.
-            da = qp.eval_surface.da()
-            f_shape = eval_shape(func, qp, dofs).shape
-            if auto_stellsym and qp.stellsym:
-                field = _expand_by_stellsym(dofs[aux_argname], f_shape)
-            else:
-                field = dofs[aux_argname].reshape(f_shape)
-            integrand = jnp.broadcast_to(da, field.shape) * jnp.abs(field)
-            return jnp.sum(integrand) * qp.nfp
+
         # The effective function
         def c0_impl(qp, dofs, func=func):
             da = qp.eval_surface.da()
             field = func(qp, dofs)
             integrand = jnp.broadcast_to(da, field.shape) * jnp.abs(field)
             return jnp.sum(integrand) * qp.nfp
-        # The constraints
-        def scaled_g_ineq_impl(qp, dofs, unit, func=func, aux_argname=aux_argname, auto_stellsym=auto_stellsym):
-            field = func(qp, dofs)
-            if auto_stellsym and qp.stellsym:
-                field = _compress_by_stellsym(field)
-            else:
-                field = field.flatten()
-            p_aux = dofs[aux_argname]
-            g_plus = field/unit - p_aux #  f - p <=0
-            # We need only half of the constraints if f is positive definite
-            if positive_definite:
-                return g_plus
-            g_minus = -field/unit - p_aux # -f - p <=0
-            return jnp.stack([g_plus,g_minus], axis=0)
-        # The unit of L-1 norm is m^2 (unit),
-        # but the unit of its auxiliary constraints
-        # are (unit). Therefore, g_unit is val_unit \
-        # divided by the surface's area.
-        def g_unit(qp, unit):
-            return unit
-        # The initial value of the auxiliary variable is the 
-        # abs(field) / g_unit. 
-        def scaled_aux_dofs_init(qp, dofs, unit, auto_stellsym=auto_stellsym):
-            field = func(qp, dofs)
-            if auto_stellsym and qp.stellsym:
-                field = _compress_by_stellsym(field)
-            else:
-                field = field.flatten()
-            return jnp.abs(field)/g_unit(qp, unit)
-        return _Quantity(
-            scaled_c2_impl=scaled_c2_impl,
-            c0_impl=c0_impl, 
-            scaled_g_ineq_impl=scaled_g_ineq_impl,
-            scaled_h_eq_impl=None, 
-            scaled_aux_dofs_init={aux_argname: scaled_aux_dofs_init},
-            compatibility=['f', '<='], 
-            desc_unit=desc_unit,
-        )
+        # Alternative implementations
+        if qc.config.smoothing == 'slack':
+            # The objective/constraint form of this L-1
+            # norm is the surface integral pf the aux variable.
+            def scaled_c2_impl(qp, dofs, unit, aux_argname=aux_argname):
+                # Because the aux vars are already
+                # scaled to O(1), no unit dependence is actually needed here.
+                da = qp.eval_surface.da()
+                f_shape = eval_shape(func, qp, dofs).shape
+                if auto_stellsym and qp.stellsym:
+                    field = _expand_by_stellsym(dofs[aux_argname], f_shape)
+                else:
+                    field = dofs[aux_argname].reshape(f_shape)
+                integrand = jnp.broadcast_to(da, field.shape) * jnp.abs(field)
+                return jnp.sum(integrand) * qp.nfp
+            # The constraints
+            def scaled_g_ineq_impl(qp, dofs, unit, func=func, aux_argname=aux_argname, auto_stellsym=auto_stellsym):
+                field = func(qp, dofs)
+                if auto_stellsym and qp.stellsym:
+                    field = _compress_by_stellsym(field)
+                else:
+                    field = field.flatten()
+                p_aux = dofs[aux_argname]
+                g_plus = field/unit - p_aux #  f - p <=0
+                # We need only half of the constraints if f is positive definite
+                if positive_definite:
+                    return g_plus
+                g_minus = -field/unit - p_aux # -f - p <=0
+                return jnp.stack([g_plus,g_minus], axis=0)
+            # The unit of L-1 norm is m^2 (unit),
+            # but the unit of its auxiliary constraints
+            # are (unit). Therefore, g_unit is val_unit \
+            # divided by the surface's area.
+            def g_unit(qp, unit):
+                return unit
+            # The initial value of the auxiliary variable is the 
+            # abs(field) / g_unit. 
+            def scaled_aux_dofs_init(qp, dofs, unit, auto_stellsym=auto_stellsym):
+                field = func(qp, dofs)
+                if auto_stellsym and qp.stellsym:
+                    field = _compress_by_stellsym(field)
+                else:
+                    field = field.flatten()
+                return jnp.abs(field)/g_unit(qp, unit)
+            return _Quantity(
+                c0_impl=c0_impl, 
+                scaled_c2_impl=scaled_c2_impl,
+                scaled_g_ineq_impl=scaled_g_ineq_impl,
+                scaled_h_eq_impl=None, 
+                scaled_aux_dofs_init={aux_argname: scaled_aux_dofs_init},
+                compatibility=['f', '<='], 
+                desc_unit=desc_unit,
+            )
+        elif qc.config.smoothing is None:
+            return _Quantity.generate_c2(
+                func=c0_impl, 
+                compatibility=['f', '<='], 
+                desc_unit=desc_unit
+            )
+        elif qc.config.smoothing == 'approx':
+            # The effective function
+            def scaled_c2_impl(qp, dofs, unit, func):
+                da = qp.eval_surface.da()
+                field = func(qp, dofs)
+                # Assuming field and da has the same first two dims
+                # but field may have an arbitrary num of extra dims. 
+                # This is the most compact way to broadcast da to field.
+                da = da.reshape(da.shape + (1,) * (field.ndim - da.ndim))
+                field_stacked = jnp.stack((field, -field), field.ndim)
+                integrand = jnp.broadcast_to(da, field.shape) * linf_lse(field_stacked, qc.config.log_sum_exp_param, axis=-1)
+                return jnp.sum(integrand) * qp.nfp / unit
+            return _Quantity(
+                c0_impl=c0_impl, 
+                scaled_c2_impl=scaled_c2_impl,
+                scaled_g_ineq_impl=None,
+                scaled_h_eq_impl=None, 
+                # The auxiliary dofs' names and initial values
+                scaled_aux_dofs_init=None,
+                compatibility=['f', '<='], 
+                desc_unit=desc_unit,
+            )
+        else:
+            raise NotImplementedError('Unknown smoothing method found in quadcoil.config: ' + str(qc.config.smoothing))
+        

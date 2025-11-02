@@ -2,6 +2,7 @@ import jax.numpy as jnp
 import numpy as np # Don't panic, it's for type checking
 from jax import jit
 from jax.tree_util import tree_reduce
+import jax.nn as jnn
 def tree_len(pytree):
     return tree_reduce(
         lambda acc, leaf: acc + jnp.atleast_1d(leaf).size, pytree, initializer=0
@@ -145,3 +146,12 @@ def project_arr_cylindrical(
             unit3=z_unit,
         )
     )
+
+def linf_lse(x, epsilon, **kwargs):
+    return epsilon * jnn.logsumexp(a=x/epsilon, **kwargs)
+
+# def l1_lse(x, epsilon):
+#     x_flat = x.flatten()
+#     x_pm = jnp.stack((x_flat, -x_flat))
+#     x_abs = linf_lse(x_pm, epsilon, axis=0)
+#     return jnp.sum(x_abs)
