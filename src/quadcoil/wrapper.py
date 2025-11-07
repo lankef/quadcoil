@@ -67,7 +67,7 @@ def merge_callables(callables):
     
     return merged_fn
 
-def _add_quantity(name, unit, use_case):
+def _add_quantity(name, unit, use_case, smoothing, smoothing_params):
     '''
     Finds a quantity from quadcoil.quantity, unpacks and scales it. 
     Also checks compatibility.
@@ -78,14 +78,12 @@ def _add_quantity(name, unit, use_case):
         The name of the quantity to find
     unit : scalar or None 
         The unit of the quantity
-    scaled_aux_dofs : dict{str: None, Tuple or Callable}
-        The accumulator.
     use_case : str
         The current type of use case (``'f'``, ``'=='``, ``'<='`` or ``'>='``).
 
     Returns
     -------
-    scaled_c2_impl : Callable
+    scaled_f_impl : Callable
         The "under-the-hood" implementation of the quantity
     g_ineq, h_eq : List[Callable]
         The list of inequality and equality constraints.
@@ -93,14 +91,18 @@ def _add_quantity(name, unit, use_case):
         The unit as a Callable, in case the scaling factor of the quantity 
         need to be used later, and the scaling mode is set to ``None``.
         The only place where this is currently used is constraint value scaling. 
-    scaled_aux_dofs : dict{str: None, Tuple or Callable}
+    scaled_slack_dofs : dict{str: None, Tuple or Callable}
         The accumulator after adding auxiliary variables.
+    smoothing : str
+        Smoothing mode.
+    smoothing_params
+        Smoothing parameters.
     '''
     quantity = get_quantity(name)
-    scaled_c2_impl = quantity.scaled_c2_impl
-    scaled_g_ineq_impl = quantity.scaled_g_ineq_impl
-    scaled_h_eq_impl = quantity.scaled_h_eq_impl
-    scaled_aux_dofs = quantity.scaled_aux_dofs_init
+    scaled_f_impl = quantity.scaled_f_impl(smoothing=smoothing, smoothing_params=smoothing_params)
+    scaled_g_ineq_impl = quantity.scaled_g_ineq_impl(smoothing=smoothing)
+    scaled_h_eq_impl = quantity.scaled_h_eq_impl(smoothing=smoothing)
+    scaled_slack_dofs = quantity.scaled_slack_dofs_init(smoothing=smoothing)
     compatibility = quantity.compatibility
     # Checking compatibility
     if use_case not in compatibility:
@@ -117,7 +119,7 @@ def _add_quantity(name, unit, use_case):
     # To accommodate this with the shortest amount of code,
     # we make unit a callable regardless it's a scalar or None.
     if unit is None:
-        c0_impl = quantity.c0_impl
+        c0_impl = quantity.__call__
         unit_callable = lambda qp: c0_impl(qp, {'phi': jnp.zeros(qp.ndofs)})
     elif jnp.isscalar(unit):
         unit_callable = lambda qp: unit
@@ -133,16 +135,16 @@ def _add_quantity(name, unit, use_case):
             fun(qp, dofs, unit=unit_callable(qp))
         
     # Scaling value
-    val_scaled = apply_unit(scaled_c2_impl)
+    val_scaled = apply_unit(scaled_f_impl)
     
     # Scaling auxiliary variables' initial values
-    scaled_aux_dofs_out = {}
-    if not (scaled_aux_dofs is None):
+    scaled_slack_dofs_out = {}
+    if not (scaled_slack_dofs is None):
         # We loop over all auxiliary variables' init function, 
         # and substitute in the value of unit with the presently known value.
-        for key in scaled_aux_dofs:
-            scaled_aux_dofs_new = apply_unit(scaled_aux_dofs[key])
-            scaled_aux_dofs_out[key] = scaled_aux_dofs_new
+        for key in scaled_slack_dofs:
+            scaled_slack_dofs_new = apply_unit(scaled_slack_dofs[key])
+            scaled_slack_dofs_out[key] = scaled_slack_dofs_new
     # Scaling g and h
     if scaled_g_ineq_impl is not None:
         g_ineq_list_scaled = [apply_unit(scaled_g_ineq_impl)]
@@ -157,11 +159,17 @@ def _add_quantity(name, unit, use_case):
         g_ineq_list_scaled,
         h_eq_list_scaled,
         unit_callable,
-        scaled_aux_dofs_out
+        scaled_slack_dofs_out
     )
 
 
-def _parse_objectives(objective_name, objective_unit=None, objective_weight=1.): 
+def _parse_objectives(
+        objective_name, 
+        objective_unit, 
+        objective_weight, 
+        smoothing,
+        smoothing_params,
+    ): 
     r'''
     Parses a tuple of ``str`` quantities names (or a single ``str`` for one objective only), 
     an array of weights, and a tuple of units into a ``callable`` 
@@ -179,6 +187,10 @@ def _parse_objectives(objective_name, objective_unit=None, objective_weight=1.):
         or a `tuple` with ``None``, then the corresponding objective will 
         be normalized with its value when the current is uniform.
         (or in other words, :math:`\Phi_{sv}=0`).
+    smoothing : str
+        Smoothing mode.
+    smoothing_params
+        Smoothing parameters.
 
     Returns
     -------
@@ -187,7 +199,7 @@ def _parse_objectives(objective_name, objective_unit=None, objective_weight=1.):
         and an array of :math:`\Phi_{sv}` Fourier coefficients into a scalar.
     g_list : List[Callable or None]
     h_list : List[Callable or None]
-    scaled_aux_dofs : dict{str: None, Tuple or Callable}
+    scaled_slack_dofs : dict{str: None, Tuple or Callable}
     '''
     if isinstance(objective_name, str):
         objective_name = (objective_name,)
@@ -195,7 +207,7 @@ def _parse_objectives(objective_name, objective_unit=None, objective_weight=1.):
         objective_weight = jnp.array([1.,])
     if len(objective_name) != len(objective_weight): # or len(objective_name) != len(objective_unit):
         raise ValueError('objective, objective_weight and objective_unit must have the same length.')
-    scaled_aux_dofs = {}
+    scaled_slack_dofs = {}
     f_list = []
     g_list = []
     h_list = []
@@ -205,13 +217,15 @@ def _parse_objectives(objective_name, objective_unit=None, objective_weight=1.):
             g_ineq_list_scaled,
             h_eq_list_scaled,
             _,
-            scaled_aux_dofs_i,   
+            scaled_slack_dofs_i,   
         ) = _add_quantity(
             name=objective_name[i],
             unit=objective_unit[i],
             use_case='f',
+            smoothing=smoothing,
+            smoothing_params=smoothing_params,
         )
-        scaled_aux_dofs = scaled_aux_dofs | scaled_aux_dofs_i
+        scaled_slack_dofs = scaled_slack_dofs | scaled_slack_dofs_i
         f_list.append(val_scaled)
         g_list = g_list + g_ineq_list_scaled
         h_list = h_list + h_eq_list_scaled
@@ -224,13 +238,15 @@ def _parse_objectives(objective_name, objective_unit=None, objective_weight=1.):
         for i in range(len(f_list)):
             out = out + f_list[i](qp, dofs) * objective_weight[i]
         return out
-    return jit(f_tot), g_list, h_list, scaled_aux_dofs
+    return jit(f_tot), g_list, h_list, scaled_slack_dofs
 
 def _parse_constraints(
     constraint_name, 
     constraint_type, 
     constraint_unit, 
     constraint_value, 
+    smoothing,
+    smoothing_params,
 ):
     r'''
     Parses a series of tuples and arrays specifying the quantities, 
@@ -249,6 +265,10 @@ def _parse_constraints(
         when the poloidal/toroidal current is uniform.
     constraint_value : array(float)
         An array of constraint thresholds.
+    smoothing : str
+        Smoothing mode.
+    smoothing_params
+        Smoothing parameters.
 
     Returns
     -------    
@@ -256,7 +276,7 @@ def _parse_constraints(
     h_list : List[Callable or None]
         A list of ``Callable`` for the inequality/equality constraints. Returns will be 
         greater than 0 when the constraints are violated.
-    scaled_aux_dofs : dict{str: None, Tuple or Callable}
+    scaled_slack_dofs : dict{str: None, Tuple or Callable}
         A dictionary containing the shapes of the auxiliary variables, or the \
         ``Callables`` required to calculate them
     '''
@@ -280,7 +300,7 @@ def _parse_constraints(
     # that are =0 or <=0 when the constraint is satisfied. 
     g_ineq_list = []
     h_eq_list = []
-    scaled_aux_dofs = {}
+    scaled_slack_dofs = {}
     for i in range(n_cons_total):
         cons_type_i = constraint_type[i]
         cons_val_i = constraint_value[i]
@@ -289,13 +309,15 @@ def _parse_constraints(
             aux_g_ineq_i_scaled,
             aux_h_eq_i_scaled,
             unit_callable_i,
-            scaled_aux_dofs_i
+            scaled_slack_dofs_i
         ) = _add_quantity(
             name=constraint_name[i],
             unit=constraint_unit[i],
             use_case=cons_type_i,
+            smoothing=smoothing,
+            smoothing_params=smoothing_params,
         )
-        scaled_aux_dofs = scaled_aux_dofs | scaled_aux_dofs_i
+        scaled_slack_dofs = scaled_slack_dofs | scaled_slack_dofs_i
         g_ineq_list = g_ineq_list + aux_g_ineq_i_scaled
         h_eq_list = h_eq_list + aux_h_eq_i_scaled
         # Flipping the sign of >= constraints.
@@ -328,5 +350,5 @@ def _parse_constraints(
     # # merge_callables already contains jit.
     # g_ineq = merge_callables(g_ineq_list)
     # h_eq = merge_callables(h_eq_list)
-    return g_ineq_list, h_eq_list, scaled_aux_dofs
+    return g_ineq_list, h_eq_list, scaled_slack_dofs
     

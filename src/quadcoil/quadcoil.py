@@ -6,7 +6,7 @@ from quadcoil import (
     SurfaceRZFourierJAX, QuadcoilParams, 
     solve_constrained, run_opt_lbfgs,
     is_ndarray, tree_len,
-    gplus_hard, gplus_elu, gplus_softplus
+    gplus_hard, gplus_elu, gplus_softplus,
 )
 from quadcoil.wrapper import _parse_objectives, _parse_constraints
 from functools import partial
@@ -54,9 +54,12 @@ QUADCOIL_STATIC_ARGNAMES=[
     'implicit_linear_solver',
     'value_only',
     'verbose',
+    # Smoothing parameters:
+    'smoothing',
 ]
 @partial(jit, static_argnames=QUADCOIL_STATIC_ARGNAMES)
 def quadcoil(
+    # Now, the regular arguments.
     nfp:int,
     stellsym:bool,
     plasma_mpol:int,
@@ -86,7 +89,7 @@ def quadcoil(
 
     # - Winding parameters (offset)
     plasma_coil_distance:float=None,
-    winding_surface_generator=gen_winding_surface_offset, # gen_winding_surface_arc,
+    winding_surface_generator=gen_winding_surface_arc,
 
     # - Winding parameters (Providing surface)
     winding_dofs=None,
@@ -131,6 +134,8 @@ def quadcoil(
     maxiter_tot:int=10000,
     maxiter_inner:int=1000,
     gplus_mask=gplus_hard, # gplus_elu,
+    smoothing='slack',
+    smoothing_params={'lse_epsilon': 1e-3},
     implicit_linear_solver=None,
     value_only=False,
     verbose=0,
@@ -308,12 +313,12 @@ def quadcoil(
         if verbose>0:
             debug.print('Plasma-coil distance (m): {x}', x=plasma_coil_distance)
         y_dict_current['plasma_coil_distance'] = plasma_coil_distance
-    
     # ----- Printing inputs -----
     if verbose>0:
         debug.print(
             'Running QUADCOIL in verbose mode \n\n'\
             '----- Input summary ----- \n'\
+            'Smoothing mode for non-smooth functions: {smoothing}\n'\
             'Evaluation phi quadpoint num: {n_quadpoints_phi}\n'\
             'Evaluation theta quadpoint num: {n_quadpoints_theta}\n'\
             'Plasma phi quadpoint num: {n_plasma_quadpoints_phi}\n'\
@@ -340,6 +345,7 @@ def quadcoil(
             '    gtol_inner: {gtol_inner}\n'\
             '    maxiter_tot: {maxiter_tot}\n'\
             '    maxiter_inner: {maxiter_inner}',
+            smoothing=smoothing,
             n_quadpoints_phi=len(quadpoints_phi),
             n_quadpoints_theta=len(quadpoints_theta),
             n_plasma_quadpoints_phi=len(plasma_quadpoints_phi),
@@ -468,12 +474,16 @@ def quadcoil(
             objective_name=objective_name, 
             objective_unit=objective_unit,
             objective_weight=objective_weight_temp, 
+            smoothing=smoothing,
+            smoothing_params=smoothing_params,
         )
         g_cons_list, h_cons_list, aux_dofs_cons = _parse_constraints(
             constraint_name=constraint_name,
             constraint_type=constraint_type,
             constraint_unit=constraint_unit,
             constraint_value=constraint_value_temp,
+            smoothing=smoothing,
+            smoothing_params=smoothing_params,
         )
         # Merging constraints and aux dofs from different sources
         g_list = g_obj_list + g_cons_list

@@ -147,8 +147,20 @@ def project_arr_cylindrical(
         )
     )
 
+
+def max_lse(x, epsilon, **kwargs):
+    approx = epsilon * jnn.logsumexp(a=x/epsilon, **kwargs)
+    return approx
+
+def abs_lse(x, epsilon, **kwargs):
+    x_stacked = jnp.stack((x, -x), x.ndim)
+    return max_lse(
+        x_stacked, epsilon, axis=-1, **kwargs
+    )
+
 def linf_lse(x, epsilon, **kwargs):
-    return epsilon * jnn.logsumexp(a=x/epsilon, **kwargs)
+    abs = abs_lse(x, epsilon, **kwargs)
+    return max_lse(abs, epsilon, **kwargs)
 
 # def l1_lse(x, epsilon):
 #     x_flat = x.flatten()
