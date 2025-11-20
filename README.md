@@ -2,6 +2,8 @@
 
 Welcome to the github page of QUADCOIL, the stellarator coil complexity proxy/global coil optimizer!
 
+Developer contact: Lanke Fu, LF2869@nyu.edu
+
 QUADCOIL is a global coil optimization code that approximates coils with a smooth sheet current. 
 In other words, it's a "winding surface" code. However, unlike other winding surface codes, QUADCOIL:
 
