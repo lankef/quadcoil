@@ -938,6 +938,9 @@ def quadcoil(
                 vihp_b,
                 solver=implicit_linear_solver
             ).value
+            # Calculating the overall error of two vihp's ans 
+            # choosing the better one. (The where statement is not point
+            # wise. It's only there because JAX can't trace through if.)
             hess_err = jnp.linalg.norm(hess_l_k @ vihp_raw - grad_x_f)
             Ohess_err = jnp.linalg.norm(hess_l_k @ vihp_precond - grad_x_f)
             vihp = jnp.where(hess_err < Ohess_err, vihp_raw, vihp_precond)

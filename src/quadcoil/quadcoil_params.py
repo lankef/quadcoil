@@ -218,6 +218,9 @@ class QuadcoilParams(_Params):
         mpol = self.mpol
         ntor = self.ntor
         stellsym = self.stellsym
+        return QuadcoilParams.make_mn_helper(mpol, ntor, stellsym)
+
+    def make_mn_helper(mpol, ntor, stellsym):
         m1d = jnp.arange(mpol + 1)
         n1d = jnp.arange(-ntor, ntor + 1)
         n2d, m2d = jnp.meshgrid(n1d, m1d)
@@ -479,3 +482,4 @@ class QuadcoilParamsFiniteElement(_Params):
             # 'n': self.n,
         }
         return children, aux_data
+
