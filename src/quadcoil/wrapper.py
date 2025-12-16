@@ -3,6 +3,7 @@ from quadcoil.quantity.quantity import _Quantity
 import jax.numpy as jnp
 from jax import jit
 from functools import partial
+from . import max_lse
 
 def get_quantity(func_name: str):
     r'''
@@ -333,10 +334,17 @@ def _parse_constraints(
                 cons_func_i_scaled=cons_func_i_scaled, 
                 cons_val_i=cons_val_i,
                 unit_callable_i=unit_callable_i,
-                sign=sign_i
+                sign=sign_i,
+                smoothing=smoothing,
             ): 
             # Scaling and centering constraints
-            return sign * (cons_func_i_scaled(qp, dofs) - cons_val_i/unit_callable_i(qp))
+            # Now all constraints are <= constraints
+            out_array = sign * (cons_func_i_scaled(qp, dofs) - cons_val_i/unit_callable_i(qp))
+            # If smoothing mode is approx, then process the resulting array with logsumexp
+            # to replace pointwise constraints with a single constraint.
+            if smoothing == 'approx' and (not jnp.isscalar(out_array)):
+                out_array = max_lse(out_array, smoothing_params['lse_epsilon'])
+            return out_array
         # Creating a list of function in h and g.
         if cons_type_i == '==':
             h_eq_list.append(cons_func_centered_i)

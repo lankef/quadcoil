@@ -72,14 +72,14 @@ Phi2 = _Quantity.generate_c2(
 
 f_max_Phi = _Quantity.generate_linf_norm(
     func=_Phi, 
-    aux_argname='scaled_max_phi', 
+    aux_argname='scaled_max_Phi', 
     desc_unit=_Phi_desc_unit,
     auto_stellsym=True,
 )
 
 f_max_Phi2 = _Quantity.generate_linf_norm(
     func=_Phi, 
-    aux_argname='scaled_max_phi_f_max_Phi2', 
+    aux_argname='scaled_max_Phi_f_max_Phi2', 
     desc_unit=_Phi2_desc_unit,
     square=True,
     auto_stellsym=True,
@@ -87,7 +87,7 @@ f_max_Phi2 = _Quantity.generate_linf_norm(
 
 f_max_Phi4 = _Quantity.generate_linf_norm_4(
     func=_Phi, 
-    aux_argname='scaled_max_phi2_f_max_Phi4', 
+    aux_argname='scaled_max_Phi2_f_max_Phi4', 
     desc_unit=_Phi4_desc_unit,
 )
 
@@ -100,7 +100,7 @@ f_max_Phi4 = _Quantity.generate_linf_norm_4(
 
 f_l1_Phi = _Quantity.generate_l1_norm(
     func=_Phi, 
-    aux_argname='scaled_abs_phi', 
+    aux_argname='scaled_abs_Phi', 
     desc_unit=_f_l1_Phi_desc_unit,
     auto_stellsym=True,
 )

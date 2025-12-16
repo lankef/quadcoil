@@ -60,44 +60,44 @@ QUADCOIL_STATIC_ARGNAMES=[
 @partial(jit, static_argnames=QUADCOIL_STATIC_ARGNAMES)
 def quadcoil(
     # Now, the regular arguments.
-    nfp:int,
-    stellsym:bool,
-    plasma_mpol:int,
-    plasma_ntor:int,
-    plasma_dofs,
-    net_poloidal_current_amperes:float,
+    nfp:int, # Documented
+    stellsym:bool, # Documented
+    plasma_mpol:int, # Documented
+    plasma_ntor:int, # Documented
+    plasma_dofs, # Documented
+    net_poloidal_current_amperes:float, # Documented
     
     # -- Defaults --
     
     # - Quadcoil parameters
-    net_toroidal_current_amperes:float=0.,
-    mpol:int=6,
-    ntor:int=4,
+    net_toroidal_current_amperes:float=0., # Documented
+    mpol:int=6, # Documented
+    ntor:int=4, # Documented
     # Quadpoints to evaluate objectives at
-    quadpoints_phi=None,
-    quadpoints_theta=None,
-    phi_init=None, 
+    quadpoints_phi=None, # Documented
+    quadpoints_theta=None, # Documented
+    phi_init=None,  # Documented
     # Current potential's normalization constant. 
     # By default will be generated from net total current.
-    phi_unit=None,
+    phi_unit=None, # Documented
     
     # - Plasma parameters
-    plasma_stellsym=True,
-    plasma_quadpoints_phi=None,
-    plasma_quadpoints_theta=None,
-    Bnormal_plasma=None,
+    plasma_stellsym=True, # Documented
+    plasma_quadpoints_phi=None, # Documented
+    plasma_quadpoints_theta=None, # Documented
+    Bnormal_plasma=None, # Documented
 
     # - Winding parameters (offset)
-    plasma_coil_distance:float=None,
-    winding_surface_generator=gen_winding_surface_arc,
+    plasma_coil_distance:float=None, # Documented
+    winding_surface_generator=gen_winding_surface_arc, # Documented
 
     # - Winding parameters (Providing surface)
-    winding_dofs=None,
-    winding_mpol:int=6,
-    winding_ntor:int=5,
-    winding_quadpoints_phi=None,
-    winding_quadpoints_theta=None,
-    winding_stellsym=True,
+    winding_dofs=None, # Documented
+    winding_mpol:int=6, # Documented
+    winding_ntor:int=5, # Documented
+    winding_quadpoints_phi=None, # Documented
+    winding_quadpoints_theta=None, # Documented
+    winding_stellsym=True, # Documented
 
     # - Problem setup
     # Quadcoil objective terms, weights, and units
@@ -106,16 +106,24 @@ def quadcoil(
     objective_name='f_B',
     objective_weight=1.,
     objective_unit=None,
+
     # - Quadcoil constraints
     constraint_name=(),
     constraint_type=(),
     constraint_unit=(),
     constraint_value=jnp.array([]),
+    
     # - Metrics to study
     metric_name=('f_B', 'f_K'),
 
     # - Solver options
+    value_only=False,
+    smoothing='slack',
+    smoothing_params={'lse_epsilon': 1e-3},
     convex=False,
+    verbose=0,
+
+    # - Auglag options
     c_init:float=1.,
     c_growth_rate:float=2.,
     xstop_outer:float=tol_default, # convergence rate tolerance
@@ -133,12 +141,10 @@ def quadcoil(
     svtol:float=tol_default,
     maxiter_tot:int=10000,
     maxiter_inner:int=1000,
+
+    # - Experimental
     gplus_mask=gplus_hard, # gplus_elu,
-    smoothing='slack',
-    smoothing_params={'lse_epsilon': 1e-3},
     implicit_linear_solver=None,
-    value_only=False,
-    verbose=0,
 ):
     r'''
     Solves a QUADCOIL problem.
@@ -148,7 +154,7 @@ def quadcoil(
     nfp : int
         (Static) The number of field periods.
     stellsym : bool
-        (Static) Stellarator symmetry.
+        (Static) Whether the coils have stellarator symmetry.
     plasma_mpol : int
         (Static) The number of poloidal Fourier harmonics in the plasma boundary.
     plasma_ntor : int
@@ -174,6 +180,8 @@ def quadcoil(
     phi_unit : float, optional, default=None
         (Traced) Current potential's normalization constant.
         By default will be generated from total net current.
+    plasma_stellsym : bool, default=True
+        (Static) Whether the plasma has stellarator symmetry.
     plasma_quadpoints_phi : ndarray, shape (nphi_plasma,), optional, default=None
         (Traced) Will be set to ``jnp.linspace(0, 1/nfp, 32, endpoint=False)`` by default.
     plasma_quadpoints_theta : ndarray, shape (ntheta_plasma,), optional, default=None
@@ -195,6 +203,8 @@ def quadcoil(
         (Traced) Will be set to ``jnp.linspace(0, 1, 32*nfp, endpoint=False)`` by default.
     winding_quadpoints_theta : ndarray, shape (ntheta_winding,), optional, default=None
         (Traced) Will be set to ``jnp.linspace(0, 1, 34, endpoint=False)`` by default.
+    winding_stellsym : bool, default=True
+        (Static) Whether the winding surface has stellarator symmetry.
     objective_name : tuple, optional, default='f_B_normalized_by_Bnormal_IG'
         (Static) The names of the objective functions. Must be a member of ``quadcoil.objective`` that outputs a scalar.
     objective_weight : ndarray, optional, default=None

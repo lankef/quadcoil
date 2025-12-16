@@ -125,6 +125,14 @@ K2 = _Quantity.generate_c2(
     desc_unit=_K2_desc_unit,
 )
 
+f_max_K2 = _Quantity.generate_linf_norm(
+    func=_K2, 
+    aux_argname='scaled_max_K2_f_max_K2', 
+    desc_unit=_K2_desc_unit,
+    square=False,
+    auto_stellsym=True,
+)
+
 # This is a linear scalar field. It's compatible with 
 # '<=', '>=', and '==' constraints. '==' seems trivial 
 # so we exclude it here to prevent user typo.
