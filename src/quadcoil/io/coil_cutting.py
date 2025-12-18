@@ -92,7 +92,7 @@ def ifft_simsopt(x, order):
     dof[1::2] = fft_sin
     dof[2::2] = fft_cos
 
-    return(dof)
+    return dof
 
 # This script assumes the contours do not zig-zag back and forth across the theta=0 line,
 # after shifting the current potential by theta_shift grid points.
@@ -172,7 +172,7 @@ def coil_xyz_from_qp(
 
         f.write('end\n')
         f.close()
-    return(
+    return (
         contour_X,
         contour_Y,
         contour_Z,
@@ -216,11 +216,12 @@ def simsopt_curves_from_xyz(
             dofs.append(dof_i)
 
         coils[ic].local_x = np.concatenate(dofs)
-    return(coils)
+    return coils
 
 def simsopt_coil_from_qp(
     qp, dofs, coils_per_half_period, theta_shift=0,
     method=coil_xyz_from_qp,
+    base_mode=False,
     order=10, ppp=40):
     try:     
         from simsopt.field import Current # , Coil
@@ -249,5 +250,7 @@ def simsopt_coil_from_qp(
     currents=[]
     for i in range(len(curves)):
         currents.append(Current(coil_currents))
+    if base_mode:
+        return curves, currents
     coils = coils_via_symmetries(curves, currents, qp.nfp, qp.stellsym)
-    return(coils)
+    return coils
