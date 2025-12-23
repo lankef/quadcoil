@@ -2,3 +2,8 @@ docs/_build/
 *.pyc
 src/quadcoil.egg-info/
 __pycache__/
+src/quadcoil/.ipynb_checkpoints/surfacerzfourier_jax-checkpoint.py
+.gitignore
+src/quadcoil/io/.ipynb_checkpoints/simsopt-checkpoint.py
+.gitignore
+src/quadcoil/io/.ipynb_checkpoints/__init__-checkpoint.py
