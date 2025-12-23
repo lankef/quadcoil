@@ -234,7 +234,7 @@ class SurfaceRZFourierJAX:
         grad1 = jnp.cross(dg2, dg1xdg2, axis=-1)/denom[:,:,None]
         # grad theta
         grad2 = jnp.cross(dg1, -dg1xdg2, axis=-1)/denom[:,:,None]
-        return(grad1, grad2)
+        return (grad1, grad2)
     
     @lru_cache()
     @jit
@@ -248,21 +248,13 @@ class SurfaceRZFourierJAX:
         normal = self.normal()
         gammadash1 = self.gammadash1()
         gammadash2 = self.gammadash2()
-        gammadash1dash1 = self.gammadash1dash1()
         gammadash1dash2 = self.gammadash1dash2()
         gammadash2dash2 = self.gammadash2dash2()
         _, inv_normN_prime_2d = norm_helper(normal)
         (
             dg1_inv_n_dash1, dg1_inv_n_dash2,
             _, _ # dg2_inv_n_dash1, dg2_inv_n_dash2
-        ) = dga_inv_n_dashb(
-            normal=normal,
-            gammadash1=gammadash1,
-            gammadash2=gammadash2,
-            gammadash1dash1=gammadash1dash1,
-            gammadash1dash2=gammadash1dash2,
-            gammadash2dash2=gammadash2dash2,
-        )
+        ) = self.dga_inv_n_dashb()
     
         dg2 = gammadash2
         dg1_inv_n = gammadash1 * inv_normN_prime_2d[:, :, None]

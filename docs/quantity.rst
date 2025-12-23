@@ -110,7 +110,11 @@ These objectives are related to the magnitude and sign of the sheet current :mat
      - :math:`(n_\phi^E, n_\theta^E)`
      - The poloidal current distribution on the winding surface.
    * - ``'f_K'``
-     - :math:`f_K\equiv\frac{n_{FP}}{2}\oint_\text{WS} da \|\mathbf{K}\|^2`
+     - :math:`\frac{n_{FP}}{2}\oint_\text{WS} da \|\mathbf{K}\|^2`
+     - Scalar
+     - The integrated magnetic field strength on the winding surface. Also the REGCOIL regularization factor.
+   * - ``'f_max_K2'``
+     - :math:`\max_\text{WS}\|K\|_2^2`
      - Scalar
      - The integrated magnetic field strength on the winding surface. Also the REGCOIL regularization factor.
 

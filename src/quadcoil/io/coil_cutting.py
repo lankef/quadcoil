@@ -254,3 +254,4 @@ def simsopt_coil_from_qp(
         return curves, currents
     coils = coils_via_symmetries(curves, currents, qp.nfp, qp.stellsym)
     return coils
+

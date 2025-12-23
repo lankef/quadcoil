@@ -84,35 +84,39 @@ We first look at parameters defining the plasma boundary. QUADCOIL currently onl
    * - ❗ ``nfp``
      - ``int``, static
      - N/A
-     - Number of field periods. Equivalent to ``SurfaceRZFourier.nfp``
+     - Number of field periods. Equivalent to ``SurfaceRZFourier.nfp``.
    * - ❗ ``stellsym``
      - ``bool``, static
      - N/A
-     - Number of field periods. Equivalent to ``SurfaceRZFourier.stellsym``
+     - Whether the coils have stellarator symmetry. Equivalent to ``SurfaceRZFourier.stellsym``.
    * - ❗ ``plasma_mpol``
      - ``int``, static
      - N/A
-     - Number of poloidal harmonics. Equivalent to ``SurfaceRZFourier.mpol``
+     - Number of poloidal harmonics. Equivalent to ``SurfaceRZFourier.mpol``.
    * - ❗ ``plasma_ntor``
      - ``int``, static
      - N/A
-     - Number of toroidal harmonics. Equivalent to ``SurfaceRZFourier.ntor``
+     - Number of toroidal harmonics. Equivalent to ``SurfaceRZFourier.ntor``.
    * - ❗ ``plasma_dofs``
      - ``ndarray``, traced
      - N/A
-     - Plasma dofs. Obtainable from ``SurfaceRZFourier.get_dofs()``
+     - Plasma dofs. Obtainable from ``SurfaceRZFourier.get_dofs()``.
    * - ``plasma_quadpoints_phi``
      - ``ndarray``, traced
      - ``jnp.linspace(0, 1/nfp, 32, endpoint=False)``
-     - Plasma toroidal quadrature points. Must be an 1D array that goes from 0 to ``1/nfp``, without the endpoint. Equivalent to ``SurfaceRZFourier.quadpoints_phi``
+     - Plasma toroidal quadrature points. Must be an 1D array that goes from 0 to ``1/nfp``, without the endpoint. Equivalent to ``SurfaceRZFourier.quadpoints_phi``.
    * - ``plasma_quadpoints_theta``
      - ``ndarray``, traced
      - ``jnp.linspace(0, 1, 34, endpoint=False)``
-     - Plasma poloidal quadrature points. Must be an 1D array that goes from 0 to 1, without the endpoint. Equivalent to ``SurfaceRZFourier.quadpoints_theta``
+     - Plasma poloidal quadrature points. Must be an 1D array that goes from 0 to 1, without the endpoint. Equivalent to ``SurfaceRZFourier.quadpoints_theta``.
    * - ⭐ ``Bnormal_plasma``
      - ``ndarray``, traced
      - ``0``
-     - Normal magnetic field on the plasma boundary, :math:`B_\text{normal}^\text{plasma}`. Zero by default. Must be ``len(plasma_quadpoints_phi)`` x ``len(plasma_quadpoints_theta)``
+     - Normal magnetic field on the plasma boundary, :math:`B_\text{normal}^\text{plasma}`. Zero by default. Must be ``len(plasma_quadpoints_phi)`` x ``len(plasma_quadpoints_theta)``.
+   * - ⭐ ``plasma_stellsym``
+     - ``bool``, static
+     - ``True``
+     - Whether the plasma have stellarator symmetry. Equivalent to ``SurfaceRZFourier.stellsym``
 
 Here, ``plasma.dofs`` can be obtained from Simsopt using ``simsopt.geo.SurfaceRZFourier.get_dofs()``.
 
@@ -152,13 +156,13 @@ These parameters defines basic properties of the sheet current solutions.
      - ``ndarray``, traced
      - The winding surface quadpoints
      - Poloidal quadrature points on the winding surface for evaluating coil quantities.
-   * - ``x_init``
+   * - ``phi_init``
      - ``ndarray``, traced
      - All zeros
      - Initial state of x. All zeros by default. 
-   * - ``cp_mn_unit``
+   * - ``phi_unit``
      - ``float``, traced
-     - :math:`\sqrt{G^2 + I^2}` if it is non-zero, :math:`\frac{d_{cs}B_\text{normal}^\text{plasma}}{\mu_0}` otherwise.
+     - :math:`\frac{d_{cs}B_\text{normal}^\text{plasma}}{\mu_0}`.
      - A normalization constant :math:`a_\Phi`, so that :math:`\Phi_{sv}`'s Fourier coefficients satisfy :math:`\Phi_{sv, M, N}/a_\Phi\approx O(1)`. Automatically calculated by default.
 
 3. Choosing the winding surface
@@ -192,8 +196,12 @@ QUADCOIL can automatically generate winding surfaces when used as an equilibrium
      - The number of toroidal harmonics in the winding surface.
    * - ``winding_surface_generator``
      - ``callable``, static. Must have the correct signatures
-     - ``gen_winding_surface_atan``
+     - ``gen_winding_surface_arc``
      - The winding surface generator.
+   * - ⭐ ``winding_stellsym``
+     - ``bool``, static
+     - ``True``
+     - Whether the winding surface have stellarator symmetry. Equivalent to ``SurfaceRZFourier.stellsym``.
 
 Known winding surface
 ~~~~~~~~~~~~~~~~~~~~~
@@ -227,6 +235,10 @@ QUADCOIL can also run on a known winding surface for tasks such as blanket optim
      - ``ndarray``, traced
      - ``jnp.linspace(0, 1, 34, endpoint=False)``
      - Poloidal quadrature points on the winding surface for evaluating integrals.
+   * - ⭐ ``winding_stellsym``
+     - ``bool``, static
+     - ``True``
+     - Whether the winding surface have stellarator symmetry. Equivalent to ``SurfaceRZFourier.stellsym``.
 
 4. Choosing the objective function(s)
 ----------------------------------------
@@ -328,7 +340,60 @@ Like in multi-objective optimization, QUADCOIL will calculate :math:`\nabla_{p_j
      - ``()``
      - An array of constraint thresholds, :math:`p_j`.
 
-6. Setting coil metrics
+6. Important numerical settings.
+--------------------------------
+
+The following are important numerical settings.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Parameter
+     - Type
+     - Default
+     - Definition
+   * - ⭐ ``smoothing``
+     - ``str``, static
+     - ``'slack'``
+     - Smoothing method for non-smooth problems.
+   * - ``smoothing_params``
+     - ``dict``, traced
+     - ``{'lse_epsilon': 1e-3}``
+     - Smoothing parameters. Only used when needed.
+   * - ⭐ ``value_only``
+     - ``bool``, static
+     - ``False``
+     - When ``True``, skips adjoint gradient calculation and greatly increases speed. 
+   * - ``convex``
+     - ``bool``, static
+     - ``False``
+     - When ``True``, adds positive-semidefinite flags to certain matrix solves to improve speed and accuracy.
+   * - ``verbose``
+     - ``int``, static
+     - ``0``
+     - Takes int from 0 to 3. 1 prints important info only. 2 prints outer Auglag loops. 3 prints inner Auglag loops.
+
+QUADCOIL performs optimization on non-smooth objectives. For the optimizer to converge well, it has to
+convert the non-smooth problem to a smooth problem. The currently supported values for ``'smoothing'`` are:
+
+.. list-table::
+   :header-rows: 1
+   * - Value for ``smoothing``
+     - Type
+     - Advantages
+     - Disadvantages
+   * - ``'slack'``
+     - Exact conversion using slasck variables.
+     - More accurate optimimum.
+     - Inaccurate adjoint differentiation. Slower, higher memory usage, and high constraint count.
+   * - ``'approx'``
+     - Approximate conversion by replacing maximum with LogSumExp functions.
+     - Accurate adjoint gradients. Faster, lower memory usage, and low constraint count.
+     - Less accurate optimum.
+
+We advise using ``'slack'`` for generating coil solutions and ``'approx'`` for quasi-single-stage optimization.
+
+7. Setting coil metrics
 ---------------------------
 
 We are almost there. After an optimum coil set :math:`\Phi^*_{sv}` is found, QUADCOIL will evaluate a list of coil quality metrics :math:`M_l(\Phi^*_{sv})`. Derivatives w.r.t. the following quantities will also be available:
@@ -354,7 +419,7 @@ We still choose these metrics by giving a ``tuple`` containing their names:
      - ``('f_B', 'f_K')``
      - A tuple of metric names.
 
-7. (Optional) Tweaking the augmented Lagrangian solver
+8. (Optional) Tweaking the augmented Lagrangian solver
 -------------------------------------------------------------------------
 
 The augmented Lagrangian solver can be fine-tuned for a specific problem if the default parameters do not yield sufficiently accurate results.
@@ -376,43 +441,35 @@ The augmented Lagrangian solver can be fine-tuned for a specific problem if the 
      - The growth rate of the *c* factor.
    * - ``fstop_outer``
      - ``float``, traced
-     - ``1e-7``
+     - ``1e-6``
      - :math:`f_{obj}(\Phi_{sv})` stopping criterion of the outer augmented Lagrangian loop. Terminates the convergence rate falls below this number.
    * - ``xstop_outer``
      - ``float``, traced
-     - ``1e-7``
+     - ``1e-6``
      - :math:`\Phi_{sv}` stopping criterion of the outer augmented Lagrangian loop. Terminates the convergence rate falls below this number.
-   * - ``gtol_outer``
-     - ``float``, traced
-     - ``1e-7``
-     - Gradient tolerance of the outer augmented Lagrangian loop. Terminates when both tolerances are satisfied.
    * - ``ctol_outer``
      - ``float``, traced
-     - ``1e-7``
+     - ``1e-6``
      - Constraint tolerance of the outer augmented Lagrangian loop. Terminates when both tolerances are satisfied.
-   * - ``fstop_inner``
+   * - ``fstop_inner, fstop_inner_last``
      - ``float``, traced
-     - ``1e-7``
+     - ``1e-6, 0``
      - :math:`f_{obj}(\Phi_{sv})` stopping criterion of the inner LBFGS iteration. Terminates the convergence rate falls below this number.
-   * - ``xstop_inner``
+   * - ``xstop_inner, xstop_inner_last``
      - ``float``, traced
-     - ``0.``
+     - ``1e-6, 1e-10``
      - :math:`\Phi_{sv}` stopping criterion of the inner LBFGS iteration. Terminates the convergence rate falls below this number.
-   * - ``gtol_inner``
+   * - ``gtol_inner, gtol_inner_last``
      - ``float``, traced
-     - ``1e-7``
+     - ``1e-6, 1e-10``
      - Gradient tolerance of the inner LBFGS iteration.
-   * - ``maxiter_total``
+   * - ``maxiter_tot``
      - ``int``, static
-     - ``50``
+     - ``10000``
      - The maximum number of total LBFGS iterations permitted, summed across all outer iterations.
    * - ``maxiter_inner``
      - ``int``, static
-     - ``500``
+     - ``1000``
      - The maximum number of inner iterations permitted.
-   * - ⭐ ``value_only``
-     - ``bool``, static
-     - ``False``
-     - When ``True``, skip gradient calculations.
 
 Thus far, we have successfully run an instance of QUADCOIL. The next section will explain how to interpret the outputs.

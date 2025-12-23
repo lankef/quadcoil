@@ -1,7 +1,7 @@
 from quadcoil import norm_helper, project_arr_cylindrical
 from jax import jit
 # For calculating normalization constant
-from .current import _K, _K_desc_unit
+from .current import _K_desc_unit
 from .quantity import _Quantity
 
 # ----- Implementations -----

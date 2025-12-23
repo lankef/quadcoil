@@ -236,8 +236,10 @@ class QuadcoilParams(_Params):
         return m, n
     
     @lru_cache()
-    @jit
-    def Kdash_helper(self):
+    @partial(jit, static_argnames=[
+        'winding_surface_mode',
+    ])
+    def Kdash_helper(self, winding_surface_mode=False):
         r'''
         Calculates the following quantities. Caches.
 
@@ -252,9 +254,13 @@ class QuadcoilParams(_Params):
             Partial derivatives of the part of K due produced by the 
             uniform current from the net poloidal/toroidal currents. 
         '''
-        normal = self.eval_surface.normal()
-        gammadash1 = self.eval_surface.gammadash1()
-        gammadash2 = self.eval_surface.gammadash2()
+        if winding_surface_mode:
+            surface = self.winding_surface
+        else:
+            surface = self.eval_surface
+        normal = surface.normal()
+        gammadash1 = surface.gammadash1()
+        gammadash2 = surface.gammadash2()
         net_poloidal_current_amperes = self.net_poloidal_current_amperes
         net_toroidal_current_amperes = self.net_toroidal_current_amperes
         normN_prime_2d, _ = norm_helper(normal)
@@ -266,14 +272,14 @@ class QuadcoilParams(_Params):
             partial_phi_phi,
             partial_phi_theta,
             partial_theta_theta,
-        ) = self.diff_helper()
+        ) = self.diff_helper(winding_surface_mode=winding_surface_mode)
         # Some quantities
         (
             dg1_inv_n_dash1,
             dg1_inv_n_dash2,
             dg2_inv_n_dash1,
             dg2_inv_n_dash2 
-        ) = self.eval_surface.dga_inv_n_dashb()
+        ) = surface.dga_inv_n_dashb()
         # Operators that generates the derivative of K
         # Note the use of trig_diff_m_i_n_i for inverse
         # FT following odd-order derivatives.
