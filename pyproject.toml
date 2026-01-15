@@ -11,7 +11,7 @@ authors = [
 description = "QUADCOIL, a global stellarator coil optimizer and coil complexity proxy"
 readme = "README.md"
 requires-python = ">=3.8"
-dependencies = ["numpy", "jax >= 0.6.2", "optax", "lineax", "scipy", "matplotlib"]
+dependencies = ["numpy", "jax >= 0.6.2", "optax >= 0.2.5", "lineax", "scipy", "matplotlib"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
