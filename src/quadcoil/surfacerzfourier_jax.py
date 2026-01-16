@@ -161,7 +161,7 @@ class SurfaceRZFourierJAX:
     # similar to simsopt. The caching occurs in 
     # QuadcoilState.
     # Note: LRU cache must be applied outside of jit.
-    @lru_cache()
+    # @lru_cache()
     @partial(jit, static_argnames=['a', 'b'])
     def gammadash(self, a:int, b:int):
         return dof_to_gamma(
@@ -183,19 +183,19 @@ class SurfaceRZFourierJAX:
     gammadash1dash2 = lambda self: self.gammadash(1, 1)
     gammadash2dash2 = lambda self: self.gammadash(0, 2)
 
-    @lru_cache()
+    # @lru_cache()
     @jit
     def normal(self):
         return jnp.cross(self.gammadash1(), self.gammadash2(), axis=-1)
 
-    @lru_cache()
+    # @lru_cache()
     @jit
     def unitnormal(self):
         normal = self.normal()
         return normal/jnp.linalg.norm(normal, axis=-1)[:, :, None]
 
     # ''' Other cached quantities '''
-    @lru_cache()
+    # @lru_cache()
     @jit
     def da(self):
         # For surface integrating a quantity sampled over this surface.
@@ -209,13 +209,13 @@ class SurfaceRZFourierJAX:
         # For integrating a scalar field over this surface.
         return jnp.sum(scalar_field * self.da())
     
-    @lru_cache()
+    # @lru_cache()
     @jit
     def area(self):
         # For integrating a scalar field over this surface.
         return jnp.sum(self.da())
     
-    @lru_cache()
+    # @lru_cache()
     @jit
     def grad_helper(self):
         # '''
@@ -236,7 +236,7 @@ class SurfaceRZFourierJAX:
         grad2 = jnp.cross(dg1, -dg1xdg2, axis=-1)/denom[:,:,None]
         return (grad1, grad2)
     
-    @lru_cache()
+    # @lru_cache()
     @jit
     def unitnormaldash(self):
         # ''' 
@@ -270,7 +270,7 @@ class SurfaceRZFourierJAX:
         )
         return(unitnormaldash1, unitnormaldash2)
 
-    @lru_cache()
+    # @lru_cache()
     @jit
     def dga_inv_n_dashb(self):
         # ''' 

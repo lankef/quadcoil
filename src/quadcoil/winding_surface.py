@@ -47,10 +47,12 @@ def fit_surfacerzfourier(
     # The lineax call fulfills the same purpose as the following:
     # dofs_expand, resid, rank, s = jnp.linalg.lstsq(A_lstsq.T.dot(A_lstsq) + lam, A_lstsq.T.dot(b_lstsq))
     # but is faster and more robust to gradients.
-    operator = lx.MatrixLinearOperator(A_lstsq.T.dot(A_lstsq) + lam)
+    A_reg =  jnp.nan_to_num(A_lstsq.T.dot(A_lstsq) + lam, nan=0.0, posinf=0.0, neginf=0.0)
+    b_reg =  jnp.nan_to_num(A_lstsq.T.dot(b_lstsq), nan=0.0, posinf=0.0, neginf=0.0)
+    operator = lx.MatrixLinearOperator(A_reg)
     # solver = lx.QR()  # or lx.AutoLinearSolver(well_posed=None)
     solver = lx.AutoLinearSolver(well_posed=False)
-    solution = lx.linear_solve(operator, A_lstsq.T.dot(b_lstsq), solver)
+    solution = lx.linear_solve(operator, b_reg, solver)
     return solution.value
 
 # An approximation for unit normal.

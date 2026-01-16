@@ -13,7 +13,12 @@ def _K(qp, dofs, winding_surface_mode=False):
     # When winding_surface_mode is set to true, 
     # The evaluation will be done over the full winding surface 
     # instead. This is used when calculating B.
-    if winding_surface_mode:
+    if winding_surface_mode=='divide':
+        n_phi_1fp = len(qp.winding_surface.quadpoints_phi)//qp.winding_surface.nfp
+        normal = qp.winding_surface.normal()[:n_phi_1fp, :, :]
+        dg1 = qp.winding_surface.gammadash1()[:n_phi_1fp, :, :]
+        dg2 = qp.winding_surface.gammadash2()[:n_phi_1fp, :, :]
+    elif winding_surface_mode:
         normal = qp.winding_surface.normal()
         dg1 = qp.winding_surface.gammadash1()
         dg2 = qp.winding_surface.gammadash2()

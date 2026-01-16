@@ -1,5 +1,7 @@
 import jax.numpy as jnp
+from jax.lax import scan, dynamic_slice
 from .current import _K, _K_desc_unit
+from .quantity import _Quantity
 from quadcoil import project_arr_cylindrical
 
 # Calculates the integrands in Robin, Volpe from a number of arrays.
@@ -23,7 +25,13 @@ def _self_force_integrands_xyz(qp, dofs, winding_surface_mode=False):
     has only one period, however many field periods that vector field has.
     ''' 
     ''' Surface properties '''
-    if winding_surface_mode:
+    if winding_surface_mode=='divide':
+        n_phi_1fp = len(qp.winding_surface.quadpoints_phi)//qp.winding_surface.nfp
+        surface = qp.winding_surface.copy_and_set_quadpoints(
+            quadpoints_phi=qp.winding_surface.quadpoints_phi[:n_phi_1fp], 
+            quadpoints_theta=qp.winding_surface.quadpoints_theta, 
+        )
+    elif winding_surface_mode:
         surface = qp.winding_surface
     else:
         surface = qp.eval_surface
@@ -101,4 +109,182 @@ def _self_force_integrands_xyz(qp, dofs, winding_surface_mode=False):
         - (K_x[:, :, :, None] * unitnormal_x[:, :, None, :])
     )
 
-    return (integrand_single, integrand_double)
+    # return (K_x, integrand_single, integrand_double)
+    return integrand_single, integrand_double
+
+def _self_force_cyl(qp, dofs):
+    '''
+    Calculates the self-force's R, Phi, Z components.
+
+    This version uses too much memory and is depreciate, but it's more readable.
+    '''
+    n_phi_1fp = len(qp.winding_surface.quadpoints_phi)//qp.winding_surface.nfp
+    (
+        single_integrand_xyz,
+        double_integrand_xyz
+    ) = _self_force_integrands_xyz(qp, dofs, winding_surface_mode='divide')
+    gamma_1fp = qp.winding_surface.gamma()[:n_phi_1fp, :, :]
+    da_1fp = qp.winding_surface.da()[:n_phi_1fp, :]
+    K_y = _K(qp, dofs, winding_surface_mode='divide')
+    K_cylindrical = project_arr_cylindrical(
+        gamma_1fp, 
+        K_y
+    )
+    # Integrand over a single FP
+    single_integrand_cylindrical = project_arr_cylindrical(
+        gamma_1fp, 
+        single_integrand_xyz
+    )
+    double_integrand_cylindrical = project_arr_cylindrical(
+        gamma_1fp, 
+        double_integrand_xyz
+    )
+    # The projection function assumes that the first 3 components of the array represents the 
+    # phi, theta grid and resulting components of the array. Hence the swapaxes.
+    # Shape: n_phix, n_thetax, 3(xyz), 3(xyz)
+    single_integrand_cylindrical = project_arr_cylindrical(
+        gamma_1fp, 
+        single_integrand_cylindrical.swapaxes(2, 3) 
+    ).swapaxes(2,3)
+    double_integrand_cylindrical = project_arr_cylindrical(
+        gamma_1fp, 
+        double_integrand_cylindrical.swapaxes(2, 3) 
+    ).swapaxes(2,3)
+    gamma_y = gamma_1fp # qp.eval_surface.gamma()
+    gamma_x = qp.winding_surface.gamma()
+    unitnormal_x = qp.winding_surface.unitnormal()
+    single_results, double_results = _integrate_force(
+        gamma_y,          # (n_phiy, n_thetay, 3)
+        gamma_x,          # (n_phix*nfp, n_thetax, 3)
+        unitnormal_x,     # (n_phix*nfp, n_thetax, 3)
+        K_cylindrical,    # (n_phiy, n_thetay, 3)
+        da_1fp,           # (n_phix, n_thetax)
+        single_integrand_cylindrical,  # (n_phix, n_thetax, 3, 3)
+        double_integrand_cylindrical,  # (n_phix, n_thetax, 3, 3)
+        qp.nfp,
+    )
+    out = (single_results + double_results) # * 4 * jnp.pi 
+    return out
+
+def _integrate_force_legacy(
+    gamma_y,          # (n_phiy, n_thetay, 3)
+    gamma_x,          # (n_phix*nfp, n_thetax, 3)
+    unitnormal_x,     # (n_phix*nfp, n_thetax, 3)
+    K_cylindrical,    # (n_phiy, n_thetay, 3)
+    da_1fp,           # (n_phix, n_thetax)
+    single_integrand_cylindrical,  # (n_phix, n_thetax, 3, 3)
+    double_integrand_cylindrical,  # (n_phix, n_thetax, 3, 3)
+    nfp,
+):
+    '''
+    Performs the singular integration. Readable but uses too much memory.
+    '''
+    # Shape: n_phiy, n_thetay, n_phix*nfp, n_thetax, 3(xyz)
+    diff = gamma_y[:, :, None, None, :] - gamma_x[None, None, :, :, :] 
+    dist = jnp.linalg.norm(diff, axis=-1)
+    # Shape: n_phiy, n_thetay, n_phix*nfp, n_thetax
+    double_layer_denom = jnp.sum(diff * unitnormal_x[None, None, :, :, :], axis=-1)
+    # Shape: n_phiy, n_thetay, n_phix*nfp, n_thetax
+    single_layer_kernel = jnp.where(dist!=0, 1/dist, 0)
+    double_layer_kernel = jnp.where(dist!=0, double_layer_denom/(dist**3), 0)
+    # Calculating useful shapes
+    shapey = list(single_layer_kernel.shape[:2])
+    shapex_1fp = list(single_integrand_cylindrical.shape[:2])
+    shape_integral = shapey + [nfp] + shapex_1fp
+    # Shape: n_phiy, n_thetay, nfp, n_phix, n_thetax
+    single_layer_kernel_reshaped = single_layer_kernel.reshape(shape_integral)
+    double_layer_kernel_reshaped = double_layer_kernel.reshape(shape_integral)
+    # Shape: n_phiy, n_thetay, 3(xyz)
+    single_results = jnp.sum(
+        # Argument of the sum is:
+        K_cylindrical[:, :, None, None, None, :, None]
+        # Shape: n_phiy, n_thetay, nfp, n_phix, n_thetax, 3(xyz, operates on K_y), 3(xyz)
+        * single_layer_kernel_reshaped[:, :, :, :, :, None, None]
+        * da_1fp[None, None, None, :, :, None, None]
+        # Shape: n_phix, n_thetax, 3(xyz), 3(xyz)
+        * single_integrand_cylindrical[None, None, None, :, :, :, :],
+        axis=(2, 3, 4, 5)
+    )
+    # Shape: n_phiy, n_thetay, 3(xyz)
+    double_results = jnp.sum(
+        # Argument of the sum is:
+        K_cylindrical[:, :, None, None, None, :, None]
+        # Shape: n_phiy, n_thetay, nfp, n_phix, n_thetax, 3(xyz), 3(xyz)
+        * double_layer_kernel_reshaped[:, :, :, :, :, None, None]
+        * da_1fp[None, None, None, :, :, None, None]
+        # Shape: n_phix, n_thetax, 3(xyz), 3(xyz)
+        * double_integrand_cylindrical[None, None, None, :, :, :, :],
+        axis=(2, 3, 4, 5)
+    )
+    return single_results, double_results
+
+def _integrate_force(
+    gamma_y,          # (n_phiy, n_thetay, 3)
+    gamma_x,          # (n_phix*nfp, n_thetax, 3)
+    unitnormal_x,     # (n_phix*nfp, n_thetax, 3)
+    K_cylindrical,    # (n_phiy, n_thetay, 3)
+    da_1fp,           # (n_phix, n_thetax)
+    single_integrand_cylindrical,  # (n_phix, n_thetax, 3, 3)
+    double_integrand_cylindrical,  # (n_phix, n_thetax, 3, 3)
+    nfp,
+):
+    '''
+    Performs the singular integration with reduced memory usage.
+    '''
+    # Shape: n_phiy, n_thetay, n_phix*nfp, n_thetax, 3(xyz)
+    diff = gamma_y[:, :, None, None, :] - gamma_x[None, None, :, :, :] 
+    dist = jnp.linalg.norm(diff, axis=-1)
+    
+    # Shape: n_phiy, n_thetay, n_phix*nfp, n_thetax
+    double_layer_denom = jnp.sum(diff * unitnormal_x[None, None, :, :, :], axis=-1)
+
+    # Reshape kernels: n_phiy, n_thetay, nfp, n_phix, n_thetax
+    shapey = list(dist.shape[:2])
+    shapex_1fp = list(single_integrand_cylindrical.shape[:2])
+    shape_integral = shapey + [nfp] + shapex_1fp
+    dist_reshaped = dist.reshape(shape_integral)
+    
+    # Pre-multiply kernel with da: n_phiy, n_thetay, nfp, n_phix, n_thetax
+    # Make denominators safe before dividing
+    # This is not strictly necessary to produce non-nan outputs 
+    # but helps track down other nans that can cause lineax issues. 
+    dist_safe = jnp.where(dist_reshaped == 0, 1.0, dist_reshaped)
+    dist_cubed_safe = jnp.where(dist_reshaped**3 == 0, 1.0, dist_reshaped**3)
+    single_kernel_da = jnp.where(
+        dist_reshaped != 0,
+        da_1fp[None, None, None, :, :] / dist_safe,
+        0
+    )
+    double_kernel_da = jnp.where(
+        dist_reshaped**3 != 0,
+        da_1fp[None, None, None, :, :] * double_layer_denom.reshape(shape_integral) / dist_cubed_safe,
+        0
+    )
+    
+    # Contract integrand with kernel*da first to get: n_phiy, n_thetay, nfp, 3, 3
+    # einsum: (y1,y2,nfp,x1,x2) * (x1,x2,3,3) -> (y1,y2,nfp,3,3)
+    single_contracted = jnp.einsum('ijklm,lmno->ijkno', 
+                                     single_kernel_da, 
+                                     single_integrand_cylindrical)
+    double_contracted = jnp.einsum('ijklm,lmno->ijkno', 
+                                     double_kernel_da, 
+                                     double_integrand_cylindrical)
+    
+    # Now contract with K_cylindrical: (y1,y2,3) * (y1,y2,nfp,3,3) -> (y1,y2,3)
+    # einsum: (y1,y2,3_k) * (y1,y2,nfp,3_k,3_out) -> (y1,y2,3_out)
+    single_results = jnp.einsum('ijk,ijlkm->ijm', K_cylindrical, single_contracted)
+    double_results = jnp.einsum('ijk,ijlkm->ijm', K_cylindrical, double_contracted)
+    
+    return single_results, double_results
+
+# N = T * A * m = T * A/m * m^2
+_force_desc_unit = lambda scales: scales["B"] * _K_desc_unit(scales) * scales["a"]**2
+
+# This is an l-inf norm. We have implemented a template
+# in _Quantity. It's non-convex but Shor-relaxable into SDP.
+f_max_force_cyl = _Quantity.generate_linf_norm(
+    func=_self_force_cyl, 
+    aux_argname='max_force_cyl', 
+    desc_unit=_force_desc_unit,
+    auto_stellsym=True,
+)

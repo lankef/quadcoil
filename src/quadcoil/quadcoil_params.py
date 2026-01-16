@@ -33,10 +33,10 @@ class _Params:
         # Writing peroperties 
         self.plasma_surface = plasma_surface
         self.winding_surface = winding_surface
+        assert len(winding_surface.quadpoints_phi)%winding_surface.nfp==0
         self.net_poloidal_current_amperes = net_poloidal_current_amperes
         self.net_toroidal_current_amperes = net_toroidal_current_amperes
         self.Bnormal_plasma = Bnormal_plasma
-        self.nfp = winding_surface.nfp
         if stellsym is None:
             stellsym = winding_surface.stellsym and plasma_surface.stellsym
         self.stellsym = stellsym
@@ -59,6 +59,10 @@ class _Params:
             quadpoints_phi=self.quadpoints_phi, 
             quadpoints_theta=self.quadpoints_theta, 
         )
+    
+    @property
+    def nfp(self):
+        return self.winding_surface.nfp
 
 @tree_util.register_pytree_node_class
 class QuadcoilParams(_Params):
@@ -187,7 +191,7 @@ class QuadcoilParams(_Params):
             self.quadpoints_theta,
         )
         aux_data = {
-            'nfp': self.nfp,
+            # 'nfp': self.nfp,
             'stellsym': self.stellsym,
             'mpol': self.mpol,
             'ntor': self.ntor,
@@ -200,7 +204,7 @@ class QuadcoilParams(_Params):
     
     # -- Cached quantites -- 
     # == Helpers == 
-    @lru_cache()
+    # @lru_cache()
     @jit
     def make_mn(self):
         r'''
@@ -235,7 +239,7 @@ class QuadcoilParams(_Params):
             n = jnp.append(n_first, n)
         return m, n
     
-    @lru_cache()
+    # @lru_cache()
     @partial(jit, static_argnames=[
         'winding_surface_mode',
     ])
@@ -254,7 +258,14 @@ class QuadcoilParams(_Params):
             Partial derivatives of the part of K due produced by the 
             uniform current from the net poloidal/toroidal currents. 
         '''
-        if winding_surface_mode:
+        
+        if winding_surface_mode=='divide':
+            n_phi_1fp = len(self.winding_surface.quadpoints_phi)//self.winding_surface.nfp
+            surface = self.winding_surface.copy_and_set_quadpoints(
+                quadpoints_phi=self.winding_surface.quadpoints_phi[:n_phi_1fp], 
+                quadpoints_theta=self.winding_surface.quadpoints_theta, 
+            )
+        elif winding_surface_mode:
             surface = self.winding_surface
         else:
             surface = self.eval_surface
@@ -333,7 +344,7 @@ class QuadcoilParams(_Params):
             Kdash2_const
         )
     
-    @lru_cache()
+    # @lru_cache()
     @partial(jit, static_argnames=[
         'winding_surface_mode',
     ])
@@ -360,7 +371,11 @@ class QuadcoilParams(_Params):
         '''
         nfp = self.nfp
         cp_m, cp_n = self.make_mn()
-        if winding_surface_mode:
+        if winding_surface_mode=='divide':
+            n_phi_1fp = len(self.winding_surface.quadpoints_phi)//self.winding_surface.nfp
+            quadpoints_phi = self.winding_surface.quadpoints_phi[:n_phi_1fp]
+            quadpoints_theta = self.winding_surface.quadpoints_theta
+        elif winding_surface_mode:
             quadpoints_phi = self.winding_surface.quadpoints_phi
             quadpoints_theta = self.winding_surface.quadpoints_theta
         else:    
@@ -480,7 +495,7 @@ class QuadcoilParamsFiniteElement(_Params):
             self.quadpoints_theta,
         )
         aux_data = {
-            'nfp': self.nfp,
+            # 'nfp': self.nfp,
             'stellsym': self.stellsym,
             'ndofs': self.ndofs,
             'ndofs_half': self.ndofs_half,

@@ -286,7 +286,7 @@ def quadcoil(
         # The bool conversion here is to make sure that stellsym is bool instead 
         # of numpy bools. This is because desc.Equilibrium.sym is a numpy.bool
         # and can cause issues with lineax.
-        implicit_linear_solver = lx.AutoLinearSolver(well_posed=False)# bool(stellsym))
+        implicit_linear_solver = lx.AutoLinearSolver(well_posed=False) # bool(stellsym))
     # Type checking and error throwing
     _input_checking(
         objective_name=objective_name,
@@ -744,13 +744,13 @@ def quadcoil(
         # When the problem is unconstrained, 
         # we can avoid materializing the full Hessian.
         if convex:
-            vihp_A_precond = lx.JacobianLinearOperator(
+            vihp_hess = lx.JacobianLinearOperator(
                 grad_x_l_k, 
                 x_flat_opt, args=y_flat, 
                 tags=(lx.symmetric_tag, lx.positive_semidefinite_tag)
             )
         else:
-            vihp_A_precond = lx.JacobianLinearOperator(
+            vihp_hess = lx.JacobianLinearOperator(
                 grad_x_l_k, 
                 x_flat_opt, args=y_flat,
                 tags=(lx.symmetric_tag)
@@ -822,6 +822,7 @@ def quadcoil(
         # Because these are symmetric matrices, 
         hess_l_k_terms_val = hessian(l_k_terms)(x_flat_precond)
         hess_l_k = jnp.sum(hess_l_k_terms_val, axis=0)
+        hess_l_k = jnp.nan_to_num(hess_l_k, nan=0.0, posinf=0.0, neginf=0.0)
         # Symmetrizing
         hess_l_k_terms_val = 0.5 * (
             hess_l_k_terms_val
@@ -876,7 +877,7 @@ def quadcoil(
             + proj_C @ A
         )
         Ohess = OA + OB + OC
-        
+        Ohess = jnp.nan_to_num(Ohess, nan=0.0, posinf=0.0, neginf=0.0)
         vihp_A_raw = lx.MatrixLinearOperator(hess_l_k)
         vihp_A_precond = lx.MatrixLinearOperator(Ohess)
         if verbose>0:
@@ -921,9 +922,11 @@ def quadcoil(
         )
         grad_x_f = jacrev(f_metric, argnums=0)(x_flat_precond, y_flat)
         grad_y_f = jacrev(f_metric, argnums=1)(x_flat_precond, y_flat)
+        debug.print('DEBUG grad_x_f, {x}', x=jnp.linalg.norm(grad_x_f))
+        debug.print('DEBUG grad_y_f, {x}', x=jnp.linalg.norm(grad_y_f))
         if unconstrained:
             vihp = lx.linear_solve(
-                vihp_A_precond, # should be .T but hessian is symmetric 
+                vihp_hess, # should be .T but hessian is symmetric 
                 grad_x_f,
             ).value
         else:
@@ -932,20 +935,23 @@ def quadcoil(
                 + scale_BC * proj_BC @ annil_C @ grad_x_f
                 + proj_C @ grad_x_f
             )
-            # TODO
+            grad_x_f = jnp.nan_to_num(grad_x_f, nan=0.0, posinf=0.0, neginf=0.0)
+            vihp_b = jnp.nan_to_num(vihp_b, nan=0.0, posinf=0.0, neginf=0.0)
+            debug.print('DEBUG hess_l_k, {x}', x=jnp.linalg.norm(hess_l_k))
+            debug.print('DEBUG Ohess, {x}', x=jnp.linalg.norm(Ohess))
             # It is somewhat hard to tell whether pre-conditioning 
             # improves accuracy or introduces additional error 
             # just from A and b. Therefore, we compute both with
             # and without pre-conditioning, and pick the option with 
             # the less error. Is there a way to improve this?
-            vihp_raw = lx.linear_solve(
-                vihp_A_raw, # should be .T but hessian is symmetric 
-                grad_x_f,
-                solver=implicit_linear_solver
-            ).value
             vihp_precond = lx.linear_solve(
                 vihp_A_precond, # should be .T but hessian is symmetric 
                 vihp_b,
+                solver=implicit_linear_solver
+            ).value
+            vihp_raw = lx.linear_solve(
+                vihp_A_raw, # should be .T but hessian is symmetric 
+                grad_x_f,
                 solver=implicit_linear_solver
             ).value
             # Calculating the overall error of two vihp's ans 
@@ -953,15 +959,20 @@ def quadcoil(
             # wise. It's only there because JAX can't trace through if.)
             hess_err = jnp.linalg.norm(hess_l_k @ vihp_raw - grad_x_f)
             Ohess_err = jnp.linalg.norm(hess_l_k @ vihp_precond - grad_x_f)
+            if verbose>0:
+                debug.print('Solve error (raw vs precond): {x}, {y}', x=hess_err, y=Ohess_err)
             vihp = jnp.where(hess_err < Ohess_err, vihp_raw, vihp_precond)
             
         # Now we calculate df/dy using vjp
         # \grad_{x_k} f [-H(l_k, x_k)^-1 \grad_{x_k}\grad_{y} l_k]
         # Primal and tangent must be the same shape
         _, dfdy1 = jvp(grad_y_l_k_for_hess, primals=[x_flat_precond], tangents=[vihp])
+        debug.print('dfdy1 {x}', x=dfdy1)
         # \grad_{y} f
         dfdy2 = grad_y_f
+        debug.print('dfdy2 {x}', x=dfdy2)
         dfdy_arr = -dfdy1 + dfdy2
+        debug.print('dfdy_arr {x}', x=dfdy_arr)
         dfdy_dict = {f"df_d{key}": value for key, value in unravel_y(dfdy_arr).items()}
         metric_result_i = f_metric(x_flat_precond, y_flat)
         if verbose>0:

@@ -123,7 +123,7 @@ def _add_quantity(name, unit, use_case, smoothing, smoothing_params):
         c0_impl = quantity.__call__
         unit_callable = lambda qp: c0_impl(qp, {'phi': jnp.zeros(qp.ndofs)})
     elif jnp.isscalar(unit):
-        unit_callable = lambda qp: unit
+        unit_callable = lambda qp: jnp.abs(unit)
     else:
         raise TypeError(
             f'Unit for {name} has incorrect type. The supported '\
@@ -162,7 +162,6 @@ def _add_quantity(name, unit, use_case, smoothing, smoothing_params):
         unit_callable,
         scaled_slack_dofs_out
     )
-
 
 def _parse_objectives(
         objective_name, 
