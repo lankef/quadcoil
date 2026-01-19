@@ -423,8 +423,7 @@ def solve_constrained(
                         (jnp.any(g_k >= ctol_outer) | jnp.any(jnp.abs(h_k) >= ctol_outer)) 
                         & (c_k <= c_k_safe)
                     )
-                )
-                
+                ) 
             )
         )
 
@@ -444,6 +443,10 @@ def solve_constrained(
         g_km1 = dict_in['inner_fin_g']
         h_km1 = dict_in['inner_fin_h']
         x_unit = dict_in['x_unit']
+        # normalizing x with the sln from the previous step is not great either
+        # abs_x_km1 = jnp.abs(x_km1)
+        # mode_scaling = jnp.where(abs_x_km1>1e-5, abs_x_km1, 1e-5)
+        # x_unit = x_unit_in * mode_scaling
         # grad_l_val_km1 = dict_in['outer_grad_l']
         # Eq (10) on p160 of Constrained Optimization and Multiplier Method
         l_k = lambda x, x_unit=x_unit, mu_k=mu_k, c_k=c_k: (
@@ -493,19 +496,19 @@ def solve_constrained(
             jax.debug.print(
                 'OUTER: \n'\
                 '    Iteration: {tot_niter}/{maxiter_tot}\n'\
-                '        f  : {f}\n'\
-                '        g  : {gmin}, {gmax}\n'\
-                '        g+ : {gpmin}, {gpmax}\n'\
-                '        h  : {hmin}, {hmax}\n'\
-                '   |grad f|: {xx}\n'\
-                '   |grad g|: {xg}\n'\
-                '   |grad h|: {xh}\n'\
-                '        mu : {mu1}, {mu2}\n'\
-                '        dmu : {dmu1}, {dmu2}\n'\
-                '        lam: {lam1}, {lam2}\n'\
-                '        dlam: {dlam1}, {dlam2}\n'\
-                '    Stopping criteria (False = satisfied)\n'\
-                '    Stopping criterion 2: {b}\n'\
+                '        f       : {f}\n'\
+                '        g       : {gmin}, {gmax}\n'\
+                '        g+      : {gpmin}, {gpmax}\n'\
+                '        h       : {hmin}, {hmax}\n'\
+                '        |grad f|: {xx}\n'\
+                '        |grad g|: {xg}\n'\
+                '        |grad h|: {xh}\n'\
+                '        mu      : {mu1}, {mu2}\n'\
+                '        dmu     : {dmu1}, {dmu2}\n'\
+                '        lam     : {lam1}, {lam2}\n'\
+                '        dlam    : {dlam1}, {dlam2}\n'\
+                '    Outer stopping criteria (False = satisfied)\n'\
+                '        |x_k - x_km1| >= xstop_outer: {b}\n'\
                 '        outer_dx    = {outer_dx}\n'\
                 '        outer_df    = {outer_df}\n'\
                 '        outer_dg    = {outer_dg}\n'\

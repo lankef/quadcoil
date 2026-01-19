@@ -52,7 +52,7 @@ class SurfaceRZFourierJAX:
         try:
             from simsopt.geo import SurfaceRZFourier
         except:
-            raise ModuleNotFoundError('Simsopt must be installed to export surface to simsopt.')
+            raise ModuleNotFoundError('Simsopt must be installed to export surface to simsopt with to_simsopt().')
         surf = SurfaceRZFourier(
             nfp=self.nfp,
             stellsym=self.stellsym,
@@ -63,6 +63,12 @@ class SurfaceRZFourierJAX:
         )
         surf.set_dofs(self.dofs)
         return surf
+    
+    def plot(self, **kwargs):
+        try:
+            self.to_simsopt().plot(**kwargs)
+        except ModuleNotFoundError:
+            raise ModuleNotFoundError('Simsopt must be installed to use plot().')
 
     # May not be jittable
     def from_desc(desc_surf, quadpoints_phi, quadpoints_theta):

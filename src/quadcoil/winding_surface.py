@@ -5,7 +5,8 @@ from jax import jit, lax, vmap
 from jax.lax import scan
 from functools import partial
 from .surfacerzfourier_jax import dof_to_rz_op, SurfaceRZFourierJAX
-import lineax as lx
+from .math_utils import safe_linear_solve
+
 
 @partial(jit, static_argnames=['nfp', 'stellsym', 'mpol', 'ntor', 'lam_tikhonov',])
 def fit_surfacerzfourier(
@@ -44,16 +45,20 @@ def fit_surfacerzfourier(
     b_lstsq = b_lstsq.flatten()
     # tikhonov regularization for higher harmonics
     lam = lam_tikhonov * jnp.diag(m_2_n_2)
-    # The lineax call fulfills the same purpose as the following:
-    # dofs_expand, resid, rank, s = jnp.linalg.lstsq(A_lstsq.T.dot(A_lstsq) + lam, A_lstsq.T.dot(b_lstsq))
-    # but is faster and more robust to gradients.
-    A_reg =  jnp.nan_to_num(A_lstsq.T.dot(A_lstsq) + lam, nan=0.0, posinf=0.0, neginf=0.0)
-    b_reg =  jnp.nan_to_num(A_lstsq.T.dot(b_lstsq), nan=0.0, posinf=0.0, neginf=0.0)
-    operator = lx.MatrixLinearOperator(A_reg)
-    # solver = lx.QR()  # or lx.AutoLinearSolver(well_posed=None)
-    solver = lx.AutoLinearSolver(well_posed=False)
-    solution = lx.linear_solve(operator, b_reg, solver)
-    return solution.value
+    # # The lineax call fulfills the same purpose as the following:
+    # # dofs_expand, resid, rank, s = jnp.linalg.lstsq(A_lstsq.T.dot(A_lstsq) + lam, A_lstsq.T.dot(b_lstsq))
+    # # but is faster and more robust to gradients.
+    # A_reg =  jnp.nan_to_num(A_lstsq.T.dot(A_lstsq) + lam, nan=0.0, posinf=0.0, neginf=0.0)
+    # b_reg =  jnp.nan_to_num(A_lstsq.T.dot(b_lstsq), nan=0.0, posinf=0.0, neginf=0.0)
+    # operator = lx.MatrixLinearOperator(A_reg)
+    # # solver = lx.QR()  # or lx.AutoLinearSolver(well_posed=None)
+    # solver = lx.AutoLinearSolver(well_posed=False)
+    # solution = lx.linear_solve(operator, b_reg, solver).value
+    solution = safe_linear_solve(
+        A=A_lstsq.T.dot(A_lstsq) + lam,
+        b=A_lstsq.T.dot(b_lstsq),
+    )
+    return solution
 
 # An approximation for unit normal.
 # and include the endpoints

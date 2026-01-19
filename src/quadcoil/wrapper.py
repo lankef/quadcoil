@@ -34,7 +34,12 @@ def get_quantity(func_name: str):
     else:
         raise ValueError(f'\'{func_name}\' not found in quadcoil.quantity.')
 
-def merge_callables(callables):
+def merge_callables(
+        callables, 
+        merge_constraints=False,
+        smoothing=None, 
+        smoothing_params=None
+        ):
     r'''
     Merge a tuple of ``callable``s into one that 
     takes 2 arguments (all functions in the ``quadcoil.objective`` do),
@@ -52,7 +57,12 @@ def merge_callables(callables):
         A callable that returns a 1D ``array``
     '''
     @partial(jit, static_argnums=(2,))
-    def merged_fn(qp, dofs, callables=callables):
+    def merged_fn(
+        qp, dofs, callables=callables, 
+        merge_constraints=merge_constraints,
+        smoothing=smoothing, 
+        smoothing_params=smoothing_params
+        ):
         outputs = []
         for fn in callables:
             if fn is not None:
@@ -64,8 +74,20 @@ def merge_callables(callables):
         # Concatenate into a single 1D array
         if len(outputs) == 0:
             return jnp.zeros(0)
-        return jnp.concatenate(outputs, axis=0)
-    
+        # There is an option to merge callables 
+        if merge_constraints:
+            # an option to merge multiple inequality constraints into one
+            if smoothing=='approx':
+                return jnp.array([
+                    max_lse(jnp.array(outputs), smoothing_params['lse_epsilon']),
+                ])
+            else:
+                raise AttributeError(
+                    'Merging constraints is only available '
+                    'when using smoothing==\'approx\'.'
+                )
+        else:
+            return jnp.concatenate(outputs, axis=0)
     return merged_fn
 
 def _add_quantity(name, unit, use_case, smoothing, smoothing_params):
@@ -259,7 +281,7 @@ def _parse_constraints(
         quantity can be both scalars or a vector fields (``ndarray``).
     constraint_type : tuple of str 
         A tuple of strings. Must consists of ``'>=', '<=', '=='`` only.
-    constraint_unit : tuple of float, may contain None
+    constraint_unit : array/tuple of float, may contain None
         A tuple of float/ints giving the constraints' order of magnitude.
         If a corresponding element is None, will normalize by the value of the objective 
         when the poloidal/toroidal current is uniform.

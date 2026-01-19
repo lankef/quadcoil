@@ -1,8 +1,10 @@
 import jax.numpy as jnp
 import numpy as np # Don't panic, it's for type checking
-from jax import jit
+from jax import jit, custom_vjp
 from jax.tree_util import tree_reduce
 import jax.nn as jnn
+import lineax as lx
+
 def tree_len(pytree):
     return tree_reduce(
         lambda acc, leaf: acc + jnp.atleast_1d(leaf).size, pytree, initializer=0
@@ -161,6 +163,38 @@ def abs_lse(x, epsilon, **kwargs):
 def linf_lse(x, epsilon, **kwargs):
     abs = abs_lse(x, epsilon, **kwargs)
     return max_lse(abs, epsilon, **kwargs)
+
+# Custom lineax routine that removes nans. 
+# Used to make autodiff more robust to floating point error.
+@custom_vjp
+def safe_linear_solve(A, b):
+    operator = lx.MatrixLinearOperator(A)
+    solver = lx.AutoLinearSolver(well_posed=False)
+    solution = lx.linear_solve(operator, b, solver)
+    return solution.value
+
+def safe_linear_solve_fwd(A, b):
+    x = safe_linear_solve(A, b)
+    return x, (A, x)
+
+def safe_linear_solve_bwd(res, g):
+    A, x = res
+    # Clean the gradient before using it
+    g = jnp.nan_to_num(g, nan=0.0, posinf=0.0, neginf=0.0)
+    
+    # Solve A^T v = g for the VJP
+    operator = lx.MatrixLinearOperator(A.T)
+    solver = lx.AutoLinearSolver(well_posed=False)
+    v = lx.linear_solve(operator, g, solver).value
+    v = jnp.nan_to_num(v, nan=0.0, posinf=0.0, neginf=0.0)
+    
+    # dL/dA = -v @ x^T, dL/db = v
+    dA = -jnp.outer(v, x)
+    db = v
+    return (dA, db)
+
+safe_linear_solve.defvjp(safe_linear_solve_fwd, safe_linear_solve_bwd)
+
 
 # def l1_lse(x, epsilon):
 #     x_flat = x.flatten()

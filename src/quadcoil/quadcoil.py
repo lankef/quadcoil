@@ -49,6 +49,7 @@ QUADCOIL_STATIC_ARGNAMES=[
     'convex',
     'maxiter_tot',
     'maxiter_inner',
+    'merge_constraints',
     # 'maxiter_inner_last',
     'gplus_mask',
     'implicit_linear_solver',
@@ -117,11 +118,13 @@ def quadcoil(
     metric_name=('f_B', 'f_K'),
 
     # - Solver options
+    # ess_alpha=1., # ESS factor, see Algorithm 2 of arxiv 2509.16320    
     value_only=False,
     smoothing='slack',
     smoothing_params={'lse_epsilon': 1e-3},
-    convex=False,
-    verbose=0,
+    convex:bool=False,
+    verbose:int=0,
+    merge_constraints:bool=False,
 
     # - Auglag options
     c_init:float=1.,
@@ -259,6 +262,7 @@ def quadcoil(
         Print inside the outer iteration loop, too, when ``verbose==2``.
     '''
     # ----- Default parameters -----
+    # ess_alpha = jnp.abs(ess_alpha)
     if plasma_quadpoints_phi is None:
         plasma_quadpoints_phi = jnp.linspace(0, 1/nfp, 32, endpoint=False)
     if plasma_quadpoints_theta is None:
@@ -501,9 +505,21 @@ def quadcoil(
         aux_dofs_init = aux_dofs_obj | aux_dofs_cons
 
         f_obj_x = lambda x, qp_temp=qp_temp, f_obj=f_obj: f_obj(qp_temp, x)
-        g_ineq_x = lambda x, qp_temp=qp_temp, g_list=g_list: merge_callables(g_list)(qp_temp, x)
-        h_eq_x = lambda x, qp_temp=qp_temp, h_list=h_list: merge_callables(h_list)(qp_temp, x)
-        n_g = len(g_list)
+        g_ineq_x = lambda x, qp_temp=qp_temp, g_list=g_list: merge_callables(
+            g_list, 
+            merge_constraints=merge_constraints,
+            smoothing=smoothing,
+            smoothing_params=smoothing_params,
+        )(qp_temp, x)
+        # Merging equality constraints is not supported yet    
+        h_eq_x = lambda x, qp_temp=qp_temp, h_list=h_list: merge_callables(
+            h_list
+        )(qp_temp, x)
+        if merge_constraints:
+            n_g = 1
+        else:
+            n_g = len(g_list)
+        # Merging equality constraints is not supported yet    
         n_h = len(h_list)
         return f_obj_x, g_ineq_x, h_eq_x, n_g, n_h, aux_dofs_init
 
@@ -539,7 +555,13 @@ def quadcoil(
             plasma_minor = plasma_dofs[plasma_ntor*2 + 1]
             winding_minor = winding_dofs[winding_ntor*2 + 1]
             phi_unit = Bnormal_estimate * 1e7 * jnp.abs(plasma_minor - winding_minor)
-
+    # # ESS scaling (See Chris Jang's paper at https://arxiv.org/pdf/2509.16320) 
+    # ess_factor = jnp.exp(
+    #     -ess_alpha 
+    #     * jnp.linalg.norm(jnp.array(qp.make_mn()), ord=1, axis=0)
+    # )
+    # ess_factor = ess_factor / jnp.average(ess_factor)
+    # phi_unit = phi_unit * ess_factor
     # ----- Creating scaled, flattened dof, 'x_flat_init' -----
     # The actual, unit-free, variable used for initialization,
     # and by the optimizer. The dof that the optimizer operates on is a
@@ -922,8 +944,6 @@ def quadcoil(
         )
         grad_x_f = jacrev(f_metric, argnums=0)(x_flat_precond, y_flat)
         grad_y_f = jacrev(f_metric, argnums=1)(x_flat_precond, y_flat)
-        debug.print('DEBUG grad_x_f, {x}', x=jnp.linalg.norm(grad_x_f))
-        debug.print('DEBUG grad_y_f, {x}', x=jnp.linalg.norm(grad_y_f))
         if unconstrained:
             vihp = lx.linear_solve(
                 vihp_hess, # should be .T but hessian is symmetric 
@@ -937,8 +957,6 @@ def quadcoil(
             )
             grad_x_f = jnp.nan_to_num(grad_x_f, nan=0.0, posinf=0.0, neginf=0.0)
             vihp_b = jnp.nan_to_num(vihp_b, nan=0.0, posinf=0.0, neginf=0.0)
-            debug.print('DEBUG hess_l_k, {x}', x=jnp.linalg.norm(hess_l_k))
-            debug.print('DEBUG Ohess, {x}', x=jnp.linalg.norm(Ohess))
             # It is somewhat hard to tell whether pre-conditioning 
             # improves accuracy or introduces additional error 
             # just from A and b. Therefore, we compute both with
@@ -967,12 +985,9 @@ def quadcoil(
         # \grad_{x_k} f [-H(l_k, x_k)^-1 \grad_{x_k}\grad_{y} l_k]
         # Primal and tangent must be the same shape
         _, dfdy1 = jvp(grad_y_l_k_for_hess, primals=[x_flat_precond], tangents=[vihp])
-        debug.print('dfdy1 {x}', x=dfdy1)
         # \grad_{y} f
         dfdy2 = grad_y_f
-        debug.print('dfdy2 {x}', x=dfdy2)
         dfdy_arr = -dfdy1 + dfdy2
-        debug.print('dfdy_arr {x}', x=dfdy_arr)
         dfdy_dict = {f"df_d{key}": value for key, value in unravel_y(dfdy_arr).items()}
         metric_result_i = f_metric(x_flat_precond, y_flat)
         if verbose>0:
