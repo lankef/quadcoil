@@ -50,6 +50,7 @@ QUADCOIL_STATIC_ARGNAMES=[
     'maxiter_tot',
     'maxiter_inner',
     'merge_constraints',
+    'max_linesearch_steps',
     # 'maxiter_inner_last',
     'gplus_mask',
     'implicit_linear_solver',
@@ -144,6 +145,7 @@ def quadcoil(
     svtol:float=tol_default,
     maxiter_tot:int=10000,
     maxiter_inner:int=1000,
+    max_linesearch_steps:int=20,
 
     # - Experimental
     gplus_mask=gplus_hard, # gplus_elu,
@@ -251,6 +253,8 @@ def quadcoil(
         (Static) The maximum of the outer iteration.
     maxiter_inner, maxiter_inner_last : int, optional, default=500
         (Static) The maximum of the inner iteration.
+    max_linesearch_steps : int
+        (Static) The maximum steps count in the LBFGS line search.
     gplus_mask : Callable, optional, default=quadcoil.gplus_hard
         (Static) The form of g+. Soft thresholding may improve derivative effectiveness.
     implicit_linear_solver : lineax.AbstractLinearSolver, optional, default=lineax.AutoLinearSolver(well_posed=True)
@@ -650,6 +654,7 @@ def quadcoil(
             fstop=fstop_inner_last,
             xstop=xstop_inner_last,
             gtol=gtol_inner,
+            max_linesearch_steps=max_linesearch_steps,
             verbose=verbose,
         )
         dofs_opt = unravel_unscale_x(x_flat_opt)
@@ -694,7 +699,6 @@ def quadcoil(
             c_growth_rate=c_growth_rate,
             ctol_outer=ctol_outer,
             xstop_outer=xstop_outer,
-            # gtol_outer=gtol_outer,
             fstop_inner=fstop_inner,
             xstop_inner=xstop_inner,
             gtol_inner=gtol_inner,
@@ -703,7 +707,8 @@ def quadcoil(
             gtol_inner_last=gtol_inner_last,
             maxiter_tot=maxiter_tot,
             maxiter_inner=maxiter_inner,
-            verbose=verbose
+            max_linesearch_steps=max_linesearch_steps,
+            verbose=verbose,
         )
         # The optimum, unit-less.
         x_flat_opt = solve_results['inner_fin_x']
