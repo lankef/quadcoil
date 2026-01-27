@@ -457,6 +457,7 @@ def _integrate_force(
 
 # N = T * A * m = T * A/m * m^2
 _force_desc_unit = lambda scales: scales["B"] * _K_desc_unit(scales) * scales["a"]**2
+_forcel1_desc_unit = lambda scales: scales["B"] * _K_desc_unit(scales) * scales["a"]**2 * scales["R0"] * scales["a"]
 _force2_desc_unit = lambda scales: (scales["B"] * _K_desc_unit(scales) * scales["a"]**2)**2
 
 # This is an l-inf norm. We have implemented a template
@@ -465,6 +466,15 @@ f_max_force_cyl = _Quantity.generate_linf_norm(
     func=_self_force_cyl, 
     aux_argname='max_force_cyl', 
     desc_unit=_force_desc_unit,
+    auto_stellsym=True,
+)
+
+# This is an l-inf norm. We have implemented a template
+# in _Quantity. It's non-convex but Shor-relaxable into SDP.
+f_l1_force_cyl = _Quantity.generate_l1_norm(
+    func=_self_force_cyl, 
+    aux_argname='l1_force_cyl', 
+    desc_unit=_forcel1_desc_unit,
     auto_stellsym=True,
 )
 
