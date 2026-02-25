@@ -1,6 +1,6 @@
 import numpy as np
 from quadcoil import SurfaceRZFourierJAX
-from desc.geometry.surface import FourierRZToroidalSurface
+from simsopt.geo import SurfaceRZFourier
 def save_focus(surface, filename):
     '''
     Saves a Simsopt `SurfaceRZFourier`, a DESC `FourierRZToroidalSurface`,
@@ -15,14 +15,26 @@ def save_focus(surface, filename):
     filename
         The filename to save.
     '''
-    if isinstance(surface, FourierRZToroidalSurface):
+    if isinstance(surface, SurfaceRZFourierJAX):
+        surface = surface.to_simsopt()
+    elif isinstance(surface, SurfaceRZFourier):
+        pass
+    else:
+        # This order of the type circumvents the DESC import unless
+        # necessary.
+        from desc.geometry.surface import FourierRZToroidalSurface
+        if not isinstance(surface, FourierRZToroidalSurface):
+            raise TypeError(
+                'surface must be a Simsopt SurfaceRZFourier, '
+                'a DESC FourierRZToroidalSurface, '
+                'or a QUADCOIL `SurfaceRZFourierJAX`'
+            )
         surface = SurfaceRZFourierJAX.from_desc(
             surface,
             quadpoints_phi=np.linspace(0, 1, 32, endpoint=False),
             quadpoints_theta=np.linspace(0, 1, 32, endpoint=False)
         )
-    if isinstance(surface, SurfaceRZFourierJAX):
-        surface = surface.to_simsopt()
+    
     replace_err = lambda x: 0 if isinstance(x, ValueError) or not np.isfinite(x) else x
     lines_to_write = [
         '# N_modes N_fp  N_bn\n',
