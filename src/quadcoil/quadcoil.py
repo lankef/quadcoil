@@ -50,6 +50,7 @@ QUADCOIL_STATIC_ARGNAMES=[
     'maxiter_tot',
     'maxiter_inner',
     'merge_constraints',
+    'max_linesearch_steps',
     # 'maxiter_inner_last',
     'gplus_mask',
     'implicit_linear_solver',
@@ -144,6 +145,7 @@ def quadcoil(
     svtol:float=tol_default,
     maxiter_tot:int=10000,
     maxiter_inner:int=1000,
+    max_linesearch_steps:int=20,
 
     # - Experimental
     gplus_mask=gplus_hard, # gplus_elu,
@@ -212,13 +214,13 @@ def quadcoil(
         (Static) The names of the objective functions. Must be a member of ``quadcoil.objective`` that outputs a scalar.
     objective_weight : ndarray, optional, default=None
         (Traced) The weights of the objective functions. Derivatives will be calculated w.r.t. this quantity.
-    objective_unit : tuple, optional, default=None
+    objective_unit : ndarray, optional, default=None
         (Traced) The normalization constants of the objective terms, so that ``f/objective_unit`` is :math:`O(1)`. May contain ``None``
     constraint_name : tuple, optional, default=()
         (Static) The names of the constraint functions. Must be a member of ``quadcoil.objective`` that outputs a scalar.
     constraint_type : tuple, optional, default=()
         (Static) The types of the constraints. Must consist of ``'>='``, ``'<='``, ``'=='`` only.
-    constraint_unit : tuple, optional, default=()
+    constraint_unit : ndarray, optional, default=()
         (Traced) The normalization constants of the constraints, so that ``f/constraint_unit`` is :math:`O(1)` May contain ``None``.
     constraint_value : ndarray, optional, default=()
         (Traced) The constraint thresholds. Derivatives will be calculated w.r.t. this quantity.
@@ -251,6 +253,8 @@ def quadcoil(
         (Static) The maximum of the outer iteration.
     maxiter_inner, maxiter_inner_last : int, optional, default=500
         (Static) The maximum of the inner iteration.
+    max_linesearch_steps : int
+        (Static) The maximum steps count in the LBFGS line search.
     gplus_mask : Callable, optional, default=quadcoil.gplus_hard
         (Static) The form of g+. Soft thresholding may improve derivative effectiveness.
     implicit_linear_solver : lineax.AbstractLinearSolver, optional, default=lineax.AutoLinearSolver(well_posed=True)
@@ -650,6 +654,7 @@ def quadcoil(
             fstop=fstop_inner_last,
             xstop=xstop_inner_last,
             gtol=gtol_inner,
+            max_linesearch_steps=max_linesearch_steps,
             verbose=verbose,
         )
         dofs_opt = unravel_unscale_x(x_flat_opt)
@@ -694,7 +699,6 @@ def quadcoil(
             c_growth_rate=c_growth_rate,
             ctol_outer=ctol_outer,
             xstop_outer=xstop_outer,
-            # gtol_outer=gtol_outer,
             fstop_inner=fstop_inner,
             xstop_inner=xstop_inner,
             gtol_inner=gtol_inner,
@@ -703,7 +707,8 @@ def quadcoil(
             gtol_inner_last=gtol_inner_last,
             maxiter_tot=maxiter_tot,
             maxiter_inner=maxiter_inner,
-            verbose=verbose
+            max_linesearch_steps=max_linesearch_steps,
+            verbose=verbose,
         )
         # The optimum, unit-less.
         x_flat_opt = solve_results['inner_fin_x']
@@ -739,10 +744,13 @@ def quadcoil(
     if value_only: 
         out_dict = {}
         for metric_name_i in metric_name:
-            metric_result_i = get_quantity(metric_name_i)(qp, dofs_opt)
-            out_dict[metric_name_i] = {
-                'value': metric_result_i
-            }
+            if metric_name_i == 'f_obj':
+                metric_result_i = f_obj(qp_temp=qp, x=dofs_opt)
+            else:
+                metric_result_i = get_quantity(metric_name_i)(qp, dofs_opt)
+                out_dict[metric_name_i] = {
+                    'value': metric_result_i
+                }
             if verbose>0:
                 debug.print('Metric evaluated. {x} = {y}', x=metric_name_i, y=metric_result_i)
         return out_dict, qp, dofs_opt, solve_results
@@ -938,10 +946,16 @@ def quadcoil(
     grad_y_l_k = jacrev(l_k, argnums=1)
     grad_y_l_k_for_hess = lambda x, y_flat=y_flat: grad_y_l_k(x, y_flat)
     for metric_name_i in metric_name:
-        f_metric = lambda xp, y: get_quantity(metric_name_i)(
-            y_to_qp(unravel_y(y)), 
-            unravel_unscale_x(xp_to_x(xp))
-        )
+        if metric_name_i == 'f_obj':
+            f_metric = lambda xp, y: f_obj(
+                qp_temp=y_to_qp(unravel_y(y)), 
+                x=unravel_unscale_x(xp_to_x(xp))
+            )
+        else:
+            f_metric = lambda xp, y: get_quantity(metric_name_i)(
+                y_to_qp(unravel_y(y)), 
+                unravel_unscale_x(xp_to_x(xp))
+            )
         grad_x_f = jacrev(f_metric, argnums=0)(x_flat_precond, y_flat)
         grad_y_f = jacrev(f_metric, argnums=1)(x_flat_precond, y_flat)
         if unconstrained:
@@ -1093,8 +1107,6 @@ def _input_checking(
             raise TypeError('objective_name must be a tuple or string. It is:', type(objective_name))
         if not is_ndarray(objective_weight, 1):
             raise TypeError('objective_weight must be an 1d array. It is:', type(objective_weight))
-        # if not isinstance(objective_unit, tuple):
-        #     raise TypeError('objective_unit must be a tuple. It is:', type(objective_unit))
         if len(objective_name) != len(objective_weight) or len(objective_name) != len(objective_unit):
             raise ValueError('objective_name, objective_weight, and objective_unit must have the same len')
     else:
@@ -1103,8 +1115,6 @@ def _input_checking(
         raise TypeError('constraint_name must be a tuple. It is:', type(constraint_name))
     if not isinstance(constraint_type, tuple):
         raise TypeError('constraint_type must be a tuple. It is:', type(constraint_type))
-    # if not isinstance(constraint_unit, tuple):
-    #     raise TypeError('constraint_unit must be a tuple. It is:', type(constraint_unit))
     if (
         len(constraint_name) != len(constraint_type) 
         or len(constraint_name) != len(constraint_unit)

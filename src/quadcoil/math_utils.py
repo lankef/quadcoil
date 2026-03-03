@@ -194,10 +194,3 @@ def safe_linear_solve_bwd(res, g):
     return (dA, db)
 
 safe_linear_solve.defvjp(safe_linear_solve_fwd, safe_linear_solve_bwd)
-
-
-# def l1_lse(x, epsilon):
-#     x_flat = x.flatten()
-#     x_pm = jnp.stack((x_flat, -x_flat))
-#     x_abs = linf_lse(x_pm, epsilon, axis=0)
-#     return jnp.sum(x_abs)

@@ -1,7 +1,7 @@
 from quadcoil import get_quantity
 from quadcoil.wrapper import _parse_constraints
 from jax import vmap
-import jax.numpy as jnp
+import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 def plot_quantity(
@@ -27,7 +27,7 @@ def plot_quantity(
     qp : object
         Problem object passed to f.
     dofs : dict
-        Dictionary containing at least {"phi": jnp.ndarray}.
+        Dictionary containing at least {"phi": np.ndarray}.
     i_phi, j_phi : int
         Indices into dofs["phi"] to vary.
     i_range, j_range : float
@@ -52,8 +52,8 @@ def plot_quantity(
     phi_i0 = phi0[i_phi]
     phi_j0 = phi0[j_phi]
 
-    phi_i_vals = jnp.linspace((1 - i_range) * phi_i0, (1 + i_range) * phi_i0, ngrid)
-    phi_j_vals = jnp.linspace((1 - j_range) * phi_j0, (1 + j_range) * phi_j0, ngrid)
+    phi_i_vals = np.linspace((1 - i_range) * phi_i0, (1 + i_range) * phi_i0, ngrid)
+    phi_j_vals = np.linspace((1 - j_range) * phi_j0, (1 + j_range) * phi_j0, ngrid)
 
     if constraint_mode:
         g_ineq_list, h_eq_list, _ = _parse_constraints(
@@ -87,14 +87,14 @@ def plot_quantity(
     Z = vf(phi_i_vals, phi_j_vals)
 
     # Convert to NumPy for plotting
-    X, Y = jnp.meshgrid(phi_i_vals, phi_j_vals, indexing="ij")
+    X, Y = np.meshgrid(phi_i_vals, phi_j_vals, indexing="ij")
 
     plt.scatter([phi_i0], [phi_j0], color='red', marker='x')
     if plot_contours:
         cs = plt.contour(
-            jnp.asarray(X),
-            jnp.asarray(Y),
-            jnp.asarray(Z),
+            np.asarray(X),
+            np.asarray(Y),
+            np.asarray(Z),
             levels=levels,
         )
         plt.colorbar(cs, label="f(qp, dofs)")
@@ -105,12 +105,12 @@ def plot_quantity(
             constraint_color = ax._get_lines.get_next_color()
         plt.contour(X, Y, Z, levels=[0.0], colors=constraint_color, linewidths=2)
         # Shade regions where the constraint is violated            
-        if jnp.max(Z) > 0:
+        if np.max(Z) > 0:
             plt.contourf(
                 X,
                 Y,
                 Z,
-                levels=[0.0, jnp.max(Z)],
+                levels=[0.0, np.max(Z)],
                 colors=[constraint_color],
                 alpha=0.2,
             )
@@ -133,6 +133,7 @@ def plot_quadcoil(
     constraint_value,
     i_phi=0, j_phi=1,
     i_range=0.1, j_range=0.1,
+    show=True,
     **kwargs
 ):
     plot_quantity(
@@ -155,4 +156,98 @@ def plot_quadcoil(
                 plot_contours=False
             )
     plt.legend()
-    plt.show()
+    if show:
+        plt.show()
+
+def gamma_to_vtk(gamma, name):
+    '''
+    Converts a surface's quadrature points (produced by ``simsopt.Surface.gamma()``)
+    into a vtk file.
+    '''
+    if name[-4:] != '.vts':
+        name = name + '.vts'
+    gamma = np.array(gamma)
+    try:
+        import pyvista as pv
+    except:
+        raise ImportError('pyvista must be installed to save vtk files.')
+    # Assuming 'gamma' is your array of shape (N, M, 3) with [:,:,0] = r, [:,:,1] = phi, and [:,:,2] = z
+    x = gamma[:, :, 0]
+    y = gamma[:, :, 1]
+    z = gamma[:, :, 2]
+
+    # Flatten the arrays for grid points
+    points = np.c_[x.ravel(), y.ravel(), z.ravel()]
+
+    # Create the structured grid
+    grid = pv.StructuredGrid()
+    grid.points = points
+    grid.dimensions = (x.shape[1], x.shape[0], 1)  # Set the grid dimensions, with 1 as the third dimension
+
+    # Save as a VTK file
+    grid.save(name)
+
+def gamma_and_field_to_vtk(gamma, f, name):    
+    '''
+    Converts a surface's quadrature points (produced by ``simsopt.Surface.gamma()``)
+    and a 3d vector field (xyz) into a vtk file.
+    '''
+    if name[-4:] != '.vts':
+        name = name + '.vts'
+    gamma = np.array(gamma)
+    f = np.array(f)
+    try:
+        import pyvista as pv
+    except:
+        raise ImportError('pyvista must be installed to save vtk files.')
+    # Assuming gamma and f are numpy arrays of shape (m, n, 3)
+    m, n, _ = gamma.shape
+
+    # Reshape gamma to a flat list of points
+    points = gamma.reshape(-1, 3)
+
+    # Reshape f to a flat list of vectors
+    vectors = f.reshape(-1, 3)
+
+    # Create a structured grid in PyVista
+    grid = pv.StructuredGrid()
+    grid.points = points
+    grid.dimensions = [m, n, 1]  # Structured grid dimensions
+    grid["f"] = vectors  # Add the vector field to the grid
+
+    # Save the grid to a VTK file for ParaView
+    grid.save(name)
+
+def gamma_and_scalar_field_to_vtk(gamma, f_scalar, name):
+    '''
+    Converts a surface's quadrature points (produced by ``simsopt.Surface.gamma()``)
+    and a scalar field (xyz) into a vtk file.
+    '''
+    if name[-4:] != '.vts':
+        name = name + '.vts'
+    gamma = np.array(gamma)
+    f_scalar = np.array(f_scalar)
+    try:
+        import pyvista as pv
+    except:
+        raise ImportError('pyvista must be installed to save vtk files.')
+    # Assuming `gamma` is your array of shape (N, M, 3) storing the x, y, z coordinates
+    # and `f_scalar` is your array of shape (N, M) storing the scalar field
+    x = gamma[:, :, 0]
+    y = gamma[:, :, 1]
+    z = gamma[:, :, 2]
+
+    # Flatten the coordinate arrays and the scalar field for structured grid points
+    points = np.c_[x.ravel(), y.ravel(), z.ravel()]
+    scalars = f_scalar.ravel()
+
+    # Create the structured grid
+    grid = pv.StructuredGrid()
+    grid.points = points
+    grid.dimensions = (x.shape[1], x.shape[0], 1)  # Set dimensions with 1 in the third axis
+
+    # Add scalar field as point data
+    grid["Scalar Field"] = scalars
+
+    # Save as a VTK file
+    grid.save(name)

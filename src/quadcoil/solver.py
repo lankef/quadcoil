@@ -22,7 +22,7 @@ def delta_normalized(x1, x2):
     max = jnp.maximum(jnp.abs(x1), jnp.abs(x2))
     return jnp.where(max>0, diff/max, max)
 
-def run_opt_lbfgs(init_params, fun, maxiter, fstop, xstop, gtol, verbose, n_history=10):
+def run_opt_lbfgs(init_params, fun, maxiter, fstop, xstop, gtol, max_linesearch_steps, verbose):
     r'''
     A wrapper for performing unconstrained optimization using ``optax.lbfgs``.
     
@@ -43,6 +43,10 @@ def run_opt_lbfgs(init_params, fun, maxiter, fstop, xstop, gtol, verbose, n_hist
     gtol : float
         The gradient tolerance. 
         Terminates when any one of the tolerances is satisfied.
+    max_linesearch_steps : int
+        The maximum steps count in the LBFGS line search.
+    verbose : int
+        Output levels of detail.
     
     Returns
     -------
@@ -61,7 +65,19 @@ def run_opt_lbfgs(init_params, fun, maxiter, fstop, xstop, gtol, verbose, n_hist
     final_df : float
         The rate of change of f at the optimum.
     '''
-    return run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt=optax.lbfgs(), verbose=verbose)
+    return run_opt_optax(
+        init_params, 
+        fun, 
+        maxiter, 
+        fstop, xstop, gtol, 
+        opt=optax.lbfgs(
+            linesearch=optax.scale_by_zoom_linesearch(
+                max_linesearch_steps=max_linesearch_steps, 
+                initial_guess_strategy='one'
+            )
+        ), 
+        verbose=verbose
+    )
 
 
 def run_opt_optax(init_params, fun, maxiter, fstop, xstop, gtol, opt, verbose, n_history=10):
@@ -230,7 +246,10 @@ def solve_constrained(
         x_init,
         # x_unit_init,
         f_obj,
-        run_opt=run_opt_lbfgs,
+        # run_opt : Callable, optional, default=run_opt_lbfgs
+        # The optimizer choice. Must be a wrapper with the 
+        # same signature as ``run_opt_lbfgs``.
+        # run_opt=run_opt_lbfgs,
         # No constraints by default
         c_init=1.,
         c_growth_rate=1.1,
@@ -252,6 +271,7 @@ def solve_constrained(
         # # Uses jax.lax.scan instead of while_loop.
         # # Enables history and forward diff but disables 
         # # convergence test.
+        max_linesearch_steps=20,
         verbose=0,
         c_k_safe=1e15,
         gplus_mask=gplus_hard,
@@ -292,9 +312,6 @@ def solve_constrained(
         The initial x scale. This scaling factor ensures that x~1. Will be updated after every outer iteration.
     f_obj : Callable
         The objective function.
-    run_opt : Callable, optional, default=run_opt_lbfgs
-        The optimizer choice. Must be a wrapper with the 
-        same signature as ``run_opt_lbfgs``.
     c_init : float, optional, default=1.
         The initial :math:`c` factor. Please see 
         *Constrained Optimization and Lagrange Multiplier Methods* 
@@ -333,10 +350,17 @@ def solve_constrained(
     gtol_inner : float, optional, default=1e-7
         (Traced) Gradient tolerance of the inner LBFGS 
         iteration. Terminates when is satisfied. 
-    maxiter_tot: int, optional, default=50
+    maxiter_tot : int, optional, default=10000
         (Static) The maximum of the outer iteration.
-    verbose: int, optional, default=0
+    maxiter_inner : int, optional, default=500
+        (Static) The maximum of the inner iteration.
+    max_linesearch_steps : int
+        (Static) The maximum steps count in the LBFGS line search.
+    verbose : int, optional, default=0
         (Static) The verbosity. When >1, outputs outer iteration convergence info.
+    c_k_safe : float, optional, default=1e15,
+
+    gplus_mask=gplus_hard,
 
     Returns
     -------
@@ -459,10 +483,11 @@ def solve_constrained(
             )
         ) 
         # Solving a stage of the problem
-        x_k_raw, val_l_k, grad_l_k, niter_inner_k, dx_k, du_k, dL_k = run_opt(
+        x_k_raw, val_l_k, grad_l_k, niter_inner_k, dx_k, du_k, dL_k = run_opt_lbfgs(
             x_km1/x_unit, l_k, maxiter_inner, 
             fstop_inner, xstop_inner, gtol_inner,
-            verbose
+            max_linesearch_steps=max_linesearch_steps,
+            verbose=verbose
         )
         x_k = x_k_raw*x_unit
         x_norm = jnp.linalg.norm(x_k)

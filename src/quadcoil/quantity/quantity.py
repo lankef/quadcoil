@@ -479,7 +479,7 @@ class _Quantity:
         def _raw_f_impl(qp, dofs, func=func):
             da = qp.eval_surface.da()
             field = func(qp, dofs)
-            integrand = jnp.broadcast_to(da, field.shape) * jnp.abs(field)
+            integrand = da.reshape(da.shape + (1,) * (field.ndim - da.ndim)) * jnp.abs(field)
             return jnp.sum(integrand) * qp.nfp
         # The objective/constraint form of this L-1
         # norm is the surface integral pf the aux variable.
