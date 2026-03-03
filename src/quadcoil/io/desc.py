@@ -152,3 +152,44 @@ def quadcoil_desc(
     return(
         quadcoil(**kwargs)
     )
+
+def load_FourierCurrentPotentialField(eq, scf, winding_quadpoints_phi=None, winding_quadpoints_theta=None, source_grid=None):
+    try:
+        from desc.vmec_utils import ptolemy_identity_rev
+    except:
+        raise ModuleNotFoundError(
+            'DESC must be installed to load '
+            'a FourierCurrentPotentialField.'
+        )
+    mm, nn, phis_raw, phic_raw = ptolemy_identity_rev(scf.Phi_basis.modes[:,1], scf.Phi_basis.modes[:,2], scf.Phi_mn)
+    mpol = scf.M
+    ntor = scf.N
+    stellsym = scf.sym
+    nfp = scf.NFP
+    phic = phic_raw.flatten()
+    phis = phis_raw.flatten()[1:]
+    # When stellsym is enabled, Phi is a sin fourier series.
+    # Otherwise, it's a sin-cos series.
+    if stellsym:
+        phi = jnp.concatenate([phis])
+    else:
+        phi = jnp.concatenate([phis, phic])
+    if quadpoints_phi and quadpoints_theta:
+        if source_grid:
+            raise ValueError(
+                'The user should provide either '
+                '(quadpoints_phi, quadpoints_theta) or source_grid, '
+                'not both.'
+            )
+        winding_quadpoints_phi_temp = winding_quadpoints_phi
+        winding_quadpoints_theta_temp = winding_quadpoints_theta
+    else:
+        winding_quadpoints_phi_temp = jnp.linspace(0, 1, (source_grid.M*2+1) * nfp, endpoint=False)
+        winding_quadpoints_theta_temp = jnp.linspace(0, 1, source_grid.N*2+1, endpoint=False)
+    
+    winding_surface = SurfaceRZFourierJAX.from_desc(
+        scf_nescoil, 
+        quadpoints_phi = winding_quadpoints_phi_temp,
+        quadpoints_theta = winding_quadpoints_theta_temp,
+    )
+    return (qp, {'phi': phi})

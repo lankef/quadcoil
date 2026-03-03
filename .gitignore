@@ -1,5 +1,7 @@
 docs/_build/
 *.pyc
+*checkpoint.py
+*checkpoint.ipynb
 src/quadcoil.egg-info/
 __pycache__/
 src/quadcoil/.ipynb_checkpoints/surfacerzfourier_jax-checkpoint.py

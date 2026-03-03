@@ -133,6 +133,7 @@ def plot_quadcoil(
     constraint_value,
     i_phi=0, j_phi=1,
     i_range=0.1, j_range=0.1,
+    show=True,
     **kwargs
 ):
     plot_quantity(
@@ -155,8 +156,8 @@ def plot_quadcoil(
                 plot_contours=False
             )
     plt.legend()
-    plt.show()
-
+    if show:
+        plt.show()
 
 def gamma_to_vtk(gamma, name):
     '''
