@@ -475,7 +475,7 @@ class _Quantity:
                     field.shape[1],
                     -1
                 ))
-            field_norm = jnp.linalg.norm(field/unit, axis=-1)
+            field_norm = jnp.linalg.norm(field, axis=-1)
             integrand = da * field_norm
             return jnp.sum(integrand) * qp.nfp
             
