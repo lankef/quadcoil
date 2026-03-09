@@ -102,6 +102,7 @@ def _f_K(qp, dofs):
     K2_val = _K2(qp, dofs)
     return qp.eval_surface.integrate(K2_val/2)*qp.nfp
 _f_K_desc_unit = lambda scales: _K_desc_unit(scales)**2 * scales["R0"] * scales["a"]
+_f_huber_K_desc_unit = lambda scales: _K_desc_unit(scales) * scales["R0"] * scales["a"]
 
 # ----- Wrappers -----
 # This is the xyz component of the 
@@ -138,10 +139,9 @@ f_max_K2 = _Quantity.generate_linf_norm(
     auto_stellsym=True,
 )
 
-f_l1_K2 = _Quantity.generate_l1_norm(
-    func=_K2, 
-    aux_argname='scaled_abs_K2', 
-    desc_unit=_f_l1_K2_desc_unit,
+f_huber_K = _Quantity.generate_huber(
+    func=_K, 
+    desc_unit=_f_huber_K_desc_unit,
     auto_stellsym=True,
 )
 
