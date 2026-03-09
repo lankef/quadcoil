@@ -138,6 +138,13 @@ f_max_K2 = _Quantity.generate_linf_norm(
     auto_stellsym=True,
 )
 
+f_l1_K2 = _Quantity.generate_l1_norm(
+    func=_K2, 
+    aux_argname='scaled_abs_K2', 
+    desc_unit=_f_l1_K2_desc_unit,
+    auto_stellsym=True,
+)
+
 # This is a linear scalar field. It's compatible with 
 # '<=', '>=', and '==' constraints. '==' seems trivial 
 # so we exclude it here to prevent user typo.
