@@ -488,7 +488,10 @@ class _Quantity:
                     field.shape[1],
                     -1
                 ))
-            field_norm = jnp.linalg.norm(field/unit + smoothing_params['lse_epsilon'], axis=-1)
+            field_norm = (
+                jnp.linalg.norm(field/unit + smoothing_params['lse_epsilon']**2, axis=-1)
+                - smoothing_params['lse_epsilon']
+            )
             integrand = da * field_norm
             return jnp.sum(integrand) * qp.nfp
             
