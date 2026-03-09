@@ -479,17 +479,6 @@ class _Quantity:
             field_norm = jnp.linalg.norm(field, axis=-1)
             integrand = da * field_norm
             return jnp.sum(integrand) * qp.nfp
-
-        def _scaled_slack_f_impl(qp, dofs, unit):
-            warnings.warn(
-                'You have selected "slack" '
-                'smoothing mode and a Huber Loss term. '
-                'The epsilon will be set to 1e-3 automatically. '
-            )
-            return _scaled_approx_f_impl(
-                qp, dofs, unit, 
-                smoothing_params={'lse_epsilon':1e-3}
-            )
             
         def _scaled_approx_f_impl(qp, dofs, unit, smoothing_params, func=func):
             da = qp.eval_surface.da()
@@ -506,6 +495,17 @@ class _Quantity:
             )
             integrand = da * field_norm
             return jnp.sum(integrand) * qp.nfp
+        
+        def _scaled_slack_f_impl(qp, dofs, unit):
+            warnings.warn(
+                'You have selected "slack" '
+                'smoothing mode and a Huber Loss term. '
+                'The epsilon will be set to 1e-3 automatically. '
+            )
+            return _scaled_approx_f_impl(
+                qp, dofs, unit, 
+                smoothing_params={'lse_epsilon':1e-3}
+            )
             
         return _Quantity(
             _raw_f_impl=_raw_f_impl, 
