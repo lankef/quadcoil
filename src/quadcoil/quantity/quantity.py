@@ -433,7 +433,7 @@ class _Quantity:
             desc_unit=desc_unit,
         )
 
-    def generate_huber(func, desc_unit, auto_stellsym=False)
+    def generate_huber(func, desc_unit, auto_stellsym=False):
         r'''
         Generates a Huber loss function (smooth approximation for l2 norm)
 
