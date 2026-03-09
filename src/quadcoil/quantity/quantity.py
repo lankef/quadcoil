@@ -433,6 +433,76 @@ class _Quantity:
             desc_unit=desc_unit,
         )
 
+    def generate_huber(func, desc_unit, auto_stellsym=False)
+        r'''
+        Generates a Huber loss function (smooth approximation for l2 norm)
+
+        .. math::
+
+            \|f\|_1 = \int da |f| &= \sum_{i=1}^{i=N_{grid}} N p_i,\\
+            \text{where}\\
+            N \text{ is the length of the surface normal}\\
+             f_i - p_i &\leq 0\\
+            -f_i - p_i &\leq 0
+        
+        This is a scalar, convex quantity that's only compatible as an 
+        objective term or with ``'<='`` constraints.
+
+        Parameters
+        ----------  
+        func : Callable
+            The source function :math:`f` to convert into an L-:math:`\infty` norm.
+        func_shape : Tuple
+            The shape of ``func``'s output. Muse be 
+        desc_unit : Callable
+            A callable calculating the quantity's unit in DESC.
+        auto_stellsym : bool, optional, default=False
+            When ``True``, ignores the second half of all objective values when constructing 
+            constraints. Reduces computational cost and improves conditioning.
+
+        Returns
+        -------
+        A ``_Quantity``.
+        '''
+
+        # The effective function
+        def _raw_f_impl(qp, dofs, func=func):
+            da = qp.eval_surface.da()
+            field = func(qp, dofs)
+            if field.ndim > 2:
+                field = field.reshape((
+                    field.shape[0],
+                    field.shape[1],
+                    -1
+                ))
+            field_norm = jnp.linalg.norm(field/unit, axis=-1)
+            integrand = da * field_norm
+            return jnp.sum(integrand) * qp.nfp
+            
+        def _scaled_approx_f_impl(qp, dofs, unit, smoothing_params, func=func):
+            da = qp.eval_surface.da()
+            field = func(qp, dofs)
+            if field.ndim > 2:
+                field = field.reshape((
+                    field.shape[0],
+                    field.shape[1],
+                    -1
+                ))
+            field_norm = jnp.linalg.norm(field/unit + smoothing_params['lse_epsilon'], axis=-1)
+            integrand = da * field_norm
+            return jnp.sum(integrand) * qp.nfp
+            
+        return _Quantity(
+            _raw_f_impl=_raw_f_impl, 
+            _scaled_slack_f_impl=_scaled_approx_f_impl,
+            _scaled_approx_f_impl=_scaled_approx_f_impl,
+            _scaled_slack_g_ineq_impl=None,
+            _scaled_slack_h_eq_impl=None,
+            _scaled_slack_dofs_init=None, 
+            compatibility=['f', '<='], 
+            desc_unit=desc_unit,
+        )
+
     def generate_l1_norm(func, aux_argname, desc_unit, positive_definite=False, square=False, auto_stellsym=False):
         r'''
         Generates the slack constraints for an L-1 
