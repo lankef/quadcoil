@@ -1,6 +1,5 @@
 import numpy as np
 from quadcoil import SurfaceRZFourierJAX
-from simsopt.geo import SurfaceRZFourier
 def save_focus(surface, filename):
     '''
     Saves a Simsopt `SurfaceRZFourier`, a DESC `FourierRZToroidalSurface`,
@@ -15,6 +14,10 @@ def save_focus(surface, filename):
     filename
         The filename to save.
     '''
+    try:
+        from simsopt.geo import SurfaceRZFourier
+    except ModuleNotFoundError:
+        raise ModuleNotFoundError('Simsopt must be installed to output as FOCUS.')
     if isinstance(surface, SurfaceRZFourierJAX):
         surface = surface.to_simsopt()
     elif isinstance(surface, SurfaceRZFourier):
