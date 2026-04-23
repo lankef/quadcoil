@@ -4,6 +4,64 @@ import jax.numpy as jnp
 from jax import jit
 from functools import partial
 from . import max_lse
+import warnings
+
+
+def _resolve_quadpoints(
+    nfp,
+    Bnormal_plasma,
+    plasma_quadpoints_phi,
+    plasma_quadpoints_theta,
+    winding_quadpoints_phi,
+    winding_quadpoints_theta,
+    quadpoints_phi,
+    quadpoints_theta,
+    plasma_coil_distance,
+    winding_dofs,
+):
+    """
+    Resolves default quadrature points and validates winding surface inputs.
+
+    Returns
+    -------
+    plasma_quadpoints_phi, plasma_quadpoints_theta,
+    winding_quadpoints_phi, winding_quadpoints_theta,
+    quadpoints_phi, quadpoints_theta
+    """
+    if Bnormal_plasma is not None:
+        if jnp.ndim(Bnormal_plasma) != 2:
+            raise TypeError(
+                f'Bnormal_plasma must be a 2D array-like, got shape {jnp.shape(Bnormal_plasma)}.'
+            )
+        if plasma_quadpoints_phi is not None or plasma_quadpoints_theta is not None:
+            warnings.warn(
+                'Bnormal_plasma provided, inputs for plasma_quadpoints_phi '
+                'and plasma_quadpoints_theta will be ignored.'
+            )
+        plasma_quadpoints_phi = jnp.linspace(0, 1/nfp, Bnormal_plasma.shape[0], endpoint=False)
+        plasma_quadpoints_theta = jnp.linspace(0, 1, Bnormal_plasma.shape[1], endpoint=False)
+    else:
+        if plasma_quadpoints_phi is None:
+            plasma_quadpoints_phi = jnp.linspace(0, 1/nfp, 32, endpoint=False)
+        if plasma_quadpoints_theta is None:
+            plasma_quadpoints_theta = jnp.linspace(0, 1, 34, endpoint=False)
+    if winding_quadpoints_phi is None:
+        winding_quadpoints_phi = jnp.linspace(0, 1, 32*nfp, endpoint=False)
+    if winding_quadpoints_theta is None:
+        winding_quadpoints_theta = jnp.linspace(0, 1, 34, endpoint=False)
+    if quadpoints_phi is None:
+        quadpoints_phi = winding_quadpoints_phi[:len(winding_quadpoints_phi)//nfp]
+    if quadpoints_theta is None:
+        quadpoints_theta = winding_quadpoints_theta
+    if plasma_coil_distance is None and winding_dofs is None:
+        raise ValueError('At least one of plasma_coil_distance and winding_dofs must be provided.')
+    if plasma_coil_distance is not None and winding_dofs is not None:
+        raise ValueError('Only one of plasma_coil_distance and winding_dofs can be provided.')
+    return (
+        plasma_quadpoints_phi, plasma_quadpoints_theta,
+        winding_quadpoints_phi, winding_quadpoints_theta,
+        quadpoints_phi, quadpoints_theta,
+    )
 
 def get_quantity(func_name: str):
     r'''

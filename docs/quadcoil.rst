@@ -45,10 +45,10 @@ quadcoil.solver module
    :show-inheritance:
    :undoc-members:
 
-quadcoil.surfacerzfourier\_jax module
--------------------------------------
+quadcoil.surface module
+-----------------------
 
-.. automodule:: quadcoil.surfacerzfourier_jax
+.. automodule:: quadcoil.surface
    :members:
    :show-inheritance:
    :undoc-members:

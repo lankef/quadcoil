@@ -1,20 +1,20 @@
 from quadcoil import (
     merge_callables, get_quantity,
     gen_winding_surface_arc, 
-    gen_winding_surface_atan,
-    gen_winding_surface_offset,
     SurfaceRZFourierJAX, QuadcoilParams, 
     solve_constrained, run_opt_lbfgs,
     is_ndarray, tree_len,
-    gplus_hard, gplus_elu, gplus_softplus,
+    gplus_hard,
 )
-from quadcoil.wrapper import _parse_objectives, _parse_constraints
+
+from quadcoil.wrapper import _parse_objectives, _parse_constraints, _resolve_quadpoints
 from functools import partial
 from quadcoil.quantity import Bnormal
 from jax import jacfwd, jacrev, jvp, jit, hessian, block_until_ready, debug, flatten_util, eval_shape
 from jax import config as config_jax
 import jax.numpy as jnp
 import lineax as lx
+import warnings
 config_jax.update('jax_enable_x64', True)
 
 tol_default = 1e-6
@@ -188,9 +188,11 @@ def quadcoil(
     plasma_stellsym : bool, default=True
         (Static) Whether the plasma has stellarator symmetry.
     plasma_quadpoints_phi : ndarray, shape (nphi_plasma,), optional, default=None
-        (Traced) Will be set to ``jnp.linspace(0, 1/nfp, 32, endpoint=False)`` by default.
+        (Traced) Will be set based on the shape of ``Bnormal_plasma`` if it's provided, 
+        or default to ``jnp.linspace(0, 1/nfp, 32, endpoint=False)`` otherwise.
     plasma_quadpoints_theta : ndarray, shape (ntheta_plasma,), optional, default=None
-        (Traced) Will be set to ``jnp.linspace(0, 1, 34, endpoint=False)`` by default.
+        (Traced) Will be set based on the shape of ``Bnormal_plasma`` if it's provided, 
+        or default to ``jnp.linspace(0, 1, 34, endpoint=False)`` otherwise.
     Bnormal_plasma : ndarray, shape (nphi, ntheta), optional, default=None
         (Traced) The magnetic field distribution on the plasma surface. Will be filled with zeros by default.
     plasma_coil_distance : float, optional, default=None
@@ -267,27 +269,22 @@ def quadcoil(
     '''
     # ----- Default parameters -----
     # ess_alpha = jnp.abs(ess_alpha)
-    if plasma_quadpoints_phi is None:
-        plasma_quadpoints_phi = jnp.linspace(0, 1/nfp, 32, endpoint=False)
-    if plasma_quadpoints_theta is None:
-        plasma_quadpoints_theta = jnp.linspace(0, 1, 34, endpoint=False)
-    if winding_quadpoints_phi is None:
-        winding_quadpoints_phi = jnp.linspace(0, 1, 32*nfp, endpoint=False)
-    if winding_quadpoints_theta is None:
-        winding_quadpoints_theta = jnp.linspace(0, 1, 34, endpoint=False)
-    if quadpoints_phi is None:
-        len_phi = len(winding_quadpoints_phi)//nfp
-        quadpoints_phi = winding_quadpoints_phi[:len_phi]
-    else:
-        quadpoints_phi = quadpoints_phi
-    if quadpoints_theta is None:
-        quadpoints_theta = winding_quadpoints_theta
-    else:
-        quadpoints_theta = quadpoints_theta
-    if plasma_coil_distance is None and winding_dofs is None:
-         raise ValueError('At least one of plasma_coil_distance and winding_dofs must be provided.')
-    if plasma_coil_distance is not None and winding_dofs is not None:
-         raise ValueError('Only one of plasma_coil_distance and winding_dofs can be provided.')
+    (
+        plasma_quadpoints_phi, plasma_quadpoints_theta,
+        winding_quadpoints_phi, winding_quadpoints_theta,
+        quadpoints_phi, quadpoints_theta,
+    ) = _resolve_quadpoints(
+        nfp=nfp,
+        Bnormal_plasma=Bnormal_plasma,
+        plasma_quadpoints_phi=plasma_quadpoints_phi,
+        plasma_quadpoints_theta=plasma_quadpoints_theta,
+        winding_quadpoints_phi=winding_quadpoints_phi,
+        winding_quadpoints_theta=winding_quadpoints_theta,
+        quadpoints_phi=quadpoints_phi,
+        quadpoints_theta=quadpoints_theta,
+        plasma_coil_distance=plasma_coil_distance,
+        winding_dofs=winding_dofs,
+    )
     if isinstance(metric_name, str):
         metric_name = (metric_name,)
     if implicit_linear_solver is None:

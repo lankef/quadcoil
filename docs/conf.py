@@ -23,6 +23,17 @@ extensions = [
     "sphinx.ext.napoleon",     # Support Google/Numpy docstrings
     'sphinx.ext.todo',
 ]
+
+autodoc_mock_imports = [
+    'numpy',
+    'scipy',
+    'jax',
+    'lineax',
+    'optax',
+    'simsopt',
+    'desc',
+    'matplotlib',
+]
 templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 

@@ -4,7 +4,7 @@ import jax
 from jax import jit, lax, vmap
 from jax.lax import scan
 from functools import partial
-from .surfacerzfourier_jax import dof_to_rz_op, SurfaceRZFourierJAX
+from .surface import dof_to_rz_op, SurfaceRZFourierJAX
 from .math_utils import safe_linear_solve
 
 
@@ -45,15 +45,6 @@ def fit_surfacerzfourier(
     b_lstsq = b_lstsq.flatten()
     # tikhonov regularization for higher harmonics
     lam = lam_tikhonov * jnp.diag(m_2_n_2)
-    # # The lineax call fulfills the same purpose as the following:
-    # # dofs_expand, resid, rank, s = jnp.linalg.lstsq(A_lstsq.T.dot(A_lstsq) + lam, A_lstsq.T.dot(b_lstsq))
-    # # but is faster and more robust to gradients.
-    # A_reg =  jnp.nan_to_num(A_lstsq.T.dot(A_lstsq) + lam, nan=0.0, posinf=0.0, neginf=0.0)
-    # b_reg =  jnp.nan_to_num(A_lstsq.T.dot(b_lstsq), nan=0.0, posinf=0.0, neginf=0.0)
-    # operator = lx.MatrixLinearOperator(A_reg)
-    # # solver = lx.QR()  # or lx.AutoLinearSolver(well_posed=None)
-    # solver = lx.AutoLinearSolver(well_posed=False)
-    # solution = lx.linear_solve(operator, b_reg, solver).value
     solution = safe_linear_solve(
         A=A_lstsq.T.dot(A_lstsq) + lam,
         b=A_lstsq.T.dot(b_lstsq),
@@ -126,7 +117,7 @@ def gen_winding_surface_offset(
 
     return(dofs_expand)
 
-def get_line_intersection(p0, p1, p2, p3):
+def _get_line_intersection(p0, p1, p2, p3):
     # Detects if two line segments given by 
     # p0 (x, y), p1 (x, y);
     # p1 (x, y), p2 (x, y)
@@ -141,7 +132,7 @@ def get_line_intersection(p0, p1, p2, p3):
     return (s >= 0) & (s <= 1) & (t >= 0) & (t <= 1) & (denom!=0)
 
 # @jit
-def polygon_self_intersection(r_pol, z_pol):
+def _polygon_self_intersection(r_pol, z_pol):
     len_theta = len(r_pol)
     # Takes a planar polygon and removes self-intersecting regions.
     # Returns a weight array that is 1 for every point where the 
@@ -161,7 +152,7 @@ def polygon_self_intersection(r_pol, z_pol):
             index_a, r0z0r1z1, index_b = carry
             # Is the index of the second line segment
             # one greater or lower than that of the current line segment?
-            # If so, get_line_intersection will throw a False positive
+            # If so, _get_line_intersection will throw a False positive
             # and has to be disregarded.
             is_overlapping = (
                 (index_a == index_b) 
@@ -173,7 +164,7 @@ def polygon_self_intersection(r_pol, z_pol):
             p2_i = x[:2]
             p3_i = x[2:]
             # True when intersection is present
-            is_intersect = get_line_intersection(p0_i, p1_i, p2_i, p3_i)
+            is_intersect = _get_line_intersection(p0_i, p1_i, p2_i, p3_i)
             return (index_a, r0z0r1z1, index_b+1), is_intersect & jnp.logical_not(is_overlapping)
         _, is_intersect = scan(inner_loop, (index_a, x_outer, 0), p0p1)
         has_self_intersection = jnp.any(is_intersect)
@@ -197,7 +188,7 @@ def polygon_self_intersection(r_pol, z_pol):
     weight = jnp.where(jnp.roll(weight, 1)==0, 0, 1)
     return(weight)
 
-def graham_scan(r_expand, z_expand):
+def _graham_scan(r_expand, z_expand):
     N = r_expand.shape[0]
 
     # Step 1: Find P0 (lowest z, then leftmost r)
@@ -340,7 +331,7 @@ def gen_winding_surface_atan(
     r_expand = jnp.sqrt(gamma_uniform[:, :, 1]**2 + gamma_uniform[:, :, 0]**2)
     z_expand = gamma_uniform[:, :, 2]
     ''' Removing self-intersection '''
-    weight_remove_invalid = vmap(polygon_self_intersection, in_axes=0)(r_expand, z_expand)
+    weight_remove_invalid = vmap(_polygon_self_intersection, in_axes=0)(r_expand, z_expand)
     ''' Fitting surface'''
     theta_atan = jnp.arctan2(z_expand-z_center[:, None], r_expand-r_center[:, None])/jnp.pi/2
     theta_atan = jnp.where(theta_atan>0, theta_atan, theta_atan+1)
@@ -421,9 +412,9 @@ def gen_winding_surface_arc(
     z_expand = gamma_uniform[:, :, 2]
     ''' Removing self-intersection '''
     if rule == 'self-intersection':
-        rule_f = polygon_self_intersection
+        rule_f = _polygon_self_intersection
     elif rule == 'hull':
-        rule_f = graham_scan
+        rule_f = _graham_scan
     else:
         raise ValueError('rule must to be \'intersection\' '
                          'or \'hull\'. The current value is: '+ rule)
