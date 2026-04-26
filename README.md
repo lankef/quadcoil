@@ -14,3 +14,15 @@ In other words, it's a "winding surface" code. However, unlike other winding sur
 - Calculates derivatives with respect to plasma shape, winding surface shape, objective weights, and constraint thresholds.
 
 Read QUADCOIL documentations [here](https://quadcoil.readthedocs.io/en/latest/index.html). 
+
+## Changelog
+
+### In progress
+
+This is the first changelog of QUADCOIL. 
+
+Based on feedbacks from ISHW QUADCOIL is currently under a major revision to add:
+- Multiple surface types (SurfaceXYZTensor)
+- PDIPM solver and adjoint differentiation based on KKT conditions
+- Improved winding surface generator to detect poloidal self-intersections. Will be 
+based on the Jacobian of the uniform-offset surfaces set.
