@@ -1,6 +1,5 @@
 from quadcoil import (
     merge_callables, get_quantity,
-    gen_winding_surface_arc, 
     SurfaceRZFourierJAX, QuadcoilParams, 
     solve_constrained, run_opt_lbfgs,
     is_ndarray, tree_len,
@@ -34,7 +33,8 @@ QUADCOIL_STATIC_ARGNAMES=[
     'plasma_ntor',
     'plasma_stellsym',
     # - WS options
-    'winding_surface_generator',
+    'surface_type',
+    'offset_smoothing',
     'winding_mpol',
     'winding_ntor',
     'winding_stellsym',
@@ -91,7 +91,8 @@ def quadcoil(
 
     # - Winding parameters (offset)
     plasma_coil_distance:float=None, # Documented
-    winding_surface_generator=gen_winding_surface_arc, # Documented
+    surface_type:str='SurfaceRZFourier', # Documented
+    offset_smoothing:str='intersection', # Documented
 
     # - Winding parameters (Providing surface)
     winding_dofs=None, # Documented
@@ -197,11 +198,14 @@ def quadcoil(
         (Traced) The magnetic field distribution on the plasma surface. Will be filled with zeros by default.
     plasma_coil_distance : float, optional, default=None
         (Traced) The coil-plasma distance. Is set to ``None`` by default, but a value must be provided if ``winding_dofs`` is not provided.
-    winding_surface_generator : callable, optional, default=gen_winding_surface_atan
-        (Static) The winding surface generator.
+    surface_type : str, optional, default='SurfaceRZFourier'
+        (Static) The surface type string (reserved for future use).
+    offset_smoothing : str, optional, default='intersection'
+        (Static) Self-intersection removal strategy when auto-generating the winding surface.
+        One of ``'none'``, ``'intersection'``, or ``'hull'``.
     winding_dofs : ndarray, shape (ndof_winding,)
         (Traced) The winding surface degrees of freedom. Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()`` convention.
-        Will be generated using ``winding_surface_generator`` if ``plasma_coil_distance`` is provided. Must be provided otherwise.
+        Will be generated using ``offset_smoothing`` if ``plasma_coil_distance`` is provided. Must be provided otherwise.
     winding_mpol : int, optional, default=6
         (Static) The number of poloidal Fourier harmonics in the winding surface.
     winding_ntor : int, optional, default=5
@@ -423,12 +427,11 @@ def quadcoil(
         # winding surface is not provided. 
         # Its dofs will not be among x.
         else:
-            winding_dofs_temp = winding_surface_generator(
-                plasma_gamma=plasma_surface.gamma(), 
-                d_expand=y_dict['plasma_coil_distance'], 
-                nfp=plasma_surface.nfp, stellsym=plasma_surface.stellsym,
+            winding_dofs_temp = plasma_surface.gen_offset_dofs(
+                d_expand=y_dict['plasma_coil_distance'],
                 mpol=winding_mpol,
                 ntor=winding_ntor,
+                smoothing=offset_smoothing,
             )
             winding_surface = SurfaceRZFourierJAX(
                 nfp=nfp,
