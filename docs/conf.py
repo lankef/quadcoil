@@ -24,7 +24,7 @@ extensions = [
     'sphinx.ext.todo',
 ]
 templates_path = ['_templates']
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
+exclude_patterns = ['_build', '.ipynb_checkpoints', 'Thumbs.db', '.DS_Store']
 
 language = 'en'
 

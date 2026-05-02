@@ -13,14 +13,14 @@ A minimal example can be found in ``examples/simple_example.ipynb``:
 .. code-block:: python
   
     from quadcoil import quadcoil
-    from simsopt import load
+    from simsopt.mhd import Vmec
 
     # Loading an equilibrium's boundary using simsopt
     equil_qs = Vmec('wout_LandremanPaul2021_QA_lowres.nc', keep_all_files=True)
     plasma_surface = equil_qs.boundary
     net_poloidal_current_amperes = equil_qs.external_current()
 
-    nescoil_out_dict, nescoil_qp, nescoil_phi_mn, _ = quadcoil(
+    nescoil_out_dict, nescoil_qp, nescoil_dofs, _ = quadcoil(
         nfp=plasma_surface.nfp,
         stellsym=plasma_surface.stellsym,
         mpol=4, # 4 poloidal harmonics for the current potential
@@ -34,32 +34,33 @@ A minimal example can be found in ``examples/simple_example.ipynb``:
         # Set the objective to 
         # f_B
         objective_name='f_B',
-        objective_weight=None,
+        objective_weight=1.,
         objective_unit=None,
         # Set the output metrics to f_B and f_K
-        metric_name=('f_B', 'f_K')
+        metric_name=('f_B', 'f_K'),
     )
 
     # Plotting the solution
-    from quadcoil.objective import Phi_with_net_current
+    from quadcoil.quantity import Phi_with_net_current
     import matplotlib.pyplot as plt
     
     plt.contour(
         nescoil_qp.quadpoints_phi, 
         nescoil_qp.quadpoints_theta,
-        Phi_with_net_current(nescoil_qp, nescoil_phi_mn), 
+        Phi_with_net_current(nescoil_qp, nescoil_dofs), 
         levels=40
     )
 
-Here, we solved the NESCOIL problem (minimizing field error with no additional constraints) on the Landreman-Paul QS configuration. This tutorial will explain how to set up a more compelex coil optimizer/proxy with QUADCOIL using ``quadcoil.quadcoil()``, by going over all input parameters and their physical meaning. These parameters fall in 7 categories:
+Here, we solved the NESCOIL problem (minimizing field error with no additional constraints) on the Landreman-Paul QS configuration. This tutorial will explain how to set up a more complex coil optimizer/proxy with QUADCOIL using ``quadcoil.quadcoil()``, by going over all input parameters and their physical meaning. These parameters fall in 8 categories:
 
 1. Plasma boundary
 2. Sheet current properties (net current, resolution, ...)
 3. Coil-plasma distance or winding surface
 4. Objective functions for coil optimization. Encodes engineering requirements.
 5. Constraints for coil optimization. Encodes engineering requirements.
-6. Metrics for evaluating the coil set satisfying these requirements.
-7. (Optional) Augmented Lagrangial options.
+6. Important numerical settings.
+7. Metrics for evaluating the coil set satisfying these requirements.
+8. (Optional) Augmented Lagrangial options.
 
 For readability, we label:
 
@@ -253,7 +254,7 @@ As we will see below, every objective and constraint **must be accompanied** by 
 Single-objective
 ~~~~~~~~~~~~~~~~
 
-In this mode, QUADDCOIL will minimize one quantity selected from the list. To select single-objective mode, pass a single ``str`` as the ``objective_name``.
+In this mode, QUADCOIL will minimize one quantity selected from the list. To select single-objective mode, pass a single ``str`` as the ``objective_name``.
 
 .. list-table::
    :header-rows: 1
@@ -378,13 +379,14 @@ convert the non-smooth problem to a smooth problem. The currently supported valu
 
 .. list-table::
    :header-rows: 1
+
    * - Value for ``smoothing``
      - Type
      - Advantages
      - Disadvantages
    * - ``'slack'``
-     - Exact conversion using slasck variables.
-     - More accurate optimimum.
+     - Exact conversion using slack variables.
+     - More accurate optimum.
      - Inaccurate adjoint differentiation. Slower, higher memory usage, and high constraint count.
    * - ``'approx'``
      - Approximate conversion by replacing maximum with LogSumExp functions.
@@ -437,12 +439,8 @@ The augmented Lagrangian solver can be fine-tuned for a specific problem if the 
      - The *c* factor. Please see *Constrained Optimization and Lagrange* *Multiplier Methods*, Chapter 3.
    * - ``c_growth_rate``
      - ``float``, traced
-     - ``1.2``
+     - ``2.``
      - The growth rate of the *c* factor.
-   * - ``fstop_outer``
-     - ``float``, traced
-     - ``1e-6``
-     - :math:`f_{obj}(\Phi_{sv})` stopping criterion of the outer augmented Lagrangian loop. Terminates the convergence rate falls below this number.
    * - ``xstop_outer``
      - ``float``, traced
      - ``1e-6``
@@ -471,5 +469,21 @@ The augmented Lagrangian solver can be fine-tuned for a specific problem if the 
      - ``int``, static
      - ``1000``
      - The maximum number of inner iterations permitted.
+   * - ``max_linesearch_steps``
+     - ``int``, static
+     - ``20``
+     - The maximum number of steps in the LBFGS line search.
+   * - ``svtol``
+     - ``float``, traced
+     - ``1e-7``
+     - Singular-value cut-off threshold during preconditioning.
+   * - ``merge_constraints``
+     - ``bool``, static
+     - ``False``
+     - When ``True``, combines compatible constraint evaluations before solving.
+   * - ``implicit_linear_solver``
+     - ``lineax.AbstractLinearSolver`` or ``None``, static
+     - ``None``
+     - Linear solver used for implicit differentiation.
 
 Thus far, we have successfully run an instance of QUADCOIL. The next section will explain how to interpret the outputs.

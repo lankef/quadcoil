@@ -14,3 +14,24 @@ In other words, it's a "winding surface" code. However, unlike other winding sur
 - Calculates derivatives with respect to plasma shape, winding surface shape, objective weights, and constraint thresholds.
 
 Read QUADCOIL documentations [here](https://quadcoil.readthedocs.io/en/latest/index.html). 
+
+## Release / PyPI
+
+Before publishing, update `version` in `pyproject.toml` and record the release hash with:
+
+```bash
+git rev-parse main
+```
+
+Build and validate:
+
+```bash
+python -m build
+twine check dist/*
+```
+
+Upload (recommend TestPyPI first, then PyPI):
+
+```bash
+twine upload dist/*
+```

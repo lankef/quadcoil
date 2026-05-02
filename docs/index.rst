@@ -61,6 +61,8 @@ Publications
    tutorial_inputs
    tutorial_outputs
    tutorial_to_desc
+   tutorial_misc_outputs
    tutorial_to_simsopt
    quantity    
    quadcoil
+   version_history

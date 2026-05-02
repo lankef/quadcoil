@@ -6,18 +6,18 @@ This package handles plotting, file input/output, and provides interfaces for DE
 Submodules
 ----------
 
-quadcoil.io.plotting module
----------------------------
+quadcoil.io.coil\_cutting module
+--------------------------------
 
-.. automodule:: quadcoil.io.plotting
+.. automodule:: quadcoil.io.coil_cutting
    :members:
    :show-inheritance:
    :undoc-members:
 
-quadcoil.io.file module
----------------------------
+quadcoil.io.focus module
+------------------------
 
-.. automodule:: quadcoil.io.file
+.. automodule:: quadcoil.io.focus
    :members:
    :show-inheritance:
    :undoc-members:

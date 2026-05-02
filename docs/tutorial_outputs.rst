@@ -9,7 +9,7 @@ We illustrate this with the example in ``example/topology.ipynb``:
     # First, test with the NESCOIL problem, auto-generating WS.
     print('Running quadcoil, with auto-generated '\
           'winding surface and K_theta constraint.')
-    out_dict, qp, phi_mn, status = quadcoil(
+    out_dict, qp, dofs_opt, solve_results = quadcoil(
         nfp=cp.nfp,
         stellsym=cp.stellsym,
         mpol=cp.mpol,
@@ -30,9 +30,7 @@ We illustrate this with the example in ``example/topology.ipynb``:
         # Set the output metrics to f_B and f_K
         metric_name=('f_B', 'f_K'),
         maxiter_inner=1500,
-        maxiter_outer=10,
-        ftol_inner=0,
-        xtol_inner=0,
+        maxiter_tot=10000,
     )
 
 This produces a low-field-error coil set consisting of purely poloidal coils by
@@ -43,7 +41,7 @@ preventing the current from changing sign in the poloidal (:math:`\theta`) direc
    \Phi^*_{sv} = &\text{argmin}_{\Phi_{sv}} f_B(\Phi_{sv}),\\
    &\text{subject to } K_\theta\geq0.
 
-The coil quality matric we chose are the integrated field error :math:`f_B`
+The coil quality metrics we chose are the integrated field error :math:`f_B`
 and the integrated current density :math:`f_K`. 
 
 Now, we will go over the 4 outputs from ``quadcoil.quadcoil`` one by one.
@@ -90,25 +88,34 @@ In this case, ``out_dict`` will not have the ``'grad'`` layer.
 
 ``qp`` - Problem configurations
 ---------------------------------------------------------------------
-``qp : QuadcoilParams`` is an objects that contains information on the plasma boundary, 
-winding surface, net currents and resolutions. Together, ``qp`` and ``phi_mn`` contains 
-all informations required to evaluate any physical quantities available in ``quadcoil.objective``.
-For how to do this, see :ref:`available_quantities`.
-It **does not** contain the objective and constraint choices. 
+``qp : QuadcoilParams`` is an object that contains information on the plasma boundary, 
+winding surface, net currents, external normal field and resolutions. Together, ``qp`` and ``dofs_opt`` contain 
+all information required to evaluate any physical quantities available in ``quadcoil.quantity``.
+For a detailed list of supported quantities, see :ref:`available_quantities`.
+``qp`` **does not** contain the objective and constraint choices. 
 
-``qp`` can be used to reconstruct the configuration in Simsopt. 
-``qp.winding_surface.to_simsopt()`` and ``qp.winding_surface.to_simsopt()`` 
-exports both surfaces as ``simsopt.geo.SurfaceRZFourier``.
+``qp`` Contains 3 surfaces. ``qp.plasma_surface`` is a QUADCOIL surface representing
+the plasma surface. It contains only one field period. ``qp.eval_surface`` and ``qp.winding_surface``
+are two copies of the same winding surfaces, with one and all field periods. 
+``qp.eval_surface`` stores the quadrature points used to evaluate quadcoil objectives.
+``qp.winding_surface`` stores the quadrature points used to evaluate the Biot-Savart source integrals.
 
-``phi_mn`` - :math:`\Phi_{sv}` in Fourier representation 
+All three surfaces can be exported to Simsopt or DESC by calling ``<surface>.to_simsopt()`` 
+and ``<surface>.to_desc()``.
+
+``dofs_opt`` - Optimized degrees of freedom
 ---------------------------------------------------------------------
-``phi_mn`` is an ``ndarray`` storing the Fourier coefficients of :math:`\Phi_{sv}`.
-It uses the same convention as ``simsopt.field.CurrentPotentialFourier`` in the ``regcoil``
-branch of simsopt. 
+``dofs_opt`` is a dictionary storing the optimized QUADCOIL degrees of freedom.
+The ``'phi'`` entry contains the Fourier coefficients of :math:`\Phi_{sv}`. It
+uses the same convention as ``simsopt.field.CurrentPotentialFourier`` in the
+``regcoil`` branch of Simsopt. 
 
-Together, ``qp`` and ``phi_mn`` contains all informations required to evaluate any 
-physical quantities available in ``quadcoil.objective``. 
+Together, ``qp`` and ``dofs_opt`` contain all information required to evaluate any 
+physical quantities available in ``quadcoil.quantity``. 
 
-``status`` - Optimizer end state
+``solve_results`` - Optimizer end state
 ---------------------------------------------------------------------
+``solve_results`` contains the optimizer output from the QUADCOIL solve. Its
+exact contents depend on whether the solve was constrained and whether
+``value_only=True`` was used.
 
