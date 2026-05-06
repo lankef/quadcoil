@@ -1,6 +1,6 @@
 import jax.numpy as jnp
 import numpy as np
-from .surfacerzfourier_jax import SurfaceRZFourierJAX
+from .surface import SurfaceRZFourierJAX
 from .math_utils import sin_or_cos, norm_helper
 from jax import jit, tree_util
 from functools import lru_cache, partial
