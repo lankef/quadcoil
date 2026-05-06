@@ -12,7 +12,7 @@ simply pass their names into ``quadcoil.quadcoil``.
 
 .. code-block:: python
 
-    phi_mn, out_dict, qp, status = quadcoil(
+    out_dict, qp, dofs_opt, solve_results = quadcoil(
         ...
         objective_name=('f_B',),
         constraint_name=('K_theta',),
@@ -29,12 +29,12 @@ directly imported as functions from ``quadcoil.quantity``:
 .. code-block:: python
 
     from quadcoil.quantity import K_theta
-    print(K_theta(qp, phi_mn))
+    print(K_theta(qp, dofs_opt))
 
 All members of ``quadcoil.quantity`` require the same inputs:
 
 - ``qp : QuadcoilParams`` - Stores the plasma and winding surface information.
-- ``phi_mn : ndarray`` - The Fourier Coefficients of :math:`\Phi_{sv}` produced by ``quadcoil.quadcoil``.
+- ``dofs_opt : dict`` - The optimized degrees of freedom produced by ``quadcoil.quadcoil``.
 
 Notation
 ---------
@@ -68,6 +68,10 @@ These objectives are related to the magnetic field on the plasma surface:
      - :math:`\mathbf{B}\cdot\hat{\mathbf{n}}`
      - :math:`(n_\phi^P, n_\theta^P)`
      - The normal magnetic field on the plasma surface.
+   * - ``'Bnormal2'``
+     - :math:`(\mathbf{B}\cdot\hat{\mathbf{n}})^2`
+     - :math:`(n_\phi^P, n_\theta^P)`
+     - The squared normal field error on the plasma surface.
    * - ``'f_B'``
      - :math:`f_B\equiv\frac{n_{FP}}{2}\oint_\text{plasma} da \|\mathbf{B}\cdot\hat{\mathbf{n}}\|^2`
      - Scalar
@@ -76,14 +80,14 @@ These objectives are related to the magnetic field on the plasma surface:
      - :math:`\frac{f_B}{f_B(\Phi_{sv}=0)}`
      - Scalar
      - :math:`f_B`, normalized by its value with only the net toroidal and poloidal currents.
-   * - ``'f_max_Bnormal_abs'``
+   * - ``'f_max_Bnormal'``
      - :math:`\max_\text{plasma surface} \|\mathbf{B}\cdot\hat{\mathbf{n}}\|`
      - Scalar
-     - The maximum normal magnetic field strength.
+     - The maximum normal field error.
    * - ``'f_max_Bnormal2'``
      - :math:`\max_\text{plasma surface} \|\mathbf{B}\cdot\hat{\mathbf{n}}\|^2`
      - Scalar
-     - The maximum normal magnetic field strength squared. A convex quadratic constraint may behave better than a linear constraint.
+     - The maximum normal field error squared. A convex quadratic constraint may behave better than a linear constraint.
 
 Current Magnitude and Sign
 --------------------------
@@ -104,7 +108,7 @@ These objectives are related to the magnitude and sign of the sheet current :mat
    * - ``'K2'``
      - :math:`\|\mathbf{K}\|^2`
      - :math:`(n_\phi^E, n_\theta^E)`
-     - The current strength on the winding surface.
+     - The current density squared on the winding surface.
    * - ``'K_theta'``
      - :math:`K_\theta`
      - :math:`(n_\phi^E, n_\theta^E)`
@@ -112,11 +116,15 @@ These objectives are related to the magnitude and sign of the sheet current :mat
    * - ``'f_K'``
      - :math:`\frac{n_{FP}}{2}\oint_\text{WS} da \|\mathbf{K}\|^2`
      - Scalar
-     - The integrated magnetic field strength on the winding surface. Also the REGCOIL regularization factor.
+     - The integrated current density squared on the winding surface. Also the REGCOIL regularization factor.
    * - ``'f_max_K2'``
      - :math:`\max_\text{WS}\|K\|_2^2`
      - Scalar
-     - The integrated magnetic field strength on the winding surface. Also the REGCOIL regularization factor.
+     - The maximum current density squared on the winding surface.
+   * - ``'f_huber_K'``
+     - Pseudo Huber penalty on :math:`\mathbf{K}`
+     - Scalar
+     - A smooth approximation of the surface L-1 norm of :math:`|\mathbf{K}|`. Promotes sparsity in :math:`\mathbf{K}`.
 
 Current Curvature
 -----------------
@@ -135,13 +143,13 @@ These objectives are related to the curvature of the sheet current:
      - :math:`(n_\phi^E, n_\theta^E, 3)`
      - The :math:`(x, y, z)` components of :math:`\mathbf{K}\cdot\nabla\mathbf{K}` on the winding surface.
    * - ``'K_dot_grad_K_cyl'``
-     - :math:`(\mathbf{K}\cdot\nabla\mathbf{K})_{(R, \Phi, Z)}`
+     - :math:`(\mathbf{K}\cdot\nabla\mathbf{K})_{(R, \phi, Z)}`
      - :math:`(n_\phi^E, n_\theta^E, 3)`
-     - The :math:`(R, \Phi, Z)` components of :math:`\mathbf{K}\cdot\nabla\mathbf{K}` on the winding surface.
+     - The :math:`(R, \phi, Z)` components of :math:`\mathbf{K}\cdot\nabla\mathbf{K}` on the winding surface.
    * - ``'f_max_K_dot_grad_K_cyl'``
-     - :math:`\max_\text{WS}\|(\mathbf{K}\cdot\nabla\mathbf{K})_{(R, \Phi, Z)}\|_\infty`
+     - :math:`\max_\text{WS}\|(\mathbf{K}\cdot\nabla\mathbf{K})_{(R, \phi, Z)}\|_\infty`
      - Scalar
-     - Maximum :math:`(R, \Phi, Z)` component of :math:`\mathbf{K}\cdot\nabla\mathbf{K}` over the winding surface.
+     - Maximum :math:`(R, \phi, Z)` component of :math:`\mathbf{K}\cdot\nabla\mathbf{K}` over the winding surface.
 
 Dipole
 ------
@@ -159,14 +167,14 @@ These objectives are related to dipole optimization:
      - :math:`\Phi_{sv}`
      - :math:`(n_\phi^E, n_\theta^E)`
      - The dipole density distribution on the winding surface. Also referred to as the single valued component of the current potential.
-   * - ``'Phi_abs'``
-     - :math:`\|\Phi_{sv}\|`
-     - :math:`(n_\phi^E, n_\theta^E)`
-     - The absolute value of the dipole density distribution on the winding surface.
    * - ``'Phi2'``
      - :math:`\|\Phi_{sv}\|^2`
      - :math:`(n_\phi^E, n_\theta^E)`
      - The squared dipole density distribution on the winding surface.
+   * - ``'f_Phi'``
+     - :math:`\frac{n_{FP}}{2}\oint_\text{WS} da\ \|\Phi_{sv}\|^2`
+     - Scalar
+     - The integrated squared dipole density on the winding surface.
    * - ``'Phi_with_net_current'``
      - :math:`\Phi = \Phi_{sv} + \frac{G\phi'}{2\pi} + \frac{I\theta'}{2\pi}`
      - :math:`(n_\phi^E, n_\theta^E)`
@@ -183,8 +191,32 @@ These objectives are related to dipole optimization:
      - :math:`\max_\text{WS}\|\Phi_{sv}\|^2`
      - Scalar
      - The maximum dipole density squared on the winding surface. A convex quadratic constraint may behave better than a linear constraint.
+   * - ``'f_max_Phi4'``
+     - :math:`\max_\text{WS}\|\Phi_{sv}\|^4`
+     - Scalar
+     - The maximum fourth power of the dipole density on the winding surface. Experimental. Added to test the convergence behavior of high-order convex terms.
 
 Lorentz Force
 -------------
 
-Lorentz force is not yet fully implemented.
+These objectives are related to the self-force of the sheet current. The force is reported in :math:`(R, \phi, Z)` components on the winding surface.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Name
+     - Formula
+     - Output Shape
+     - Description
+   * - ``'f_max_force_cyl'``
+     - :math:`\max_\text{WS}\|\mathbf{F}_{(R, \phi, Z)}\|_\infty`
+     - Scalar
+     - Maximum :math:`(R, \phi, Z)` component of the sheet-current self-force over the winding surface.
+   * - ``'f_l1_force_cyl'``
+     - :math:`\int_\text{WS} dA\ \|\mathbf{F}_{(R, \phi, Z)}\|_1`
+     - Scalar
+     - L1 penalty on the :math:`(R, \phi, Z)` components of the sheet-current self-force.
+   * - ``'f_max_force2_cyl'``
+     - :math:`\max_\text{WS}\|\mathbf{F}_{(R, \phi, Z)}\|_\infty^2`
+     - Scalar
+     - Maximum squared :math:`(R, \phi, Z)` component of the sheet-current self-force over the winding surface. Experimental. Added to test the convergence behavior of high-order non-convex terms.

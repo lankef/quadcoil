@@ -6,16 +6,8 @@ This package handles file input/output, coil cutting, and provides interfaces fo
 Submodules
 ----------
 
-quadcoil.io.file module
------------------------
-
-.. automodule:: quadcoil.io.file
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
 quadcoil.io.coil\_cutting module
----------------------------------
+--------------------------------
 
 .. automodule:: quadcoil.io.coil_cutting
    :members:
@@ -23,7 +15,7 @@ quadcoil.io.coil\_cutting module
    :undoc-members:
 
 quadcoil.io.focus module
--------------------------
+------------------------
 
 .. automodule:: quadcoil.io.focus
    :members:

@@ -8,7 +8,7 @@ version = "0.1.0"
 authors = [
   { name="lanke_fu", email="ffu@pppl.gov" },
 ]
-description = "QUADCOIL, a global stellarator coil optimizer and coil complexity proxy"
+description = "QUADCOIL, a global stellarator coil optimizer and coil complexity proxy."
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = ["numpy", "jax >= 0.5.0", "optax >= 0.2.5", "lineax >= 0.0.1", "scipy", "matplotlib"]
@@ -16,7 +16,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-license = { text = "MIT" }
+license = "MIT"
 
 [project.urls]
 Homepage = "https://github.com/lankef/quadcoil"
