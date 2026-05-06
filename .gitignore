@@ -1,11 +1,10 @@
 docs/_build/
+dist/
+build/
+*.egg-info/
 *.pyc
+__pycache__/
+.ipynb_checkpoints/
 *checkpoint.py
 *checkpoint.ipynb
-src/quadcoil.egg-info/
-__pycache__/
-src/quadcoil/.ipynb_checkpoints/surfacerzfourier_jax-checkpoint.py
-.gitignore
-src/quadcoil/io/.ipynb_checkpoints/simsopt-checkpoint.py
-.gitignore
-src/quadcoil/io/.ipynb_checkpoints/__init__-checkpoint.py
+.claude/

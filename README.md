@@ -8,8 +8,7 @@ QUADCOIL is a global coil optimization code that approximates coils with a smoot
 In other words, it's a "winding surface" code. However, unlike other winding surface codes, QUADCOIL:
 
 - Supports constrained optimization.
-- Supports non-convex quadratic penalties/constraints, such as curvature 
-  $\mathbf{K} \cdot \nabla \mathbf{K}$.
+- Supports non-convex quadratic penalties/constraints, such as curvatures and Lorentz force.
 - Includes robust winding surface generators that do not produce self-intersections.
 - Calculates derivatives with respect to plasma shape, winding surface shape, objective weights, and constraint thresholds.
 
