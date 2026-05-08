@@ -448,6 +448,10 @@ Example usage::
      - ``dict`` or ``None``, traced
      - ``None`` (uses ``SOLVER_OPTIONS_DEFAULT``)
      - Dict of augmented-Lagrangian and inner-solver options (see keys below).
+   * - ``lbfgs_memory``
+     - ``int``, static
+     - ``10``
+     - L-BFGS history length for the inner solver (must be static for JIT).
    * - ``solver_options['c_init']``
      - ``float``
      - ``1.``
@@ -488,10 +492,6 @@ Example usage::
      - ``float``
      - ``1e-6``
      - Singular-value cut-off threshold during preconditioning.
-   * - ``max_linesearch_steps``
-     - ``int``, static
-     - ``20``
-     - The maximum number of steps in the LBFGS line search. Remains a top-level static kwarg because it configures the optax optimizer at trace time.
    * - ``merge_constraints``
      - ``bool``, static
      - ``False``

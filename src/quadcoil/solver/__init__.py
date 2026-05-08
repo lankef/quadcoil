@@ -3,8 +3,7 @@ from .auglag import (
     solve_unconstrained_auglag_lbfgs,
     stationarity_auglag_lbfgs,
     adjoint_auglag_lbfgs,
-    stationarity_auglag_lbfgs_legacy,
-    adjoint_auglag_lbfgs_legacy,
+    # Different shapes for constraint function g 
     gplus_hard,
     gplus_elu,
     gplus_softplus,

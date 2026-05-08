@@ -38,12 +38,10 @@ SOLVER_OPTIONS_DEFAULT_DICT = {
         'c_growth_rate':    2.,
         'xstop_outer':      tol_default,
         'ctol_outer':       tol_default,
-        'fstop_inner':      tol_default,
-        'xstop_inner':      tol_default,
-        'gtol_inner':       tol_default,
-        'fstop_inner_last': 0.,
-        'xstop_inner_last': tol_default_last,
-        'gtol_inner_last':  tol_default_last,
+        'atol_inner':       tol_default,
+        'rtol_inner':       tol_default,
+        'atol_inner_last':  tol_default_last,
+        'rtol_inner_last':  tol_default_last,
         'svtol':            tol_default,
         'maxiter_tot':      10000,
         'maxiter_inner':    1000,
@@ -60,7 +58,6 @@ SOLVER_OPTIONS_DEFAULT_DICT = {
         'max_steps': 200,
         'atol': 1e-7,
         'rtol': 1e-7,
-        'lbfgs_memory': 10,
     },
 }
 
@@ -98,7 +95,7 @@ QUADCOIL_STATIC_ARGNAMES=[
     'implicit_linear_solver',
     # - Solver options
     'solver',
-    'max_linesearch_steps',
+    'lbfgs_memory',
     # - Other options
     'verbose',
     # Smoothing parameters:
@@ -178,7 +175,7 @@ def quadcoil(
     # - Auglag options (traced dict; merged with SOLVER_OPTIONS_DEFAULT)
     solver:str='auglag-lbfgs',
     solver_options=None,
-    max_linesearch_steps:int=20,
+    lbfgs_memory:int=10,
 
     # - Experimental
     implicit_linear_solver=None,
@@ -275,17 +272,15 @@ def quadcoil(
         - ``'c_growth_rate'`` (``2.``) — multiplicative growth of :math:`c` each outer step.
         - ``'xstop_outer'`` (``1e-6``) — outer-loop ``x`` convergence rate tolerance.
         - ``'ctol_outer'`` (``1e-6``) — outer-loop constraint-violation tolerance.
-        - ``'fstop_inner'`` (``1e-6``) — inner ``f`` convergence rate tolerance.
-        - ``'xstop_inner'`` (``1e-6``) — inner ``x`` convergence rate tolerance.
-        - ``'gtol_inner'`` (``1e-6``) — inner gradient tolerance.
-        - ``'fstop_inner_last'`` (``0.``) — ``f`` tolerance for the final inner solve.
-        - ``'xstop_inner_last'`` (``1e-10``) — ``x`` tolerance for the final inner solve.
-        - ``'gtol_inner_last'`` (``1e-10``) — gradient tolerance for the final inner solve.
+        - ``'atol_inner'`` (``1e-6``) — absolute gradient tolerance for inner L-BFGS solves.
+        - ``'rtol_inner'`` (``1e-6``) — relative gradient tolerance for inner L-BFGS solves.
+        - ``'atol_inner_last'`` (``1e-10``) — absolute gradient tolerance for the final inner solve.
+        - ``'rtol_inner_last'`` (``1e-10``) — relative gradient tolerance for the final inner solve.
         - ``'svtol'`` (``1e-6``) — singular-value cut-off for pre-conditioning.
         - ``'maxiter_tot'`` (``10000``) — maximum outer-loop iterations.
         - ``'maxiter_inner'`` (``1000``) — maximum inner L-BFGS iterations per outer step.
-    max_linesearch_steps : int, optional, default=20
-        (Static) Maximum steps in the L-BFGS zoom line search.
+    lbfgs_memory : int, optional, default=10
+        (Static) L-BFGS history length for the inner solver.
     implicit_linear_solver : lineax.AbstractLinearSolver, optional, default=lineax.AutoLinearSolver(well_posed=True)
         (Static) The lineax linear solver choice for implicit differentiation.
     value_only : bool, optional, default=False
@@ -667,12 +662,11 @@ def quadcoil(
                 convex=convex,
                 solver_options={
                     'maxiter': solver_options['maxiter_tot'],
-                    'fstop': solver_options['fstop_inner_last'],
-                    'xstop': solver_options['xstop_inner_last'],
-                    'gtol': solver_options['gtol_inner_last'],
+                    'atol': solver_options['atol_inner_last'],
+                    'rtol': solver_options['rtol_inner_last'],
                 },
-                max_linesearch_steps=max_linesearch_steps,
                 verbose=verbose,
+                lbfgs_memory=lbfgs_memory,
             )
         elif solver == 'ipm':
             solve_results = solve_unconstrained_ipm(
@@ -689,6 +683,7 @@ def quadcoil(
                 convex=convex,
                 solver_options=solver_options,
                 verbose=verbose,
+                lbfgs_memory=lbfgs_memory,
             )
         else:
             raise ValueError(f"Unknown solver: {solver}")
@@ -713,8 +708,8 @@ def quadcoil(
                 h_eq=h_scaled,
                 g_ineq=g_scaled,
                 solver_options={**solver_options, 'lam_init': lam_init, 'mu_init': mu_init},
-                max_linesearch_steps=max_linesearch_steps,
                 verbose=verbose,
+                lbfgs_memory=lbfgs_memory,
             )
         elif solver == 'ipm':
             solve_results = solve_constrained_ipm(
@@ -735,6 +730,7 @@ def quadcoil(
                 convex=convex,
                 solver_options=solver_options,
                 verbose=verbose,
+                lbfgs_memory=lbfgs_memory,
             )
         else:
             raise ValueError(f"Unknown solver: {solver}")

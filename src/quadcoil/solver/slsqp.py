@@ -44,7 +44,6 @@ DEFAULT_SLSQP_OPTIONS = {
     'max_steps': 200,
     'atol': 1e-7,
     'rtol': 1e-7,
-    'lbfgs_memory': 10,
 }
 
 
@@ -83,6 +82,7 @@ def solve_unconstrained_slsqp(
     convex=False,
     solver_options=None,
     verbose=0,
+    lbfgs_memory=10,
 ):
     r'''
     Unconstrained minimization via SLSQP (no constraints).
@@ -94,6 +94,8 @@ def solve_unconstrained_slsqp(
     convex : bool
         Unused (for interface compatibility).
     solver_options : dict, optional
+    lbfgs_memory : int, optional, default=10
+        (Static) L-BFGS history length.
     verbose : int
 
     Returns
@@ -107,6 +109,7 @@ def solve_unconstrained_slsqp(
         convex=convex,
         solver_options=solver_options,
         verbose=verbose,
+        lbfgs_memory=lbfgs_memory,
     )
     return {
         'fin_f': result['fin_f'],
@@ -126,6 +129,7 @@ def solve_constrained_slsqp(
     convex=False,
     solver_options=None,
     verbose=0,
+    lbfgs_memory=10,
 ):
     r'''
     Constrained optimization via slsqp-jax:
@@ -150,7 +154,8 @@ def solve_constrained_slsqp(
         - ``'max_steps'`` (200) — maximum SQP iterations.
         - ``'atol'`` (1e-7) — absolute KKT tolerance.
         - ``'rtol'`` (1e-7) — relative KKT tolerance.
-        - ``'lbfgs_memory'`` (10) — L-BFGS history length.
+    lbfgs_memory : int, optional, default=10
+        (Static) L-BFGS history length.
     verbose : int, optional
 
     Returns
@@ -178,7 +183,6 @@ def solve_constrained_slsqp(
     max_steps = opts['max_steps']
     atol = opts['atol']
     rtol = opts['rtol']
-    lbfgs_memory = opts['lbfgs_memory']
 
     x_init = jnp.asarray(x_init, dtype=jnp.float64)
 
