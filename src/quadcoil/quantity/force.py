@@ -37,7 +37,8 @@ def _force_integrands_xyz(qp, dofs, winding_surface_mode=False):
     else:
         surface = qp.eval_surface
     unitnormal_x = surface.unitnormal()
-    unitnormaldash1_x, unitnormaldash2_x = surface.unitnormaldash()
+    unitnormaldash1_x = surface.unitnormaldash(1, 0)
+    unitnormaldash2_x = surface.unitnormaldash(0, 1)
     grad1_x, grad2_x = surface.grad_helper()
 
     ''' K-related quantities '''

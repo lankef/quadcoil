@@ -1,10 +1,14 @@
 import jax.numpy as jnp
 import jax
+import lineax as lx
 # import matplotlib.pyplot as plt
-from jax import jit, lax, vmap
+from jax import jit, lax, vmap, eval_shape
 from jax.lax import scan
 from functools import partial
 from .surface import SurfaceRZFourierJAX
+from .quadcoil_params import QuadcoilParams
+from .quantity import Phi_with_net_current
+from .quantity.current import _K
 
 # An approximation for unit normal.
 # and include the endpoints
@@ -63,7 +67,7 @@ def gen_winding_surface_offset(
     theta_expand = jnp.linspace(0, 1, plasma_gamma.shape[1], endpoint=False)[None, :] + jnp.ones_like(phi_expand)
 
     # gamma_and_scalar_field_to_vtk(weight_remove_invalid[:, :, None] * plasma_gamma_expand, theta_atan, 'ws_new_to_fit.vts')
-    dofs_expand = SurfaceRZFourierJAX.fit_dofs_from_gamma(
+    dofs_expand = SurfaceRZFourierJAX._fit_dofs_from_gamma(
         phi_target=phi_expand,
         theta_target=theta_expand,
         gamma_target=plasma_gamma_expand,
@@ -330,7 +334,7 @@ def gen_winding_surface_arc(
     phi_expand, theta_arc = jnp.broadcast_arrays(phi_expand[:, None], theta_arc)
 
     # ----- Fitting surface -----
-    dofs_expand = SurfaceRZFourierJAX.fit_dofs_from_gamma(
+    dofs_expand = SurfaceRZFourierJAX._fit_dofs_from_gamma(
         phi_target=phi_expand,
         theta_target=theta_arc,
         gamma_target=gamma_uniform,
@@ -484,7 +488,7 @@ def gen_winding_surface_general(
     phi_expand, theta_arc = jnp.broadcast_arrays(phi_expand[:, None], theta_arc)
 
     # ----- Fitting surface -----
-    dofs_expand = cls.fit_dofs_from_gamma(
+    dofs_expand = cls._fit_dofs_from_gamma(
         phi_target=phi_expand,
         theta_target=theta_arc,
         gamma_target=gamma_uniform,
@@ -496,3 +500,82 @@ def gen_winding_surface_general(
         custom_weight=weight_remove_invalid,
     )
     return(dofs_expand)
+
+# ----- Meshing -----
+def _f_K_integrand(qp, dofs):
+    # The linear operator corresponding to the f_K.
+    # objective. The eval_surface in qp should be an 
+    # offset surface if meshing for an offset surface.
+    K_val = _K(qp, dofs)
+    da = qp.eval_surface.da()
+    return jnp.sqrt(da / 2 * qp.nfp)[:, :, None] * K_val
+
+def qp_nescoil_like_meshing(qp, weights=None, f_affine=_f_K_integrand):
+    """
+    Solves the following problem:
+    min(|r x grad zeta|^2 + |r x grad theta|^2)
+    as 2 linear least-squares problems. 
+
+    Generates smooth zeta and theta contours that are 
+    nearly perpendicular to each other.
+
+    Styled after qp_nescoil.
+    """
+    # Generating blank phi for defining A and b
+    phi0 = jnp.zeros(qp.ndofs)
+    # Default values for weights.
+    if weights is None:
+        weights = jnp.ones_like(eval_shape(f_affine, qp, {'phi': phi0}))
+    neg_b = weights * f_affine(qp, {'phi': phi0})# = A @ 0 - b = -b
+    def A_fn(phi):
+        return weights * f_affine(qp, {'phi': phi}) - neg_b
+    operator = lx.FunctionLinearOperator(A_fn, phi0)
+    solution = lx.linear_solve(operator, -neg_b, solver=lx.SVD())
+    return solution.value
+
+@partial(jit, static_argnames=['mpol', 'ntor', 'skip_tor'])
+def least_square_meshing(
+    surf, 
+    quadpoints_phi_offset, 
+    quadpoints_theta_offset, 
+    mpol, ntor, 
+    weights=None,
+    f_affine=_f_K_integrand,
+    skip_tor=False, # For RZ surfaces
+):
+    qp_dummy_kwargs = {
+        'plasma_surface': surf,
+        'winding_surface': surf.copy_and_set_quadpoints(
+            quadpoints_phi=jnp.linspace(
+                0, 1, 
+                len(surf.quadpoints_phi) * surf.nfp, 
+                endpoint=False
+            ),
+            quadpoints_theta=surf.quadpoints_theta
+        ),
+        'Bnormal_plasma': 0,
+        'mpol': mpol,
+        'ntor': ntor,
+        'quadpoints_phi': quadpoints_phi_offset,
+        'quadpoints_theta': quadpoints_theta_offset,
+        'stellsym': surf.stellsym,
+        'eval_surface': surf,
+    }
+    qp_theta = QuadcoilParams(
+        net_poloidal_current_amperes=0,
+        net_toroidal_current_amperes=1,
+        **qp_dummy_kwargs
+    )
+    dofs_tor = {'phi': qp_nescoil_like_meshing(qp_theta, weights=weights, f_affine=f_affine)}
+    theta_val = Phi_with_net_current(qp_theta, dofs_tor)
+    if skip_tor:
+        return theta_val
+    qp_phi = QuadcoilParams(
+        net_poloidal_current_amperes=1,
+        net_toroidal_current_amperes=0,
+        **qp_dummy_kwargs
+    )
+    dofs_pol = {'phi': qp_nescoil_like_meshing(qp_phi, weights=weights, f_affine=f_affine)}
+    phi_val = Phi_with_net_current(qp_phi, dofs_pol)
+    return phi_val, theta_val, qp_phi, dofs_pol
+    

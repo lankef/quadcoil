@@ -1,12 +1,11 @@
 from functools import partial, lru_cache
-from jax import jit, tree_util
+from jax import jit, tree_util, grad, jacfwd
 from jax.scipy.special import factorial
 from math import comb
 from .math_utils import norm_helper, is_ndarray
 import numpy as np
 import jax.numpy as jnp
 import sys
-
 
 class SurfaceJAX:
     """Abstract base class for JAX-native toroidal surfaces.
@@ -119,7 +118,9 @@ class SurfaceJAX:
 
     @jit
     def normal(self):
-        return jnp.cross(self.gammadash1(), self.gammadash2(), axis=-1)
+        dg1 = self.gammadash1()
+        dg2 = self.gammadash2()
+        return jnp.cross(dg1, dg2, axis=-1)
 
     @jit
     def unitnormal(self):
@@ -127,8 +128,11 @@ class SurfaceJAX:
         return normal / jnp.linalg.norm(normal, axis=-1)[:, :, None]
 
     @jit
-    def unitnormaldash(self):
-        """d(unitnormal)/dphi and d(unitnormal)/dtheta.
+    def unitnormaldash_legacy(self):
+        """d(unitnormal)/dphi and d(unitnormal)/dtheta (legacy hard-coded implementation).
+        
+        This is the original hard-coded gradient implementation, preserved for
+        performance comparison. For production code, use unitnormaldash(a, b) instead.
 
         Returns
         -------
@@ -152,6 +156,56 @@ class SurfaceJAX:
             + jnp.cross(dg1_inv_n, dg22, axis=-1)
         )
         return unitnormaldash1, unitnormaldash2
+
+    @partial(jit, static_argnames=['a', 'b'])
+    def unitnormaldash(self, a: int, b: int) -> jnp.ndarray:
+        """Compute d^(a+b)(unitnormal) / dphi^a dtheta^b using autodiff.
+        
+        Uses nested automatic differentiation for arbitrary-order derivatives.
+        
+        Parameters
+        ----------
+        a : int
+            Order of derivative with respect to phi
+        b : int
+            Order of derivative with respect to theta
+            
+        Returns
+        -------
+        jnp.ndarray, shape (nphi, ntheta, 3)
+            The derivative d^(a+b)(unitnormal) / dphi^a dtheta^b
+            
+        Examples
+        --------
+        >>> surf.unitnormaldash(0, 0)  # Returns unitnormal
+        >>> surf.unitnormaldash(1, 0)  # Returns d(unitnormal)/dphi
+        >>> surf.unitnormaldash(0, 1)  # Returns d(unitnormal)/dtheta
+        >>> surf.unitnormaldash(2, 0)  # Returns d²(unitnormal)/dphi²
+        """
+        if a == 0 and b == 0:
+            return self.unitnormal()
+        
+        # General autodiff implementation for all derivatives
+        def shifted_unitnormal(dphi, dtheta):
+            shifted_surface = self.copy_and_set_quadpoints(
+                self.quadpoints_phi + dphi,
+                self.quadpoints_theta + dtheta
+            )
+            return shifted_surface.unitnormal()
+        
+        # Build up derivatives by composing jacfwd
+        result_fn = shifted_unitnormal
+        
+        # Apply 'a' derivatives with respect to dphi (argnums=0)
+        for _ in range(a):
+            result_fn = jacfwd(result_fn, argnums=0)
+        
+        # Apply 'b' derivatives with respect to dtheta (argnums=1)
+        for _ in range(b):
+            result_fn = jacfwd(result_fn, argnums=1)
+        
+        # Evaluate at dphi=0, dtheta=0
+        return result_fn(0.0, 0.0)
 
     @jit
     def first_fund_form(self):
@@ -310,58 +364,18 @@ class SurfaceJAX:
     # Winding surface generators
     # ------------------------------------------------------------------
 
-    def uniform_offset(self, d_expand, 
-                       mpol=None, ntor=None,
-                       quadpoints_phi=None, quadpoints_theta=None, 
-                       phi_interp=1, theta_interp=1):
-        cls = type(self)
-        if mpol is None:
-            mpol = self.mpol
-        if ntor is None:
-            ntor = self.ntor
-        if quadpoints_phi is None:
-            quadpoints_phi = self.quadpoints_phi
-        if quadpoints_theta is None:
-            quadpoints_theta = self.quadpoints_theta
-        # expanding surface and generating quadpoints
-        (
-            gamma_offset,
-            _, _, da,
-            quadpoints_phi_offset, 
-            quadpoints_theta_offset
-        ) = self._gamma_offset(
-            d_expand, 
-            phi_interp=phi_interp,
-            theta_interp=theta_interp,
-            endpoint=True,
-        )
-        # If we are fitting an RZFourier surface,
-        # generate toroidal angle based on arctan
-        if cls == SurfaceRZFourierJAX:
-            phi_target = jnp.arctan2(gamma_offset[:, :, 1], gamma_offset[:, :, 0]) / jnp.pi / 2 
-        # Otherwise, use the same Toroidal angle
-        # as the pre-offset quadrature points.
-        else:
-            phi_target = np.broadcast_to(quadpoints_phi_offset[:, None], gamma_offset.shape[:2])
-        new_dofs = cls._fit_dofs_from_gamma(
-            phi_target=phi_target, 
-            theta_target=np.broadcast_to(quadpoints_theta_offset[None, :], gamma_offset.shape[:2]),
-            gamma_target=gamma_offset,
-            nfp=self.nfp, stellsym=self.stellsym,
-            mpol=mpol, ntor=ntor,
-            lam_tikhonov=0.,
-            custom_weight=da,
-        )
-        return cls(
-            nfp=self.nfp,
-            stellsym=self.stellsym,
-            mpol=mpol,
-            ntor=ntor,
+    def uniform_offset(
+        self, d_expand: float,
+        quadpoints_phi=None,
+        quadpoints_theta=None,
+    ):
+        return SurfaceOffsetJAX(
+            base_surface=self, 
+            d_expand=d_expand,
             quadpoints_phi=quadpoints_phi,
             quadpoints_theta=quadpoints_theta,
-            dofs=new_dofs,
         )
-
+        
     def gen_winding_surface(
         self, d_expand, 
         unitnormal=None,
@@ -374,7 +388,7 @@ class SurfaceJAX:
         cls = type(self)
         nfp = self.nfp
         stellsym = self.stellsym
-        gamma_uniform, _, _, da, _, _ = self._gamma_offset(
+        gamma_uniform, da, _, _ = self._gamma_offset(
             d_expand=d_expand, 
             phi_interp=phi_interp,
             theta_interp=theta_interp,
@@ -510,13 +524,12 @@ class SurfaceJAX:
         """
         raise NotImplementedError
 
-    @partial(jit, static_argnames=['phi_interp', 'theta_interp', 'endpoint'])
+    @partial(jit, static_argnames=['phi_interp', 'theta_interp'])
     def _gamma_offset(
         self, 
         d_expand, 
         phi_interp=2,
         theta_interp=2,
-        endpoint=False
     ):
         # Define quadpoints for the new surface.  For stellarator-symmetric
         # surfaces we sample the half-period [0, 0.5/nfp) only.  Using
@@ -534,40 +547,53 @@ class SurfaceJAX:
             n_phi_target = self_n_phi * phi_interp
         n_theta_target = self_n_theta * theta_interp
         
+        # Depreciated rolling     
         # When endpoint=True, we'll slice [:-1, :-1] to remove the periodic
         # endpoint, so we need one extra point in each dimension.
-        if endpoint:
-            n_phi_target += 1
-            n_theta_target += 1
-            
+        # if endpoint:
+        #     n_phi_target += 1
+        #     n_theta_target += 1       
+        # quadpoints_phi = jnp.linspace(
+        #     0, 0.5/self.nfp if self.stellsym else 1/self.nfp,
+        #     n_phi_target,
+        #     endpoint=endpoint
+        # )
+        # quadpoints_theta = jnp.linspace(
+        #     0, 1, 
+        #     n_theta_target, 
+        #     endpoint=endpoint
+        # )
         quadpoints_phi = jnp.linspace(
             0, 0.5/self.nfp if self.stellsym else 1/self.nfp,
             n_phi_target,
-            endpoint=endpoint
+            endpoint=False
         )
         quadpoints_theta = jnp.linspace(
             0, 1, 
             n_theta_target, 
-            endpoint=endpoint
+            endpoint=False
         )
         new_surface = self.copy_and_set_quadpoints(
             quadpoints_phi=quadpoints_phi, 
             quadpoints_theta=quadpoints_theta
         )
-        gamma_rolled = new_surface.gamma() + new_surface.unitnormal() * d_expand
-        gamma_offset = gamma_rolled[:-1, :-1, :]
-        # Calculating the effective Jacobian of each point to 
-        # weigh each point based on the size of their area elements.
-        gamma_phi_plus = gamma_rolled[1:, :-1, :]
-        gamma_theta_plus = gamma_rolled[:-1, 1:, :]
-        dphi = (gamma_phi_plus - gamma_offset) * len(quadpoints_phi)
-        dtheta = (gamma_theta_plus - gamma_offset) * len(quadpoints_theta)
-        da = jnp.linalg.norm(jnp.cross(dphi, dtheta), axis=-1)
+        # Depreciated rolling        
+        # gamma_rolled = new_surface.gamma() + new_surface.unitnormal() * d_expand
+        # gamma_offset = gamma_rolled[:-1, :-1, :]
+        # # Calculating the effective Jacobian of each point to 
+        # # weigh each point based on the size of their area elements.
+        # gamma_phi_plus = gamma_rolled[1:, :-1, :]
+        # gamma_theta_plus = gamma_rolled[:-1, 1:, :]
+        # dphi = (gamma_phi_plus - gamma_offset) * len(quadpoints_phi)
+        # dtheta = (gamma_theta_plus - gamma_offset) * len(quadpoints_theta)
+        # gamma_offset = new_surface.gamma() + new_surface.unitnormal() * d_expand, #gamma_offset, 
+        # dphi, dtheta, da,
+        da = SurfaceOffsetJAX(new_surface, d_expand).da()
         return (
-            gamma_offset, 
-            dphi, dtheta, da,
-            quadpoints_phi[:-1], 
-            quadpoints_theta[:-1]
+            new_surface.gamma() + new_surface.unitnormal() * d_expand,
+            da,
+            quadpoints_phi, # [:-1], 
+            quadpoints_theta, # [:-1]
         )
     
 
@@ -1745,3 +1771,201 @@ def xyztensor_gammadash(
     )
 
     return jnp.stack([res_x, res_y, zhat_a], axis=-1)
+
+
+# ======================================================================
+# A special SurfaceJAX subclass that represents an uniform offset surface.
+# ======================================================================
+
+@tree_util.register_pytree_node_class
+class SurfaceOffsetJAX(SurfaceJAX):
+    """Subclass that applies a fixed normal offset to any SurfaceJAX subclass.
+    
+    This class inherits from SurfaceJAX and offsets all geometric quantities by
+    a fixed distance along the surface normal. It maintains the full SurfaceJAX
+    interface and can be used anywhere a SurfaceJAX is expected.
+    
+    Parameters
+    ----------
+    base_surface : SurfaceJAX
+        The underlying surface to offset.
+    d_expand : float
+        Distance to offset along the unit normal (positive = outward).
+    
+    Examples
+    --------
+    >>> plasma_surf = SurfaceRZFourierJAX(...)
+    >>> winding_surf = SurfaceOffsetJAX(plasma_surf, d_expand=0.2)
+    >>> gamma_offset = winding_surf.gamma()
+    >>> isinstance(winding_surf, SurfaceJAX)  # Returns True
+    True
+    
+    Notes
+    -----
+    DOF-related methods (e.g., `get_dofs()`, `from_simsopt()`, `_fit_dofs_from_gamma()`)
+    raise NotImplementedError since offset surfaces don't have independent DOFs.
+    """
+    
+    def __init__(
+        self, 
+        base_surface, 
+        d_expand: float,
+        quadpoints_phi=None,
+        quadpoints_theta=None,
+    ):
+        if quadpoints_phi is None:
+            quadpoints_phi = base_surface.quadpoints_phi
+        if quadpoints_theta is None:
+            quadpoints_theta = base_surface.quadpoints_theta
+        # Call parent constructor with base surface parameters
+        super().__init__(
+            nfp=base_surface.nfp,
+            stellsym=base_surface.stellsym,
+            mpol=base_surface.mpol,
+            ntor=base_surface.ntor,
+            quadpoints_phi=quadpoints_phi,
+            quadpoints_theta=quadpoints_theta,
+            dofs=base_surface.dofs,
+        )
+        self.base_surface = base_surface.copy_and_set_quadpoints(
+            quadpoints_phi=quadpoints_phi,
+            quadpoints_theta=quadpoints_theta,
+        )
+        self.d_expand = d_expand
+    
+    @partial(jit, static_argnames=['a', 'b'])
+    def gammadash(self, a: int, b: int) -> jnp.ndarray:
+        """Surface position or mixed partial derivative with offset applied.
+        
+        For an offset surface, gamma_offset = gamma + d * unitnormal, so:
+        d^(a+b)(gamma_offset) / dphi^a dtheta^b = 
+            d^(a+b)(gamma) / dphi^a dtheta^b + d * d^(a+b)(unitnormal) / dphi^a dtheta^b
+        
+        Parameters
+        ----------
+        a : int
+            Order of the phi derivative.
+        b : int
+            Order of the theta derivative.
+        
+        Returns
+        -------
+        jnp.ndarray, shape (nphi, ntheta, 3)
+            The quantity ``d^(a+b) (gamma + d*unitnormal) / d phi^a d theta^b``.
+        """
+        if self.d_expand == 0.:
+            return self.base_surface.gammadash(a, b)
+        
+        return (self.base_surface.gammadash(a, b) + 
+                self.d_expand * self.base_surface.unitnormaldash(a, b))
+    
+    def copy_and_set_quadpoints(self, quadpoints_phi, quadpoints_theta):
+        """Create a new offset surface with different quadrature points."""
+        new_base = self.base_surface.copy_and_set_quadpoints(
+            quadpoints_phi, quadpoints_theta
+        )
+        return SurfaceOffsetJAX(new_base, self.d_expand)
+    
+    # ------------------------------------------------------------------
+    # Methods from SurfaceJAX not supported by offset surfaces
+    # ------------------------------------------------------------------
+    
+    def get_dofs(self):
+        raise NotImplementedError(
+            "get_dofs() is not supported for SurfaceOffsetJAX. "
+            "Offset surfaces don't have independent DOFs - use base_surface.get_dofs() instead."
+        )
+    
+    @classmethod
+    def dof_to_gamma(cls, dofs, phi_grid, theta_grid, nfp, stellsym,
+                     dash1_order=0, dash2_order=0, mpol: int = 10, ntor: int = 10):
+        raise NotImplementedError(
+            "dof_to_gamma() is not supported for SurfaceOffsetJAX. "
+            "Offset surfaces are created from existing surfaces, not DOFs."
+        )
+    
+    @staticmethod
+    def _dof_to_gamma_op(phi_grid, theta_grid, nfp, stellsym,
+                         dash1_order=0, dash2_order=0, mpol: int = 10, ntor: int = 10):
+        raise NotImplementedError(
+            "_dof_to_gamma_op() is not supported for SurfaceOffsetJAX. "
+            "Offset surfaces are created from existing surfaces, not DOFs."
+        )
+    
+    @staticmethod
+    def _build_surface_fit_matrices(phi_target, theta_target, gamma_target,
+                                     nfp: int, stellsym: bool,
+                                     mpol: int = 5, ntor: int = 5):
+        raise NotImplementedError(
+            "_build_surface_fit_matrices() is not supported for SurfaceOffsetJAX. "
+            "Offset surfaces cannot be fitted from target gamma points."
+        )
+    
+    @classmethod
+    def _fit_dofs_from_gamma(cls, phi_target, theta_target, gamma_target,
+                             nfp: int, stellsym: bool,
+                             mpol: int = 5, ntor: int = 5,
+                             lam_tikhonov=0., custom_weight=None):
+        raise NotImplementedError(
+            "_fit_dofs_from_gamma() is not supported for SurfaceOffsetJAX. "
+            "Offset surfaces cannot be fitted from target gamma points."
+        )
+    
+    def uniform_offset(
+        self, d_expand: float,
+        quadpoints_phi=None,
+        quadpoints_theta=None,
+    ):
+        raise NotImplementedError(
+            "uniform_offset() is not supported for SurfaceOffsetJAX. "
+            "Use SurfaceOffsetJAX directly to create offset surfaces."
+        )
+    
+    def gen_winding_surface(self, d_expand, unitnormal=None,
+                           mpol=7, ntor=7, pol_interp=2, tor_interp=2,
+                           lam_tikhonov=1e-5, rule='self-intersection'):
+        raise NotImplementedError(
+            "gen_winding_surface() is not supported for SurfaceOffsetJAX. "
+            "Use base_surface.gen_winding_surface() instead."
+        )
+    
+    def _gamma_offset(self, d_expand, phi_interp=2, theta_interp=2):
+        raise NotImplementedError(
+            "_gamma_offset() is not supported for SurfaceOffsetJAX. "
+            "Offset surfaces already represent an offset."
+        )
+    
+    @classmethod
+    def from_simsopt(cls, surface_simsopt):
+        raise NotImplementedError(
+            "from_simsopt() is not supported for SurfaceOffsetJAX. "
+            "Create the base surface from simsopt first, then wrap with SurfaceOffsetJAX."
+        )
+    
+    def to_simsopt(self):
+        raise NotImplementedError(
+            "to_simsopt() is not supported for SurfaceOffsetJAX. "
+            "Offset surfaces cannot be directly converted to simsopt format."
+        )
+    
+    def plot(self, **kwargs):
+        raise NotImplementedError(
+            "plot() is not supported for SurfaceOffsetJAX. "
+            "To visualize, evaluate gamma() and plot the point cloud, "
+            "or fit to a new surface and plot that."
+        )
+    
+    # ------------------------------------------------------------------
+    # JAX pytree protocol
+    # ------------------------------------------------------------------
+    
+    def tree_flatten(self):
+        """Flatten for JAX transformations."""
+        children = (self.base_surface,)
+        aux_data = {'d_expand': self.d_expand}
+        return children, aux_data
+    
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        """Unflatten for JAX transformations."""
+        return cls(children[0], aux_data['d_expand'])
