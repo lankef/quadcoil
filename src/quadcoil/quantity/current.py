@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 from jax import jit
 from functools import partial
-from scipy.constants import mu_0
+from quadcoil.math_utils import mu_0
 from .quantity import _Quantity
 
 # ----- Implementations -----
@@ -10,14 +10,20 @@ def _K(qp, dofs, winding_surface_mode=False):
     # winding_surface_mode is for using 
     # one or more field periods.
     phi_mn = dofs['phi']
-    # When winding_surface_mode is set to true, 
-    # The evaluation will be done over the full winding surface 
-    # instead. This is used when calculating B.
+    # When winding_surface_mode is set to "divide", 
+    # K is only calculated on one field period of the
+    # winding surface. NOTE thaat this isn't always the 
+    # same as the eval surface, because the winding 
+    # and eval surfaces are allowed to have different
+    # resolutions!
     if winding_surface_mode=='divide':
         n_phi_1fp = len(qp.winding_surface.quadpoints_phi)//qp.winding_surface.nfp
         normal = qp.winding_surface.normal()[:n_phi_1fp, :, :]
         dg1 = qp.winding_surface.gammadash1()[:n_phi_1fp, :, :]
         dg2 = qp.winding_surface.gammadash2()[:n_phi_1fp, :, :]
+    # When winding_surface_mode is set to true, 
+    # The evaluation will be done over the full winding surface 
+    # instead. This is used when calculating B.
     elif winding_surface_mode:
         normal = qp.winding_surface.normal()
         dg1 = qp.winding_surface.gammadash1()

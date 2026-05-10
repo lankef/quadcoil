@@ -2,13 +2,22 @@ from quadcoil import (
     merge_callables, get_quantity,
     SurfaceRZFourierJAX, SurfaceXYZTensorFourierJAX, SurfaceXYZFourierJAX,
     QuadcoilParams, 
-    solve_constrained_auglag_lbfgs, solve_unconstrained_auglag_lbfgs,
-    stationarity_auglag_lbfgs, adjoint_auglag_lbfgs,
-    solve_constrained_ipm, solve_unconstrained_ipm,
-    stationarity_ipm, adjoint_ipm,
-    solve_constrained_slsqp, solve_unconstrained_slsqp,
-    stationarity_slsqp, adjoint_slsqp,
     is_ndarray, tree_len,
+)
+
+from quadcoil.solver import (
+    solve_constrained_auglag_lbfgs, 
+    solve_constrained_ipm,
+    solve_constrained_slsqp,
+    solve_unconstrained_auglag_lbfgs,
+    solve_unconstrained_ipm,
+    solve_unconstrained_slsqp,
+    stationarity_auglag_lbfgs,
+    stationarity_ipm,
+    stationarity_slsqp,
+    adjoint_auglag_lbfgs,
+    adjoint_ipm,
+    adjoint_slsqp,
 )
 
 from quadcoil.wrapper import _parse_objectives, _parse_constraints, _resolve_quadpoints

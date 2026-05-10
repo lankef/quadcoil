@@ -2,8 +2,13 @@ from quadcoil import get_quantity
 from quadcoil.wrapper import _parse_constraints
 from jax import vmap
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.lines as mlines
+
+try:
+    import matplotlib.pyplot as plt
+    _HAS_MATPLOTLIB = True
+except ImportError:
+    _HAS_MATPLOTLIB = False
+
 def plot_quantity(
     name, qp, dofs,
     i_phi, j_phi,
@@ -45,8 +50,18 @@ def plot_quantity(
     constraint_color : color,
         Color to plot the constraint threshold with.
     plot_contours : bool
-        Whether to plot contours for the quantity. True by default. False is useful for overlaying multiple constraints. 
+        Whether to plot contours for the quantity. True by default. False is useful for overlaying multiple constraints.
+    
+    Raises
+    ------
+    ImportError
+        If matplotlib is not installed.
     """
+    if not _HAS_MATPLOTLIB:
+        raise ImportError(
+            "matplotlib is required for plotting. "
+            "Install with: pip install matplotlib or pip install quadcoil[visualization]"
+        )
 
     phi0 = dofs["phi"]
     phi_i0 = phi0[i_phi]
@@ -136,6 +151,20 @@ def plot_quadcoil(
     show=True,
     **kwargs
 ):
+    """
+    Plot objective and constraints for a QUADCOIL problem.
+    
+    Raises
+    ------
+    ImportError
+        If matplotlib is not installed.
+    """
+    if not _HAS_MATPLOTLIB:
+        raise ImportError(
+            "matplotlib is required for plotting. "
+            "Install with: pip install matplotlib or pip install quadcoil[visualization]"
+        )
+    
     plot_quantity(
         objective_name, qp, dofs,
         i_phi=i_phi, j_phi=j_phi,

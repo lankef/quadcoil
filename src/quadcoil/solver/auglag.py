@@ -15,8 +15,6 @@ Potential further optimisations
 """
 import warnings
 import jax.numpy as jnp
-import optax
-import optax.tree_utils as otu
 from functools import partial
 from jax import jit, vmap, grad, jacrev, jvp, hessian, debug
 import lineax as lx
@@ -117,74 +115,6 @@ def solve_unconstrained_auglag_lbfgs(
         'fin_dx': jnp.nan,
         'fin_du': jnp.nan,
         'fin_df': jnp.nan,
-    }
-
-
-def solve_unconstrained_auglag_lbfgs_legacy(
-    init_params, 
-    fun, 
-    convex,
-    solver_options, 
-    max_linesearch_steps, 
-    verbose
-):
-    r'''
-    (Legacy) Performs unconstrained optimization using ``optax.lbfgs``.
-    
-    Parameters
-    ----------  
-    init_params : ndarray, shape (N,)
-        The initial condition.
-    fun : Callable
-        The objective function.
-    solver_options : dict
-        (Traced) LBFGS options. Recognised keys:
-
-        - ``'maxiter'`` — maximum iteration count.
-        - ``'fstop'`` — objective convergence rate tolerance.
-        - ``'xstop'`` — unknown convergence rate tolerance.
-        - ``'gtol'`` — gradient tolerance.
-    max_linesearch_steps : int
-        The maximum steps in the LBFGS zoom line search.
-    verbose : int
-        Output levels of detail.
-
-    Returns
-    -------
-    status : dict
-        Contains the following entries:
-
-        - ``'fin_f'`` — objective value at the optimum.
-        - ``'fin_x'`` — the optimum, shape ``(N,)``.
-        - ``'niter'`` — iteration count.
-        - ``'fin_dx'`` — L2 norm of the change in x at termination.
-        - ``'fin_du'`` — L2 norm of the change in updates at termination.
-        - ``'fin_df'`` — change in f at termination.
-    '''
-    maxiter = solver_options['maxiter']
-    fstop = solver_options['fstop']
-    xstop = solver_options['xstop']
-    gtol = solver_options['gtol']
-    x, f, g, niter, dx, du, df = run_opt_optax_legacy(
-        init_params, 
-        fun, 
-        maxiter, 
-        fstop, xstop, gtol, 
-        opt=optax.lbfgs(
-            linesearch=optax.scale_by_zoom_linesearch(
-                max_linesearch_steps=max_linesearch_steps, 
-                initial_guess_strategy='one'
-            )
-        ), 
-        verbose=verbose
-    )
-    return {
-        'fin_f': f,
-        'fin_x': x,
-        'niter': niter,
-        'fin_dx': dx,
-        'fin_du': du,
-        'fin_df': df,
     }
 
 # Thresholding function for g+.

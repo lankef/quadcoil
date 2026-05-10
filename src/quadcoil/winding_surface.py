@@ -239,82 +239,6 @@ def _graham_scan(r_expand, z_expand):
     is_on_hull = jnp.zeros(N, dtype=bool).at[hull_idx].set(True)
     return is_on_hull
 
-# @partial(jit, static_argnames=[
-#     'nfp',
-#     'stellsym',
-#     'mpol',
-#     'ntor',
-#     'pol_interp',
-#     'tor_interp',
-#     # 'lam_tikhonov'
-# ])
-# def gen_winding_surface_atan(
-#         plasma_gamma, d_expand, 
-#         nfp, stellsym,
-#         unitnormal=None,
-#         mpol=5, ntor=5,
-#         pol_interp=2,
-#         tor_interp=2,
-#         lam_tikhonov=1e-5,
-#     ):
-#     ''' Create uniform offset '''
-#     uniform_offset_dofs = gen_winding_surface_offset(
-#         plasma_gamma, d_expand, 
-#         nfp, stellsym,
-#         unitnormal=unitnormal,
-#         mpol=mpol, ntor=ntor,
-#     )
-#     ''' Interpolate to generate smooth poloidal cross sections '''
-#     phi_expand = jnp.linspace(0, 1/nfp, plasma_gamma.shape[0] * tor_interp)
-#     uniform_offset_surface_jax = SurfaceRZFourierJAX(
-#         nfp=nfp, stellsym=stellsym, 
-#         mpol=mpol, ntor=ntor, 
-#         quadpoints_phi=phi_expand, 
-#         quadpoints_theta=jnp.linspace(0, 1, plasma_gamma.shape[1] * pol_interp, endpoint=False), 
-#         dofs=uniform_offset_dofs
-#     )
-#     gamma_uniform = uniform_offset_surface_jax.gamma()
-#     ''' Trimming based on stellarator symmetry '''
-#     # Fit only half a field period when stellsym.
-#     if stellsym:
-#         # If stellsym, then only use half of the field period for surface fitting
-#         len_phi = len(phi_expand)//2
-#         gamma_uniform = gamma_uniform[:len_phi]
-#         phi_expand = phi_expand[:len_phi]
-#         # finding center to generate poloidal parameterization
-#         r_plasma = jnp.sqrt(plasma_gamma[:len_phi, :, 1]**2 + plasma_gamma[:len_phi, :, 0]**2)
-#         z_plasma = plasma_gamma[:len_phi, :, 2]
-#     else:
-#         gamma_uniform = gamma_uniform
-#         # Copy the gamma from the next and last fp.
-#         # finding center to generate poloidal parameterization
-#         r_plasma = jnp.sqrt(plasma_gamma[:, :, 1]**2 + plasma_gamma[:, :, 0]**2)
-#         z_plasma = plasma_gamma[:, :, 2]
-#     r_center = jnp.average(r_plasma, axis=-1)
-#     z_center = jnp.average(z_plasma, axis=-1)
-#     # The original uniform offset. Has self-intersections.
-#     # Tested to be differentiable.
-#     r_expand = jnp.sqrt(gamma_uniform[:, :, 0]**2 + gamma_uniform[:, :, 1]**2)
-#     z_expand = gamma_uniform[:, :, 2]
-#     ''' Removing self-intersection '''
-#     weight_remove_invalid = vmap(_polygon_self_intersection, in_axes=0)(r_expand, z_expand)
-#     ''' Fitting surface'''
-#     theta_atan = jnp.arctan2(z_expand-z_center[:, None], r_expand-r_center[:, None])/jnp.pi/2
-#     theta_atan = jnp.where(theta_atan>0, theta_atan, theta_atan+1)
-#     phi_expand, theta_atan = jnp.broadcast_arrays(phi_expand[:, None], theta_atan)
-#     dofs_expand = SurfaceRZFourierJAX.fit_dofs_from_gamma(
-#         phi_target=phi_expand,
-#         theta_target=theta_atan,
-#         gamma_target=gamma_uniform,
-#         nfp=nfp,
-#         stellsym=stellsym,
-#         mpol=mpol,
-#         ntor=ntor,
-#         lam_tikhonov=lam_tikhonov,
-#         custom_weight=weight_remove_invalid,
-#     )
-#     return(dofs_expand)
-
 @partial(jit, static_argnames=[
     'nfp',
     'stellsym',
@@ -407,6 +331,160 @@ def gen_winding_surface_arc(
 
     # ----- Fitting surface -----
     dofs_expand = SurfaceRZFourierJAX.fit_dofs_from_gamma(
+        phi_target=phi_expand,
+        theta_target=theta_arc,
+        gamma_target=gamma_uniform,
+        nfp=nfp,
+        stellsym=stellsym,
+        mpol=mpol,
+        ntor=ntor,
+        lam_tikhonov=lam_tikhonov,
+        custom_weight=weight_remove_invalid,
+    )
+    return(dofs_expand)
+
+
+def gen_winding_surface_general(
+        plasma_gamma, d_expand, 
+        nfp, stellsym,
+        cls,
+        unitnormal=None,
+        mpol=5, ntor=5,
+        pol_interp=2,
+        tor_interp=2,
+        lam_tikhonov=1e-5,
+        rule='self-intersection',
+    ):
+    """Generate winding-surface DOFs using generalized surface types with optional plane fitting.
+
+    After creating a uniform offset, invalid points are filtered with
+    ``rule``. For non-RZ surface types, each toroidal slice is projected
+    onto a least-squares fit plane to extract better R,Z coordinates before
+    arc-length parameterization and fitting with ``cls.fit_dofs_from_gamma``.
+    
+    Parameters
+    ----------
+    plasma_gamma : ndarray, shape (n_phi, n_theta, 3)
+        Plasma surface points in Cartesian coordinates.
+    d_expand : float
+        Offset distance for winding surface.
+    nfp : int
+        Number of field periods.
+    stellsym : bool
+        Stellarator symmetry flag.
+    unitnormal : ndarray, optional
+        Unit normal vectors for offset. If None, computed from plasma_gamma.
+    mpol, ntor : int
+        Maximum poloidal and toroidal mode numbers.
+    pol_interp, tor_interp : int
+        Interpolation factors for poloidal and toroidal directions.
+    lam_tikhonov : float
+        Tikhonov regularization parameter.
+    rule : str, {'self-intersection', 'hull'}
+        Method for filtering invalid points.
+    cls : class, optional
+        Surface class to use (SurfaceRZFourierJAX, SurfaceXYZTensorFourierJAX, etc.).
+        If None, defaults to SurfaceRZFourierJAX.
+        
+    Returns
+    -------
+    dofs_expand : ndarray
+        Fitted DOF vector for the specified surface type.
+        
+    Notes
+    -----
+    - For cls=SurfaceRZFourierJAX: uses direct cylindrical R,Z extraction (backward compatible)
+    - For other surface types: uses plane fitting for better coordinate extraction
+    - The R,Z values for non-RZ surfaces are only used for self-intersection filtering,
+      so their precise offset doesn't affect the final fitted surface
+    """
+    from .math_utils import project_points_to_plane
+    
+    # ----- Create uniform offset -----
+    uniform_offset_dofs = gen_winding_surface_offset(
+        plasma_gamma, d_expand, 
+        nfp, stellsym,
+        unitnormal=unitnormal,
+        mpol=mpol, ntor=ntor,
+    )
+    
+    # ----- Interpolate to generate smooth poloidal cross sections -----
+    phi_expand = jnp.linspace(0, 1/nfp, plasma_gamma.shape[0] * tor_interp)
+    uniform_offset_surface_jax = cls(
+        nfp=nfp, stellsym=stellsym, 
+        mpol=mpol, ntor=ntor, 
+        quadpoints_phi=phi_expand, 
+        quadpoints_theta=jnp.linspace(0, 1, plasma_gamma.shape[1] * pol_interp, endpoint=False), 
+        dofs=uniform_offset_dofs
+    )
+    gamma_uniform = uniform_offset_surface_jax.gamma()
+    
+    # ----- Trimming based on stellarator symmetry -----
+    # Fit only half a field period when stellsym.
+    if stellsym:
+        # If stellsym, then only use half of the field period for surface fitting
+        len_phi = len(phi_expand)//2
+        gamma_uniform = gamma_uniform[:len_phi]
+        phi_expand = phi_expand[:len_phi]
+        # finding center to generate poloidal parameterization
+        r_plasma = jnp.sqrt(plasma_gamma[:len_phi, :, 1]**2 + plasma_gamma[:len_phi, :, 0]**2)
+        z_plasma = plasma_gamma[:len_phi, :, 2]
+    else:
+        gamma_uniform = gamma_uniform
+        # Copy the gamma from the next and last fp.
+        # finding center to generate poloidal parameterization
+        r_plasma = jnp.sqrt(plasma_gamma[:, :, 1]**2 + plasma_gamma[:, :, 0]**2)
+        z_plasma = plasma_gamma[:, :, 2]
+    r_center = jnp.average(r_plasma, axis=-1)
+    z_center = jnp.average(z_plasma, axis=-1)
+    
+    # ----- Extract R, Z coordinates -----
+    if cls == SurfaceRZFourierJAX:
+        # Backward compatible: direct cylindrical conversion
+        r_expand = jnp.sqrt(gamma_uniform[:, :, 0]**2 + gamma_uniform[:, :, 1]**2)
+        z_expand = gamma_uniform[:, :, 2]
+    else:
+        # New approach: plane-fit each poloidal slice
+        # Apply vmap over toroidal dimension (axis 0)
+        batched_project = vmap(project_points_to_plane, in_axes=0, out_axes=(0, 0, 0))
+        x_pol, y_pol, plane_data = batched_project(gamma_uniform)
+        
+        # Convert plane coordinates to R, Z for self-intersection filtering
+        # Note: these R,Z are only used for weight_remove_invalid, so exact offset doesn't matter
+        plane_origins = plane_data['origin']  # shape (n_phi, 3)
+        r_plane_center = jnp.sqrt(plane_origins[:, 0]**2 + plane_origins[:, 1]**2)
+        
+        # R: approximate radial distance from toroidal axis
+        r_expand = r_plane_center[:, None] + x_pol
+        
+        # Z: approximate vertical position
+        z_expand = plane_origins[:, 2][:, None] + y_pol
+    
+    # ----- Removing self-intersection -----
+    if rule == 'self-intersection':
+        rule_f = _polygon_self_intersection
+    elif rule == 'hull':
+        rule_f = _graham_scan
+    else:
+        raise ValueError('rule must to be \'intersection\' '
+                         'or \'hull\'. The current value is: '+ rule)
+    weight_remove_invalid = vmap(rule_f, in_axes=0)(r_expand, z_expand)
+    
+    # ----- Calculating parameterization -----
+    r_wrapped = jnp.pad(r_expand, pad_width=((0, 0), (0, 1)), mode='wrap')
+    z_wrapped = jnp.pad(z_expand, pad_width=((0, 0), (0, 1)), mode='wrap')
+    # Compute the differences along axis=1 (between successive points)
+    dr = jnp.diff(r_wrapped, axis=1)
+    dz = jnp.diff(z_wrapped, axis=1)
+    # Compute the Euclidean distance for each segment
+    segment_lengths = jnp.sqrt(dr**2 + dz**2)
+    # Sum the segment lengths to get the total arclength for each curve
+    arclengths = jnp.cumsum(segment_lengths, axis=1)
+    theta_arc = (arclengths - arclengths[:, 0][:, None]) / arclengths[:, -1][:, None]
+    phi_expand, theta_arc = jnp.broadcast_arrays(phi_expand[:, None], theta_arc)
+
+    # ----- Fitting surface -----
+    dofs_expand = cls.fit_dofs_from_gamma(
         phi_target=phi_expand,
         theta_target=theta_arc,
         gamma_target=gamma_uniform,

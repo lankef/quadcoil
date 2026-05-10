@@ -5,6 +5,11 @@ from jax.tree_util import tree_reduce
 import jax.nn as jnn
 import lineax as lx
 
+# Physical constants (from scipy.constants)
+# Vacuum magnetic permeability [H/m] = [N/A^2]
+# Value: 4π × 10^-7 H/m exactly (by definition in SI units)
+mu_0 = 1.25663706127e-06
+
 def tree_len(pytree):
     return tree_reduce(
         lambda acc, leaf: acc + jnp.atleast_1d(leaf).size, pytree, initializer=0
@@ -194,3 +199,194 @@ def safe_linear_solve_bwd(res, g):
     return (dA, db)
 
 safe_linear_solve.defvjp(safe_linear_solve_fwd, safe_linear_solve_bwd)
+
+
+# ======================================================================
+# Plane fitting utilities
+# ======================================================================
+
+@jit
+def project_points_to_plane(gamma_pol):
+    """
+    Project 3D points onto least-squares fit plane and return 2D coordinates.
+    
+    This function fits a plane to 3D points using SVD (least-squares), projects
+    the points onto that plane, and returns their coordinates in the plane's
+    local 2D coordinate system.
+    
+    The plane is fit to minimize the sum of squared perpendicular distances from
+    the points to the plane. The plane passes through the centroid of the points,
+    and the normal vector is the singular vector corresponding to the smallest
+    singular value.
+    
+    Parameters
+    ----------
+    gamma_pol : ndarray, shape (n, 3)
+        3D points to project onto the fitted plane.
+    
+    Returns
+    -------
+    x_pol : ndarray, shape (n,)
+        X coordinates of points in the plane's local coordinate system.
+    y_pol : ndarray, shape (n,)
+        Y coordinates of points in the plane's local coordinate system.
+    plane_data : dict
+        Dictionary containing plane parameters:
+        - 'origin': ndarray, shape (3,) - Point on plane (centroid)
+        - 'normal': ndarray, shape (3,) - Unit normal vector
+        - 'u_axis': ndarray, shape (3,) - First basis vector in plane
+        - 'v_axis': ndarray, shape (3,) - Second basis vector in plane
+        - 'fitting_error': float - RMS distance of points from fitted plane
+    
+    Notes
+    -----
+    - The function is JIT-compiled and vmap-compatible
+    - All linear algebra operations use JAX for automatic differentiation
+    - The orthonormal basis (u_axis, v_axis) in the plane is chosen to be
+      right-handed with the normal vector
+    - For batched operations on multiple point clouds, use:
+      `vmap(project_points_to_plane, in_axes=0, out_axes=(0, 0, 0))`
+    
+    Examples
+    --------
+    >>> import jax.numpy as jnp
+    >>> # Create points on a tilted plane with slight noise
+    >>> n = 100
+    >>> x = jnp.linspace(-1, 1, n)
+    >>> y = jnp.linspace(-1, 1, n)
+    >>> z = 0.5 * x + 0.3 * y + 0.01 * jnp.random.normal(size=n)
+    >>> points = jnp.stack([x, y, z], axis=-1)
+    >>> x_pol, y_pol, plane_data = project_points_to_plane(points)
+    >>> print(f"RMS fitting error: {plane_data['fitting_error']:.6f}")
+    """
+    # Step 1: Compute centroid (origin of the plane)
+    p0 = jnp.mean(gamma_pol, axis=0)
+    centered = gamma_pol - p0
+    
+    # Step 2: SVD to find the plane normal
+    # The normal is the right singular vector with smallest singular value
+    U, S, Vt = jnp.linalg.svd(centered, full_matrices=False)
+    normal = Vt[-1, :]
+    normal = normal / jnp.linalg.norm(normal)
+    
+    # Step 3: Construct orthonormal basis in the plane
+    # Choose an arbitrary vector that is not parallel to the normal
+    # If normal is mostly aligned with x-axis, use y-axis, otherwise use x-axis
+    arbitrary = jnp.where(
+        jnp.abs(normal[0]) < 0.9,
+        jnp.array([1.0, 0.0, 0.0]),
+        jnp.array([0.0, 1.0, 0.0])
+    )
+    
+    # First basis vector in plane
+    u = jnp.cross(normal, arbitrary)
+    u = u / jnp.linalg.norm(u)
+    
+    # Second basis vector in plane (completes right-handed system)
+    v = jnp.cross(normal, u)
+    
+    # Step 4: Project points onto the plane
+    # Distance from each point to the plane along normal direction
+    centered_from_origin = gamma_pol - p0
+    distances = jnp.dot(centered_from_origin, normal)
+    projected = gamma_pol - distances[:, None] * normal[None, :]
+    
+    # Step 5: Compute 2D coordinates in plane basis
+    relative = projected - p0
+    x_pol = jnp.dot(relative, u)
+    y_pol = jnp.dot(relative, v)
+    
+    # Compute fitting error (RMS distance from plane)
+    fitting_error = jnp.sqrt(jnp.mean(distances**2))
+    
+    # Package plane parameters
+    plane_data = {
+        'origin': p0,
+        'normal': normal,
+        'u_axis': u,
+        'v_axis': v,
+        'fitting_error': fitting_error
+    }
+    
+    return x_pol, y_pol, plane_data
+
+
+@jit
+def reconstruct_3d_from_plane(x_pol, y_pol, plane_data):
+    """
+    Reconstruct 3D points from 2D plane coordinates.
+    
+    This is the inverse operation of project_points_to_plane. Given 2D coordinates
+    in a plane's local coordinate system and the plane parameters, reconstruct
+    the 3D coordinates.
+    
+    Parameters
+    ----------
+    x_pol : ndarray, shape (n,)
+        X coordinates in the plane's local coordinate system.
+    y_pol : ndarray, shape (n,)
+        Y coordinates in the plane's local coordinate system.
+    plane_data : dict
+        Dictionary containing plane parameters from project_points_to_plane:
+        - 'origin': ndarray, shape (3,) - Point on plane (centroid)
+        - 'u_axis': ndarray, shape (3,) - First basis vector in plane
+        - 'v_axis': ndarray, shape (3,) - Second basis vector in plane
+    
+    Returns
+    -------
+    gamma_3d : ndarray, shape (n, 3)
+        Reconstructed 3D points on the plane.
+    
+    Examples
+    --------
+    >>> x_pol, y_pol, plane_data = project_points_to_plane(points_3d)
+    >>> reconstructed = reconstruct_3d_from_plane(x_pol, y_pol, plane_data)
+    >>> # reconstructed should be close to the projection of points_3d
+    """
+    p0 = plane_data['origin']
+    u = plane_data['u_axis']
+    v = plane_data['v_axis']
+    
+    # Reconstruct 3D coordinates: p = p0 + x*u + y*v
+    gamma_3d = p0[None, :] + x_pol[:, None] * u[None, :] + y_pol[:, None] * v[None, :]
+    
+    return gamma_3d
+
+
+@jit
+def plane_fitting_error(gamma_pol, plane_data):
+    """
+    Compute RMS distance of points from a fitted plane.
+    
+    Parameters
+    ----------
+    gamma_pol : ndarray, shape (n, 3)
+        3D points to measure distance from plane.
+    plane_data : dict
+        Dictionary containing plane parameters:
+        - 'origin': ndarray, shape (3,) - Point on plane
+        - 'normal': ndarray, shape (3,) - Unit normal vector
+    
+    Returns
+    -------
+    rms_error : float
+        Root mean square distance of points from the plane.
+    max_error : float
+        Maximum absolute distance of any point from the plane.
+    
+    Examples
+    --------
+    >>> x_pol, y_pol, plane_data = project_points_to_plane(points_3d)
+    >>> rms_err, max_err = plane_fitting_error(points_3d, plane_data)
+    """
+    p0 = plane_data['origin']
+    normal = plane_data['normal']
+    
+    # Distance from each point to the plane
+    centered = gamma_pol - p0
+    distances = jnp.dot(centered, normal)
+    
+    rms_error = jnp.sqrt(jnp.mean(distances**2))
+    max_error = jnp.max(jnp.abs(distances))
+    
+    return rms_error, max_error

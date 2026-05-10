@@ -10,13 +10,24 @@ authors = [
 ]
 description = "QUADCOIL, a global stellarator coil optimizer and coil complexity proxy."
 readme = "README.md"
-requires-python = ">=3.8"
-dependencies = ["numpy", "jax >= 0.5.0", "optax >= 0.2.5", "lineax >= 0.0.1", "scipy", "matplotlib"]
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "jax >= 0.4.38",
+    "lineax >= 0.0.6",
+    "optimistix >= 0.1.0",
+    "slsqp-jax >= 0.15.0"
+]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
 license = "MIT"
+
+[project.optional-dependencies]
+visualization = ["matplotlib"]
+coil-cutting = ["scipy", "matplotlib"]
+all = ["matplotlib", "scipy"]
 
 [project.urls]
 Homepage = "https://github.com/lankef/quadcoil"

@@ -20,7 +20,7 @@ def _resolve_quadpoints(
     winding_dofs,
 ):
     """
-    Resolves default quadrature points and validates winding surface inputs.
+    Used in quadcoil. Supplies default values for quadrature points and validates winding surface inputs.
 
     Returns
     -------

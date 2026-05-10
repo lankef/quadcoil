@@ -1,10 +1,11 @@
-import jax.numpy as jnp
 from functools import partial, lru_cache
 from jax import jit, tree_util
 from jax.scipy.special import factorial
 from math import comb
-import numpy as np
 from .math_utils import norm_helper, is_ndarray
+import numpy as np
+import jax.numpy as jnp
+import sys
 
 
 class SurfaceJAX:
@@ -25,7 +26,9 @@ class SurfaceJAX:
         Grid spacings.
     """
 
-    def __init__(self, quadpoints_phi: jnp.ndarray, quadpoints_theta: jnp.ndarray):
+    def __init__(self, nfp: int, stellsym: bool, mpol: int, ntor: int,
+                 quadpoints_phi: jnp.ndarray, quadpoints_theta: jnp.ndarray,
+                 dofs: jnp.ndarray):
         if not is_ndarray(quadpoints_phi, 1):
             raise TypeError(
                 'quadpoints_phi has incorrect type or shape: '
@@ -36,6 +39,13 @@ class SurfaceJAX:
                 'quadpoints_theta has incorrect type or shape: '
                 + str(type(quadpoints_theta))
             )
+        if not is_ndarray(dofs, 1):
+            raise TypeError('dofs has incorrect type or shape: ' + str(type(dofs)))
+        self.nfp = nfp
+        self.stellsym = stellsym
+        self.mpol = mpol
+        self.ntor = ntor
+        self.dofs = dofs
         self.quadpoints_phi = quadpoints_phi
         self.quadpoints_theta = quadpoints_theta
         self.theta_mesh, self.phi_mesh = jnp.meshgrid(quadpoints_theta, quadpoints_phi)
@@ -43,9 +53,26 @@ class SurfaceJAX:
         self.dtheta = quadpoints_theta[1] - quadpoints_theta[0]
 
     # ------------------------------------------------------------------
-    # Abstract interface — subclasses must implement all of these
+    # Concrete methods built on the abstract interface
     # ------------------------------------------------------------------
 
+    @classmethod
+    def dof_to_gamma(cls, dofs, phi_grid, theta_grid, nfp, stellsym,
+                     dash1_order=0, dash2_order=0,
+                     mpol: int = 10, ntor: int = 10):
+        """Map DOF vector to gamma (or derivatives) on the quadrature grid."""
+        return cls._dof_to_gamma_op(
+            phi_grid=phi_grid,
+            theta_grid=theta_grid,
+            nfp=nfp,
+            stellsym=stellsym,
+            dash1_order=dash1_order,
+            dash2_order=dash2_order,
+            mpol=mpol,
+            ntor=ntor,
+        ) @ dofs
+
+    @partial(jit, static_argnames=['a', 'b'])
     def gammadash(self, a: int, b: int) -> jnp.ndarray:
         """Surface position or mixed partial derivative.
 
@@ -63,45 +90,17 @@ class SurfaceJAX:
             the quadrature grid.  Derivatives are with respect to the
             *normalised* angles in [0, 1).
         """
-        raise NotImplementedError
-
-    @staticmethod
-    def fit_dofs_from_gamma(
-            phi_target, theta_target,
-            gamma_target,
-            nfp: int, stellsym: bool,
-            mpol: int = 5, ntor: int = 5,
-            lam_tikhonov=0.,
-            custom_weight=None):
-        """Fit surface DOFs to sampled gamma points.
-
-        Parameters
-        ----------
-        phi_target : array, shape (nphi, ntheta)
-            Target phi coordinates (normalized to [0, 1]).
-        theta_target : array, shape (nphi, ntheta)
-            Target theta coordinates (normalized to [0, 1]).
-        gamma_target : array, shape (nphi, ntheta, 3)
-            Target surface positions in Cartesian coordinates [x, y, z].
-        nfp : int
-            Number of field periods.
-        stellsym : bool
-            Stellarator symmetry flag.
-        mpol : int, optional
-            Maximum poloidal mode number.
-        ntor : int, optional
-            Maximum toroidal mode number.
-        lam_tikhonov : float, optional
-            Tikhonov regularization parameter for higher harmonics.
-        custom_weight : array, shape (nphi, ntheta), optional
-            Custom weights for fitting points.
-
-        Returns
-        -------
-        dofs : array
-            Fitted DOF vector for this surface type.
-        """
-        raise NotImplementedError
+        return type(self).dof_to_gamma(
+            dofs=self.dofs,
+            phi_grid=self.phi_mesh,
+            theta_grid=self.theta_mesh,
+            nfp=self.nfp,
+            stellsym=self.stellsym,
+            dash1_order=a,
+            dash2_order=b,
+            mpol=self.mpol,
+            ntor=self.ntor,
+        )
 
     # ------------------------------------------------------------------
     # Convenience aliases
@@ -126,72 +125,6 @@ class SurfaceJAX:
     def unitnormal(self):
         normal = self.normal()
         return normal / jnp.linalg.norm(normal, axis=-1)[:, :, None]
-
-    @jit
-    def da(self):
-        """Area element: |N| * dphi * dtheta."""
-        normN = jnp.linalg.norm(self.normal(), axis=-1)
-        return self.dphi * self.dtheta * normN
-
-    @jit
-    def integrate(self, scalar_field):
-        """Integrate a scalar field over the surface."""
-        return jnp.sum(scalar_field * self.da())
-
-    @jit
-    def area(self):
-        return jnp.sum(self.da())
-
-    @jit
-    def grad_helper(self):
-        """Contravariant vectors grad-phi and grad-theta.
-
-        Returns
-        -------
-        (grad1, grad2) each of shape (nphi, ntheta, 3)
-        """
-        dg2 = self.gammadash2()
-        dg1 = self.gammadash1()
-        dg1xdg2 = jnp.cross(dg1, dg2, axis=-1)
-        denom = jnp.sum(dg1xdg2 ** 2, axis=-1)
-        grad1 = jnp.cross(dg2,  dg1xdg2, axis=-1) / denom[:, :, None]
-        grad2 = jnp.cross(dg1, -dg1xdg2, axis=-1) / denom[:, :, None]
-        return grad1, grad2
-
-    @jit
-    def dga_inv_n_dashb(self):
-        """Derivatives of (1/|N|) * (dγ/dphi) and (1/|N|) * (dγ/dtheta).
-
-        Returns
-        -------
-        (dg1_inv_n_dash1, dg1_inv_n_dash2,
-         dg2_inv_n_dash1, dg2_inv_n_dash2)
-            Each of shape (nphi, ntheta, 3).
-        """
-        normal = self.normal()
-        dg1 = self.gammadash1()
-        dg2 = self.gammadash2()
-        dg11 = self.gammadash1dash1()
-        dg12 = self.gammadash1dash2()
-        dg22 = self.gammadash2dash2()
-
-        normaldash1 = jnp.cross(dg11, dg2) + jnp.cross(dg1, dg12)
-        normaldash2 = jnp.cross(dg12, dg2) + jnp.cross(dg1, dg22)
-
-        _, inv_normN = norm_helper(normal)
-        denominator = jnp.sum(normal ** 2, axis=-1) ** 1.5
-        inv_normN_dash1 = -jnp.sum(normal * normaldash1, axis=-1) / denominator
-        inv_normN_dash2 = -jnp.sum(normal * normaldash2, axis=-1) / denominator
-
-        inv_n = inv_normN[:, :, None]
-        inv_n_d1 = inv_normN_dash1[:, :, None]
-        inv_n_d2 = inv_normN_dash2[:, :, None]
-
-        dg1_inv_n_dash1 = dg11 * inv_n  + dg1 * inv_n_d1
-        dg1_inv_n_dash2 = dg12 * inv_n  + dg1 * inv_n_d2
-        dg2_inv_n_dash1 = dg12 * inv_n  + dg2 * inv_n_d1
-        dg2_inv_n_dash2 = dg22 * inv_n  + dg2 * inv_n_d2
-        return dg1_inv_n_dash1, dg1_inv_n_dash2, dg2_inv_n_dash1, dg2_inv_n_dash2
 
     @jit
     def unitnormaldash(self):
@@ -261,10 +194,98 @@ class SurfaceJAX:
         disc = jnp.sqrt(H * H - K)
         return jnp.stack([H, K, H + disc, H - disc], axis=-1)
 
+    @jit
+    def da(self):
+        """Area element: |N| * dphi * dtheta."""
+        normN = jnp.linalg.norm(self.normal(), axis=-1)
+        return self.dphi * self.dtheta * normN
+
+    @jit
+    def integrate(self, scalar_field):
+        """Integrate a scalar field over the surface."""
+        return jnp.sum(scalar_field * self.da())
+
+    @jit
+    def area(self):
+        return jnp.sum(self.da())
+
+    # ------------------------------------------------------------------
+    # Helper functions for calculating quantities
+    # ------------------------------------------------------------------
+    
+    @jit
+    def grad_helper(self):
+        """Contravariant vectors grad-phi and grad-theta.
+
+        Returns
+        -------
+        (grad1, grad2) each of shape (nphi, ntheta, 3)
+        """
+        dg2 = self.gammadash2()
+        dg1 = self.gammadash1()
+        dg1xdg2 = jnp.cross(dg1, dg2, axis=-1)
+        denom = jnp.sum(dg1xdg2 ** 2, axis=-1)
+        grad1 = jnp.cross(dg2,  dg1xdg2, axis=-1) / denom[:, :, None]
+        grad2 = jnp.cross(dg1, -dg1xdg2, axis=-1) / denom[:, :, None]
+        return grad1, grad2
+
+    @jit
+    def dga_inv_n_dashb(self):
+        """Derivatives of (1/|N|) * (dγ/dphi) and (1/|N|) * (dγ/dtheta).
+
+        Returns
+        -------
+        (dg1_inv_n_dash1, dg1_inv_n_dash2,
+         dg2_inv_n_dash1, dg2_inv_n_dash2)
+            Each of shape (nphi, ntheta, 3).
+        """
+        normal = self.normal()
+        dg1 = self.gammadash1()
+        dg2 = self.gammadash2()
+        dg11 = self.gammadash1dash1()
+        dg12 = self.gammadash1dash2()
+        dg22 = self.gammadash2dash2()
+
+        normaldash1 = jnp.cross(dg11, dg2) + jnp.cross(dg1, dg12)
+        normaldash2 = jnp.cross(dg12, dg2) + jnp.cross(dg1, dg22)
+
+        _, inv_normN = norm_helper(normal)
+        denominator = jnp.sum(normal ** 2, axis=-1) ** 1.5
+        inv_normN_dash1 = -jnp.sum(normal * normaldash1, axis=-1) / denominator
+        inv_normN_dash2 = -jnp.sum(normal * normaldash2, axis=-1) / denominator
+
+        inv_n = inv_normN[:, :, None]
+        inv_n_d1 = inv_normN_dash1[:, :, None]
+        inv_n_d2 = inv_normN_dash2[:, :, None]
+
+        dg1_inv_n_dash1 = dg11 * inv_n  + dg1 * inv_n_d1
+        dg1_inv_n_dash2 = dg12 * inv_n  + dg1 * inv_n_d2
+        dg2_inv_n_dash1 = dg12 * inv_n  + dg2 * inv_n_d1
+        dg2_inv_n_dash2 = dg22 * inv_n  + dg2 * inv_n_d2
+        return dg1_inv_n_dash1, dg1_inv_n_dash2, dg2_inv_n_dash1, dg2_inv_n_dash2
+
     # ------------------------------------------------------------------
     # Misc helpers
     # ------------------------------------------------------------------
+    @classmethod
+    def from_simsopt(cls, surface_simsopt):
+        # Get the class name of the input surface and append "JAX"
+        simsopt_class_name = type(surface_simsopt).__name__
+        jax_class_name = simsopt_class_name + "JAX"
 
+        # Look up the JAX class dynamically from the current module
+        current_module = sys.modules[__name__]
+        jax_cls = getattr(current_module, jax_class_name, None)
+
+        if jax_cls is None:
+            raise TypeError(
+                f"No JAX equivalent found for '{simsopt_class_name}': "
+                f"'{jax_class_name}' is not defined in this module."
+            )
+
+        # Delegate to the JAX class's own from_simsopt
+        return jax_cls.from_simsopt(surface_simsopt)
+        
     def get_dofs(self):
         return self.dofs.copy()
 
@@ -275,33 +296,280 @@ class SurfaceJAX:
             raise ModuleNotFoundError('Simsopt must be installed to use plot().')
 
     def copy_and_set_quadpoints(self, quadpoints_phi, quadpoints_theta):
-        raise NotImplementedError
+        return type(self)(
+            nfp=self.nfp,
+            stellsym=self.stellsym,
+            mpol=self.mpol,
+            ntor=self.ntor,
+            quadpoints_phi=quadpoints_phi,
+            quadpoints_theta=quadpoints_theta,
+            dofs=self.dofs,
+        )
 
-    def gen_offset_dofs(self, d_expand,
-            mpol=5, ntor=5, smoothing='intersection',
-            pol_interp=2, tor_interp=2,
-            lam_tikhonov=1e-5):
-        """Generate winding surface DOFs by offsetting this surface by ``d_expand``.
+    # ------------------------------------------------------------------
+    # Winding surface generators
+    # ------------------------------------------------------------------
+
+    def uniform_offset(self, d_expand, 
+                       mpol=None, ntor=None,
+                       quadpoints_phi=None, quadpoints_theta=None, 
+                       phi_interp=1, theta_interp=1):
+        cls = type(self)
+        if mpol is None:
+            mpol = self.mpol
+        if ntor is None:
+            ntor = self.ntor
+        if quadpoints_phi is None:
+            quadpoints_phi = self.quadpoints_phi
+        if quadpoints_theta is None:
+            quadpoints_theta = self.quadpoints_theta
+        # expanding surface and generating quadpoints
+        (
+            gamma_offset,
+            _, _, da,
+            quadpoints_phi_offset, 
+            quadpoints_theta_offset
+        ) = self._gamma_offset(
+            d_expand, 
+            phi_interp=phi_interp,
+            theta_interp=theta_interp,
+            endpoint=True,
+        )
+        # If we are fitting an RZFourier surface,
+        # generate toroidal angle based on arctan
+        if cls == SurfaceRZFourierJAX:
+            phi_target = jnp.arctan2(gamma_offset[:, :, 1], gamma_offset[:, :, 0]) / jnp.pi / 2 
+        # Otherwise, use the same Toroidal angle
+        # as the pre-offset quadrature points.
+        else:
+            phi_target = np.broadcast_to(quadpoints_phi_offset[:, None], gamma_offset.shape[:2])
+        new_dofs = cls._fit_dofs_from_gamma(
+            phi_target=phi_target, 
+            theta_target=np.broadcast_to(quadpoints_theta_offset[None, :], gamma_offset.shape[:2]),
+            gamma_target=gamma_offset,
+            nfp=self.nfp, stellsym=self.stellsym,
+            mpol=mpol, ntor=ntor,
+            lam_tikhonov=0.,
+            custom_weight=da,
+        )
+        return cls(
+            nfp=self.nfp,
+            stellsym=self.stellsym,
+            mpol=mpol,
+            ntor=ntor,
+            quadpoints_phi=quadpoints_phi,
+            quadpoints_theta=quadpoints_theta,
+            dofs=new_dofs,
+        )
+
+    def gen_winding_surface(
+        self, d_expand, 
+        unitnormal=None,
+        mpol=7, ntor=7,
+        pol_interp=2,
+        tor_interp=2,
+        lam_tikhonov=1e-5,
+        rule='self-intersection', 
+    ):
+        cls = type(self)
+        nfp = self.nfp
+        stellsym = self.stellsym
+        gamma_uniform, _, _, da, _, _ = self._gamma_offset(
+            d_expand=d_expand, 
+            phi_interp=phi_interp,
+            theta_interp=theta_interp,
+        )
+        # ----- Extract R, Z coordinates -----
+        # Extract a set of planar coordinates for
+        # each "Phi" slice to remove self-intersections. 
+        if cls == SurfaceRZFourierJAX:            
+            # If the input is a RZFourier surface, then 
+            # use the RZ plane as the target plane for smoothing
+            # Backward compatible: direct cylindrical conversion
+            r_expand = jnp.sqrt(gamma_uniform[:, :, 0]**2 + gamma_uniform[:, :, 1]**2)
+            z_expand = gamma_uniform[:, :, 2]
+        else:
+            # Otherwise, we generate "effective" R Z coordinates 
+            # by projecting each theta plane onto its best-fit poloidal plane.
+            # An "effective" r and z can be derived from the point's coordinate
+            # in the projection plane.
+            batched_project = vmap(project_points_to_plane, in_axes=0, out_axes=(0, 0, 0))
+            r_expand, z_expand, plane_data = batched_project(gamma_uniform)
+        # Remove self-intersections.
+        if rule == 'self-intersection':
+            rule_f = _polygon_self_intersection
+        elif rule == 'hull':
+            rule_f = _graham_scan
+        else:
+            raise ValueError('rule must to be \'intersection\' '
+                             'or \'hull\'. The current value is: '+ rule)
+        weight_remove_invalid = vmap(rule_f, in_axes=0)(r_expand, z_expand)
+        # ----- Generating poloidal angles -----
+        # Since each poloidal slices have points removed, we'll 
+
+    # ------------------------------------------------------------------
+    # Winding surface helpers
+    # ------------------------------------------------------------------
+
+    @classmethod
+    @partial(jit, static_argnames=['cls', 'nfp', 'stellsym', 'mpol', 'ntor'])
+    def _fit_dofs_from_gamma(
+            cls,
+            phi_target, theta_target,
+            gamma_target,
+            nfp: int, stellsym: bool,
+            mpol: int = 5, ntor: int = 5,
+            lam_tikhonov=0.,
+            custom_weight=None
+    ):
+        """Fit surface DOFs to sampled gamma points.
+
+        Calls :meth:`_build_surface_fit_matrices` (subclass-specific) to
+        obtain the operator and target, then solves the weighted
+        least-squares problem with optional Tikhonov regularization.
 
         Parameters
         ----------
-        d_expand : float
-            Offset distance.
-        mpol, ntor : int
-            Fourier resolution of the fitted winding surface.
-        smoothing : {'intersection', 'hull', 'none'}
-            Strategy for removing self-intersecting regions of the offset:
-            ``'none'`` uses a plain uniform offset; ``'intersection'`` filters
-            via polygon self-intersection detection; ``'hull'`` filters via a
-            convex-hull (Graham scan).
-        pol_interp, tor_interp : int
-            Poloidal / toroidal interpolation factors (used when
-            ``smoothing != 'none'``).
-        lam_tikhonov : float
-            Tikhonov regularization for the surface fit (used when
-            ``smoothing != 'none'``).
+        phi_target : array, shape (nphi, ntheta)
+            Target phi coordinates (normalized to [0, 1]).
+        theta_target : array, shape (nphi, ntheta)
+            Target theta coordinates (normalized to [0, 1]).
+        gamma_target : array, shape (nphi, ntheta, 3)
+            Target surface positions in Cartesian coordinates [x, y, z].
+        nfp : int
+            Number of field periods.
+        stellsym : bool
+            Stellarator symmetry flag.
+        mpol : int, optional
+            Maximum poloidal mode number.
+        ntor : int, optional
+            Maximum toroidal mode number.
+        lam_tikhonov : float, optional
+            Tikhonov regularization parameter for higher harmonics.
+        custom_weight : array, shape (nphi, ntheta), optional
+            Custom weights for fitting points.
+
+        Returns
+        -------
+        dofs : array
+            Fitted DOF vector for this surface type.
+        """
+        from .math_utils import safe_linear_solve
+        A_lstsq, b_lstsq, m_2_n_2 = cls._build_surface_fit_matrices(
+            phi_target, theta_target, gamma_target,
+            nfp, stellsym, mpol, ntor,
+        )
+        if custom_weight is not None:
+            if custom_weight.shape != A_lstsq.shape[:2]:
+                raise ValueError(
+                    'custom_weight must have the shape '
+                    + str(A_lstsq.shape[:2])
+                    + ', but it has shape '
+                    + str(custom_weight.shape)
+                )
+            A_lstsq = A_lstsq * custom_weight[:, :, None, None]
+            b_lstsq = b_lstsq * custom_weight[:, :, None]
+        A_lstsq = A_lstsq.reshape(-1, A_lstsq.shape[-1])
+        b_lstsq = b_lstsq.flatten()
+        lam = lam_tikhonov * jnp.diag(m_2_n_2)
+        return safe_linear_solve(
+            A=A_lstsq.T.dot(A_lstsq) + lam,
+            b=A_lstsq.T.dot(b_lstsq),
+        )
+
+    @staticmethod
+    def _dof_to_gamma_op(phi_grid, theta_grid, nfp, stellsym,
+                        dash1_order=0, dash2_order=0,
+                        mpol: int = 10, ntor: int = 10):
+        """Operator mapping DOFs to gamma (or derivatives) on the grid.
+
+        Returns an array of shape ``(nphi, ntheta, 3, ndof)`` such that
+        ``op @ dofs`` gives the surface position (or derivative).
+
+        Must be implemented by subclasses.
         """
         raise NotImplementedError
+
+    @staticmethod
+    def _build_surface_fit_matrices(
+            phi_target, theta_target, gamma_target,
+            nfp: int, stellsym: bool,
+            mpol: int = 5, ntor: int = 5):
+        """Build the least-squares matrices for surface fitting.
+
+        Must be implemented by subclasses.
+
+        Returns
+        -------
+        A_lstsq : array, shape (nphi, ntheta, k, ndof)
+            The linear operator mapping DOFs to the fitting target.
+        b_lstsq : array, shape (nphi, ntheta, k)
+            The target vector.
+        m_2_n_2 : array, shape (ndof,)
+            Mode-number weights ``m^2 + n^2`` for Tikhonov regularization.
+        """
+        raise NotImplementedError
+
+    @partial(jit, static_argnames=['phi_interp', 'theta_interp', 'endpoint'])
+    def _gamma_offset(
+        self, 
+        d_expand, 
+        phi_interp=2,
+        theta_interp=2,
+        endpoint=False
+    ):
+        # Define quadpoints for the new surface.  For stellarator-symmetric
+        # surfaces we sample the half-period [0, 0.5/nfp) only.  Using
+        # ``ceil(n*phi_interp / 2) = (n*phi_interp + 1) // 2`` here is
+        # essential: the off-by-one floor variant under-samples the
+        # half-period and leaves ``_fit_dofs_from_gamma`` with a rank-
+        # deficient least-squares system, producing oscillatory min-norm
+        # solutions on the full period.
+        self_n_phi = len(self.quadpoints_phi)
+        self_n_theta = len(self.quadpoints_theta)
+        
+        if self.stellsym:
+            n_phi_target = (self_n_phi * phi_interp + 1) // 2
+        else:
+            n_phi_target = self_n_phi * phi_interp
+        n_theta_target = self_n_theta * theta_interp
+        
+        # When endpoint=True, we'll slice [:-1, :-1] to remove the periodic
+        # endpoint, so we need one extra point in each dimension.
+        if endpoint:
+            n_phi_target += 1
+            n_theta_target += 1
+            
+        quadpoints_phi = jnp.linspace(
+            0, 0.5/self.nfp if self.stellsym else 1/self.nfp,
+            n_phi_target,
+            endpoint=endpoint
+        )
+        quadpoints_theta = jnp.linspace(
+            0, 1, 
+            n_theta_target, 
+            endpoint=endpoint
+        )
+        new_surface = self.copy_and_set_quadpoints(
+            quadpoints_phi=quadpoints_phi, 
+            quadpoints_theta=quadpoints_theta
+        )
+        gamma_rolled = new_surface.gamma() + new_surface.unitnormal() * d_expand
+        gamma_offset = gamma_rolled[:-1, :-1, :]
+        # Calculating the effective Jacobian of each point to 
+        # weigh each point based on the size of their area elements.
+        gamma_phi_plus = gamma_rolled[1:, :-1, :]
+        gamma_theta_plus = gamma_rolled[:-1, 1:, :]
+        dphi = (gamma_phi_plus - gamma_offset) * len(quadpoints_phi)
+        dtheta = (gamma_theta_plus - gamma_offset) * len(quadpoints_theta)
+        da = jnp.linalg.norm(jnp.cross(dphi, dtheta), axis=-1)
+        return (
+            gamma_offset, 
+            dphi, dtheta, da,
+            quadpoints_phi[:-1], 
+            quadpoints_theta[:-1]
+        )
+    
 
 
 # ======================================================================
@@ -323,50 +591,9 @@ class SurfaceRZFourierJAX(SurfaceJAX):
     ``[rc, rs, zc, zs]`` otherwise, matching simsopt's convention exactly.
     """
 
-    def __init__(self, nfp: int, stellsym: bool, mpol: int, ntor: int,
-                 quadpoints_phi: jnp.ndarray, quadpoints_theta: jnp.ndarray,
-                 dofs: jnp.ndarray):
-        super().__init__(quadpoints_phi, quadpoints_theta)
-        if not is_ndarray(dofs, 1):
-            raise TypeError('dofs has incorrect type or shape: ' + str(type(dofs)))
-        self.nfp = nfp
-        self.stellsym = stellsym
-        self.mpol = mpol
-        self.ntor = ntor
-        self.dofs = dofs
-
-    # ------------------------------------------------------------------
-    # Core computation
-    # ------------------------------------------------------------------
-
-    @partial(jit, static_argnames=['a', 'b'])
-    def gammadash(self, a: int, b: int):
-        return SurfaceRZFourierJAX.dof_to_gamma(
-            dofs=self.dofs,
-            phi_grid=self.phi_mesh,
-            theta_grid=self.theta_mesh,
-            nfp=self.nfp,
-            stellsym=self.stellsym,
-            dash1_order=a,
-            dash2_order=b,
-            mpol=self.mpol,
-            ntor=self.ntor,
-        )
-
     # ------------------------------------------------------------------
     # Construction helpers
     # ------------------------------------------------------------------
-
-    def copy_and_set_quadpoints(self, quadpoints_phi, quadpoints_theta):
-        return SurfaceRZFourierJAX(
-            nfp=self.nfp,
-            stellsym=self.stellsym,
-            mpol=self.mpol,
-            ntor=self.ntor,
-            quadpoints_phi=quadpoints_phi,
-            quadpoints_theta=quadpoints_theta,
-            dofs=self.dofs,
-        )
 
     def gen_offset_dofs(self, d_expand,
             mpol=5, ntor=5, smoothing='intersection',
@@ -593,7 +820,7 @@ class SurfaceRZFourierJAX(SurfaceJAX):
         return A_lstsq, m_2_n_2
 
     @staticmethod
-    def dof_to_gamma_op(
+    def _dof_to_gamma_op(
             phi_grid, theta_grid,
             nfp, stellsym,
             dash1_order=0, dash2_order=0,
@@ -636,104 +863,23 @@ class SurfaceRZFourierJAX(SurfaceJAX):
         )
 
     @staticmethod
-    def dof_to_gamma(
-            dofs, phi_grid, theta_grid,
-            nfp, stellsym,
-            dash1_order=0, dash2_order=0,
-            mpol: int = 10, ntor: int = 10):
-        """Map DOF vector to gamma (or derivatives) on the quadrature grid."""
-        return SurfaceRZFourierJAX.dof_to_gamma_op(
-            phi_grid=phi_grid,
-            theta_grid=theta_grid,
-            nfp=nfp,
-            stellsym=stellsym,
-            dash1_order=dash1_order,
-            dash2_order=dash2_order,
-            mpol=mpol,
-            ntor=ntor,
-        ) @ dofs
-
-    @staticmethod
     @partial(jit, static_argnames=['nfp', 'stellsym', 'mpol', 'ntor'])
-    def fit_dofs_from_gamma(
-            phi_target, theta_target,
-            gamma_target,
+    def _build_surface_fit_matrices(
+            phi_target, theta_target, gamma_target,
             nfp: int, stellsym: bool,
-            mpol: int = 5, ntor: int = 5,
-            lam_tikhonov=0.,
-            custom_weight=None):
-        """Fit Fourier surface DOFs to sampled gamma points.
-
-        Solves a weighted least-squares problem with optional Tikhonov
-        regularization and returns the fitted DOF vector for
-        :class:`SurfaceRZFourierJAX`.
-
-        Parameters
-        ----------
-        phi_target : array, shape (nphi, ntheta)
-            Target phi coordinates (normalized to [0, 1]).
-        theta_target : array, shape (nphi, ntheta)
-            Target theta coordinates (normalized to [0, 1]).
-        gamma_target : array, shape (nphi, ntheta, 3)
-            Target surface positions in Cartesian coordinates [x, y, z].
-        nfp : int
-            Number of field periods.
-        stellsym : bool
-            Stellarator symmetry flag.
-        mpol : int, optional
-            Maximum poloidal mode number.
-        ntor : int, optional
-            Maximum toroidal mode number.
-        lam_tikhonov : float, optional
-            Tikhonov regularization parameter for higher harmonics.
-        custom_weight : array, shape (nphi, ntheta), optional
-            Custom weights for fitting points.
-
-        Returns
-        -------
-        dofs : array
-            Fitted DOF vector for SurfaceRZFourierJAX.
-        """
-        from .math_utils import safe_linear_solve
-        
-        # Extract R and Z from gamma [x, y, z]
+            mpol: int = 5, ntor: int = 5):
         r_fit = jnp.sqrt(gamma_target[:, :, 0]**2 + gamma_target[:, :, 1]**2)
         z_fit = gamma_target[:, :, 2]
-
-        # Fits r and z with a surface
         A_lstsq, m_2_n_2 = SurfaceRZFourierJAX.dof_to_rz_op(
             theta_grid=theta_target,
             phi_grid=phi_target,
             nfp=nfp,
             stellsym=stellsym,
             mpol=mpol,
-            ntor=ntor
+            ntor=ntor,
         )
         b_lstsq = jnp.concatenate([r_fit[:, :, None], z_fit[:, :, None]], axis=2)
-        # A and b of the lstsq problem.
-        # A_lstsq is a function of phi_grid and theta_grid
-        # b_lstsq is differentiable.
-        # A_lstsq has shape: [nphi, ntheta, 2(rz), ndof]
-        # b_lstsq has shape: [nphi, ntheta, 2(rz)]
-        if custom_weight is not None:
-            if custom_weight.shape != A_lstsq.shape[:2]:
-                raise ValueError(
-                    'custom_weight must have the shape '
-                    + str(A_lstsq.shape[:2])
-                    + ', but it has shape '
-                    + str(custom_weight.shape)
-                )
-            A_lstsq = A_lstsq * custom_weight[:, :, None, None]
-            b_lstsq = b_lstsq * custom_weight[:, :, None]
-        A_lstsq = A_lstsq.reshape(-1, A_lstsq.shape[-1])
-        b_lstsq = b_lstsq.flatten()
-        # tikhonov regularization for higher harmonics
-        lam = lam_tikhonov * jnp.diag(m_2_n_2)
-        solution = safe_linear_solve(
-            A=A_lstsq.T.dot(A_lstsq) + lam,
-            b=A_lstsq.T.dot(b_lstsq),
-        )
-        return solution
+        return A_lstsq, b_lstsq, m_2_n_2
 
 
 # ======================================================================
@@ -783,50 +929,9 @@ class SurfaceXYZTensorFourierJAX(SurfaceJAX):
         Active Fourier coefficients in simsopt ordering.
     """
 
-    def __init__(self, nfp: int, stellsym: bool, mpol: int, ntor: int,
-                 quadpoints_phi: jnp.ndarray, quadpoints_theta: jnp.ndarray,
-                 dofs: jnp.ndarray):
-        super().__init__(quadpoints_phi, quadpoints_theta)
-        if not is_ndarray(dofs, 1):
-            raise TypeError('dofs has incorrect type or shape: ' + str(type(dofs)))
-        self.nfp = nfp
-        self.stellsym = stellsym
-        self.mpol = mpol
-        self.ntor = ntor
-        self.dofs = dofs
-
-    # ------------------------------------------------------------------
-    # Core computation
-    # ------------------------------------------------------------------
-
-    @partial(jit, static_argnames=['a', 'b'])
-    def gammadash(self, a: int, b: int):
-        return xyztensor_gammadash(
-            dofs=self.dofs,
-            quadpoints_phi=self.quadpoints_phi,
-            quadpoints_theta=self.quadpoints_theta,
-            nfp=self.nfp,
-            stellsym=self.stellsym,
-            a=a,
-            b=b,
-            mpol=self.mpol,
-            ntor=self.ntor,
-        )
-
     # ------------------------------------------------------------------
     # Construction helpers
     # ------------------------------------------------------------------
-
-    def copy_and_set_quadpoints(self, quadpoints_phi, quadpoints_theta):
-        return SurfaceXYZTensorFourierJAX(
-            nfp=self.nfp,
-            stellsym=self.stellsym,
-            mpol=self.mpol,
-            ntor=self.ntor,
-            quadpoints_phi=quadpoints_phi,
-            quadpoints_theta=quadpoints_theta,
-            dofs=self.dofs,
-        )
 
     def from_simsopt(simsopt_surf):
         """Load from a :class:`simsopt.geo.SurfaceXYZTensorFourier` instance."""
@@ -914,7 +1019,7 @@ class SurfaceXYZTensorFourierJAX(SurfaceJAX):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def dof_to_gamma_op(
+    def _dof_to_gamma_op(
             phi_grid, theta_grid,
             nfp: int, stellsym: bool,
             dash1_order=0, dash2_order=0,
@@ -934,154 +1039,132 @@ class SurfaceXYZTensorFourierJAX(SurfaceJAX):
         ndof_y = len(rows_y)
         ndof_z = len(rows_z)
         ndof_total = ndof_x + ndof_y + ndof_z
-        
-        # Get quadpoints from grid
-        quadpoints_phi = phi_grid[:, 0]
-        quadpoints_theta = theta_grid[0, :]
-        nphi = len(quadpoints_phi)
-        ntheta = len(quadpoints_theta)
-        
-        # Build operator by computing gamma for each unit DOF vector
-        # This is inefficient but correct; could be optimized later
-        operator = jnp.zeros((nphi, ntheta, 3, ndof_total))
-        
-        for dof_idx in range(ndof_total):
-            unit_dof = jnp.zeros(ndof_total).at[dof_idx].set(1.0)
-            gamma_col = xyztensor_gammadash(
-                dofs=unit_dof,
-                quadpoints_phi=quadpoints_phi,
-                quadpoints_theta=quadpoints_theta,
-                nfp=nfp,
-                stellsym=stellsym,
-                a=dash1_order,
-                b=dash2_order,
-                mpol=mpol,
-                ntor=ntor,
-            )
-            operator = operator.at[:, :, :, dof_idx].set(gamma_col)
-        
+
+        quadpoints_phi = phi_grid[:, 0]      # (nphi,)
+        quadpoints_theta = theta_grid[0, :]  # (ntheta,)
+        nphi = quadpoints_phi.shape[0]
+        ntheta = quadpoints_theta.shape[0]
+
+        # ----------------------------------------------------------------
+        # Vectorised construction of the (nphi, ntheta, 3, ndof) operator.
+        #
+        # For each active DOF (r, c), the corresponding column of the
+        # operator is V_a[:, c] * W_b[:, r] (outer product), with Leibniz-
+        # rule trig factors for the x and y channels:
+        #
+        #   d^a x / dphi^a = sum_k C(a,k) [xhat^(k) * D^(a-k)cos
+        #                                  - yhat^(k) * D^(a-k)sin]
+        #   d^a y / dphi^a = sum_k C(a,k) [xhat^(k) * D^(a-k)sin
+        #                                  + yhat^(k) * D^(a-k)cos]
+        #
+        # where xhat^(k)[i, j, idx] = V_k[i, cols_x[idx]] * W_b[j, rows_x[idx]]
+        # and similarly for yhat (over y DOF indices).  z is not rotated, so
+        # z_op[i, j, idx] = V_a[i, cols_z[idx]] * W_b[j, rows_z[idx]].
+        # ----------------------------------------------------------------
+        Wb = _xyztensor_W(quadpoints_theta, mpol, dash2_order)            # (ntheta, 2*mpol+1)
+        Vks = [
+            _xyztensor_V(quadpoints_phi, ntor, nfp, k)
+            for k in range(dash1_order + 1)
+        ]                                                                  # each (nphi, 2*ntor+1)
+
+        # Active gather indices (numpy ints -> static JAX gather).
+        cols_x_j = jnp.asarray(cols_x)
+        rows_x_j = jnp.asarray(rows_x)
+        cols_y_j = jnp.asarray(cols_y)
+        rows_y_j = jnp.asarray(rows_y)
+        cols_z_j = jnp.asarray(cols_z)
+        rows_z_j = jnp.asarray(rows_z)
+
+        # Per-channel hat operators of shape (nphi, ntheta, ndof_*).
+        # Va_x[k][i, idx] = Vk[i, cols_x[idx]];  Wb_x[j, idx] = Wb[j, rows_x[idx]]
+        Wb_x = Wb[:, rows_x_j]               # (ntheta, ndof_x)
+        Wb_y = Wb[:, rows_y_j]               # (ntheta, ndof_y)
+        Wb_z = Wb[:, rows_z_j]               # (ntheta, ndof_z)
+
+        xhat_ops = [Vk[:, cols_x_j][:, None, :] * Wb_x[None, :, :] for Vk in Vks]
+        yhat_ops = [Vk[:, cols_y_j][:, None, :] * Wb_y[None, :, :] for Vk in Vks]
+        z_op_z = Vks[dash1_order][:, cols_z_j][:, None, :] * Wb_z[None, :, :]
+
+        # Derivatives of cos(phi_rad) and sin(phi_rad) w.r.t. phi_norm.
+        pi2 = 2.0 * jnp.pi
+        phi_r = pi2 * quadpoints_phi
+        cosphi = jnp.cos(phi_r)[:, None, None]   # (nphi, 1, 1)
+        sinphi = jnp.sin(phi_r)[:, None, None]
+
+        def _dcos(k):
+            r = k % 4
+            if r == 0: return cosphi
+            if r == 1: return -pi2 * sinphi
+            if r == 2: return -(pi2 ** 2) * cosphi
+            return (pi2 ** 3) * sinphi
+
+        def _dsin(k):
+            r = k % 4
+            if r == 0: return sinphi
+            if r == 1: return pi2 * cosphi
+            if r == 2: return -(pi2 ** 2) * sinphi
+            return -(pi2 ** 3) * cosphi
+
+        # Leibniz combinations for x and y; sums are short (a+1 terms).
+        x_op_xpart = sum(
+            comb(dash1_order, k) * xhat_ops[k] * _dcos(dash1_order - k)
+            for k in range(dash1_order + 1)
+        )
+        x_op_ypart = sum(
+            comb(dash1_order, k) * yhat_ops[k] * (-_dsin(dash1_order - k))
+            for k in range(dash1_order + 1)
+        )
+        y_op_xpart = sum(
+            comb(dash1_order, k) * xhat_ops[k] * _dsin(dash1_order - k)
+            for k in range(dash1_order + 1)
+        )
+        y_op_ypart = sum(
+            comb(dash1_order, k) * yhat_ops[k] * _dcos(dash1_order - k)
+            for k in range(dash1_order + 1)
+        )
+
+        zeros_x = jnp.zeros((nphi, ntheta, ndof_x))
+        zeros_y = jnp.zeros((nphi, ntheta, ndof_y))
+        zeros_z = jnp.zeros((nphi, ntheta, ndof_z))
+
+        # Pack along DOF axis in the order [x_dofs, y_dofs, z_dofs].
+        x_op = jnp.concatenate([x_op_xpart, x_op_ypart, zeros_z], axis=-1)
+        y_op = jnp.concatenate([y_op_xpart, y_op_ypart, zeros_z], axis=-1)
+        z_op = jnp.concatenate([zeros_x,    zeros_y,    z_op_z], axis=-1)
+
+        operator = jnp.stack([x_op, y_op, z_op], axis=-2)  # (nphi, ntheta, 3, ndof)
         return operator
 
     @staticmethod
-    def dof_to_gamma(
-            dofs, phi_grid, theta_grid,
-            nfp: int, stellsym: bool,
-            dash1_order=0, dash2_order=0,
-            mpol: int = 5, ntor: int = 5):
-        """Map DOF vector to gamma (or derivatives) on the quadrature grid."""
-        operator = SurfaceXYZTensorFourierJAX.dof_to_gamma_op(
-            phi_grid=phi_grid,
-            theta_grid=theta_grid,
-            nfp=nfp,
-            stellsym=stellsym,
-            dash1_order=dash1_order,
-            dash2_order=dash2_order,
-            mpol=mpol,
-            ntor=ntor,
-        )
-        # operator shape: (nphi, ntheta, 3, ndof)
-        # dofs shape: (ndof,)
-        # result shape: (nphi, ntheta, 3)
-        return jnp.einsum('ijkl,l->ijk', operator, dofs)
-
-    @staticmethod
     @partial(jit, static_argnames=['nfp', 'stellsym', 'mpol', 'ntor'])
-    def fit_dofs_from_gamma(
-            phi_target, theta_target,
-            gamma_target,
+    def _build_surface_fit_matrices(
+            phi_target, theta_target, gamma_target,
             nfp: int, stellsym: bool,
-            mpol: int = 5, ntor: int = 5,
-            lam_tikhonov=0.,
-            custom_weight=None):
-        """Fit XYZ tensor Fourier surface DOFs to sampled gamma points.
-
-        Solves a weighted least-squares problem with optional Tikhonov
-        regularization and returns the fitted DOF vector for
-        :class:`SurfaceXYZTensorFourierJAX`.
-
-        Parameters
-        ----------
-        phi_target : array, shape (nphi, ntheta)
-            Target phi coordinates (normalized to [0, 1]).
-            Can be recovered from quadpoint_phi and quadpoints_theta 
-            via ``jnp.broadcast_arrays(surf.quadpoints_phi[:, None], surf.quadpoints_theta)``
-        theta_target : array, shape (nphi, ntheta)
-            Target theta coordinates (normalized to [0, 1]).
-        gamma_target : array, shape (nphi, ntheta, 3)
-            Target surface positions in Cartesian coordinates [x, y, z].
-        nfp : int
-            Number of field periods.
-        stellsym : bool
-            Stellarator symmetry flag.
-        mpol : int, optional
-            Maximum poloidal mode number.
-        ntor : int, optional
-            Maximum toroidal mode number.
-        lam_tikhonov : float, optional
-            Tikhonov regularization parameter for higher harmonics.
-        custom_weight : array, shape (nphi, ntheta), optional
-            Custom weights for fitting points.
-
-        Returns
-        -------
-        dofs : array
-            Fitted DOF vector for SurfaceXYZTensorFourierJAX.
-        """
-        from .math_utils import safe_linear_solve
-        
-        # Get the operator
-        A_lstsq = SurfaceXYZTensorFourierJAX.dof_to_gamma_op(
+            mpol: int = 5, ntor: int = 5):
+        A_lstsq = SurfaceXYZTensorFourierJAX._dof_to_gamma_op(
             phi_grid=phi_target,
             theta_grid=theta_target,
             nfp=nfp,
             stellsym=stellsym,
             mpol=mpol,
-            ntor=ntor
+            ntor=ntor,
         )
-        # A_lstsq shape: [nphi, ntheta, 3, ndof]
-        b_lstsq = gamma_target  # shape: [nphi, ntheta, 3]
-        
-        # Apply custom weights
-        if custom_weight is not None:
-            if custom_weight.shape != A_lstsq.shape[:2]:
-                raise ValueError(
-                    'custom_weight must have the shape '
-                    + str(A_lstsq.shape[:2])
-                    + ', but it has shape '
-                    + str(custom_weight.shape)
-                )
-            A_lstsq = A_lstsq * custom_weight[:, :, None, None]
-            b_lstsq = b_lstsq * custom_weight[:, :, None]
-        
-        # Reshape for least squares: (nphi*ntheta*3, ndof)
-        A_lstsq = A_lstsq.reshape(-1, A_lstsq.shape[-1])
-        b_lstsq = b_lstsq.flatten()
-        
-        # Tikhonov regularization
-        # For XYZ tensor, we regularize based on mode numbers
+        b_lstsq = gamma_target
         rows_x, cols_x, rows_y, cols_y, rows_z, cols_z = _xyztensor_active_indices(
             mpol, ntor, stellsym
         )
-        # Build m^2 + n^2 for each DOF
         m_x = jnp.array([i if i <= mpol else i - mpol - 1 for i in rows_x])
         n_x = jnp.array([j if j <= ntor else j - ntor - 1 for j in cols_x])
         m_y = jnp.array([i if i <= mpol else i - mpol - 1 for i in rows_y])
         n_y = jnp.array([j if j <= ntor else j - ntor - 1 for j in cols_y])
         m_z = jnp.array([i if i <= mpol else i - mpol - 1 for i in rows_z])
         n_z = jnp.array([j if j <= ntor else j - ntor - 1 for j in cols_z])
-        
         m_2_n_2 = jnp.concatenate([
             m_x**2 + n_x**2,
             m_y**2 + n_y**2,
-            m_z**2 + n_z**2
+            m_z**2 + n_z**2,
         ])
-        
-        lam = lam_tikhonov * jnp.diag(m_2_n_2)
-        solution = safe_linear_solve(
-            A=A_lstsq.T.dot(A_lstsq) + lam,
-            b=A_lstsq.T.dot(b_lstsq),
-        )
-        return solution
+        return A_lstsq, b_lstsq, m_2_n_2
 
 
 # ======================================================================
@@ -1112,50 +1195,9 @@ class SurfaceXYZFourierJAX(SurfaceJAX):
     exactly. The (m, n) mode indexing follows :func:`make_rzfourier_mc_ms_nc_ns`.
     """
 
-    def __init__(self, nfp: int, stellsym: bool, mpol: int, ntor: int,
-                 quadpoints_phi: jnp.ndarray, quadpoints_theta: jnp.ndarray,
-                 dofs: jnp.ndarray):
-        super().__init__(quadpoints_phi, quadpoints_theta)
-        if not is_ndarray(dofs, 1):
-            raise TypeError('dofs has incorrect type or shape: ' + str(type(dofs)))
-        self.nfp = nfp
-        self.stellsym = stellsym
-        self.mpol = mpol
-        self.ntor = ntor
-        self.dofs = dofs
-
-    # ------------------------------------------------------------------
-    # Core computation
-    # ------------------------------------------------------------------
-
-    @partial(jit, static_argnames=['a', 'b'])
-    def gammadash(self, a: int, b: int):
-        return SurfaceXYZFourierJAX.dof_to_gamma(
-            dofs=self.dofs,
-            phi_grid=self.phi_mesh,
-            theta_grid=self.theta_mesh,
-            nfp=self.nfp,
-            stellsym=self.stellsym,
-            dash1_order=a,
-            dash2_order=b,
-            mpol=self.mpol,
-            ntor=self.ntor,
-        )
-
     # ------------------------------------------------------------------
     # Construction helpers
     # ------------------------------------------------------------------
-
-    def copy_and_set_quadpoints(self, quadpoints_phi, quadpoints_theta):
-        return SurfaceXYZFourierJAX(
-            nfp=self.nfp,
-            stellsym=self.stellsym,
-            mpol=self.mpol,
-            ntor=self.ntor,
-            quadpoints_phi=quadpoints_phi,
-            quadpoints_theta=quadpoints_theta,
-            dofs=self.dofs,
-        )
 
     def from_simsopt(simsopt_surf):
         """Load from a :class:`simsopt.geo.SurfaceXYZFourier` instance."""
@@ -1338,7 +1380,7 @@ class SurfaceXYZFourierJAX(SurfaceJAX):
         return A_lstsq, m_2_n_2
 
     @staticmethod
-    def dof_to_gamma_op(
+    def _dof_to_gamma_op(
             phi_grid, theta_grid,
             nfp: int, stellsym: bool,
             dash1_order=0, dash2_order=0,
@@ -1427,67 +1469,11 @@ class SurfaceXYZFourierJAX(SurfaceJAX):
         )
 
     @staticmethod
-    def dof_to_gamma(
-            dofs, phi_grid, theta_grid,
-            nfp, stellsym,
-            dash1_order=0, dash2_order=0,
-            mpol: int = 10, ntor: int = 10):
-        """Map DOF vector to gamma (or derivatives) on the quadrature grid."""
-        return SurfaceXYZFourierJAX.dof_to_gamma_op(
-            phi_grid=phi_grid,
-            theta_grid=theta_grid,
-            nfp=nfp,
-            stellsym=stellsym,
-            dash1_order=dash1_order,
-            dash2_order=dash2_order,
-            mpol=mpol,
-            ntor=ntor,
-        ) @ dofs
-
-    @staticmethod
     @partial(jit, static_argnames=['nfp', 'stellsym', 'mpol', 'ntor'])
-    def fit_dofs_from_gamma(
-            phi_target, theta_target,
-            gamma_target,
+    def _build_surface_fit_matrices(
+            phi_target, theta_target, gamma_target,
             nfp: int, stellsym: bool,
-            mpol: int = 5, ntor: int = 5,
-            lam_tikhonov=0.,
-            custom_weight=None):
-        """Fit XYZ Fourier surface DOFs to sampled gamma points.
-
-        Solves a weighted least-squares problem with optional Tikhonov
-        regularization and returns the fitted DOF vector for
-        :class:`SurfaceXYZFourierJAX`.
-
-        Parameters
-        ----------
-        phi_target : array, shape (nphi, ntheta)
-            Target phi coordinates (normalized to [0, 1]).
-        theta_target : array, shape (nphi, ntheta)
-            Target theta coordinates (normalized to [0, 1]).
-        gamma_target : array, shape (nphi, ntheta, 3)
-            Target surface positions in Cartesian coordinates [x, y, z].
-        nfp : int
-            Number of field periods.
-        stellsym : bool
-            Stellarator symmetry flag.
-        mpol : int, optional
-            Maximum poloidal mode number.
-        ntor : int, optional
-            Maximum toroidal mode number.
-        lam_tikhonov : float, optional
-            Tikhonov regularization parameter for higher harmonics.
-        custom_weight : array, shape (nphi, ntheta), optional
-            Custom weights for fitting points.
-
-        Returns
-        -------
-        dofs : array
-            Fitted DOF vector for SurfaceXYZFourierJAX.
-        """
-        from .math_utils import safe_linear_solve
-
-        # Rotate x, y -> x_hat, y_hat
+            mpol: int = 5, ntor: int = 5):
         phi_rad = phi_target * jnp.pi * 2
         cos_phi = jnp.cos(phi_rad)
         sin_phi = jnp.sin(phi_rad)
@@ -1496,8 +1482,6 @@ class SurfaceXYZFourierJAX(SurfaceJAX):
         z_cart = gamma_target[:, :, 2]
         xhat = x_cart * cos_phi + y_cart * sin_phi
         yhat = -x_cart * sin_phi + y_cart * cos_phi
-
-        # Build operator for (x_hat, y_hat, z)
         A_lstsq, m_2_n_2 = SurfaceXYZFourierJAX.dof_to_xhatz_op(
             theta_grid=theta_target,
             phi_grid=phi_target,
@@ -1506,29 +1490,8 @@ class SurfaceXYZFourierJAX(SurfaceJAX):
             mpol=mpol,
             ntor=ntor,
         )
-        # A_lstsq: (nphi, ntheta, 3, ndof); channels: [xhat, yhat, z]
-        b_lstsq = jnp.stack([xhat, yhat, z_cart], axis=-1)  # (nphi, ntheta, 3)
-
-        if custom_weight is not None:
-            if custom_weight.shape != A_lstsq.shape[:2]:
-                raise ValueError(
-                    'custom_weight must have the shape '
-                    + str(A_lstsq.shape[:2])
-                    + ', but it has shape '
-                    + str(custom_weight.shape)
-                )
-            A_lstsq = A_lstsq * custom_weight[:, :, None, None]
-            b_lstsq = b_lstsq * custom_weight[:, :, None]
-
-        A_lstsq = A_lstsq.reshape(-1, A_lstsq.shape[-1])
-        b_lstsq = b_lstsq.flatten()
-
-        lam = lam_tikhonov * jnp.diag(m_2_n_2)
-        solution = safe_linear_solve(
-            A=A_lstsq.T.dot(A_lstsq) + lam,
-            b=A_lstsq.T.dot(b_lstsq),
-        )
-        return solution
+        b_lstsq = jnp.stack([xhat, yhat, z_cart], axis=-1)
+        return A_lstsq, b_lstsq, m_2_n_2
 
 
 # ======================================================================
