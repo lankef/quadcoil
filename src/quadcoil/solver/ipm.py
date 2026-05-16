@@ -68,7 +68,6 @@ def kkt_residual(grad_f, A, g, s, z):
 
 DEFAULT_IPM_OPTIONS = {
     'tol_kkt': 1e-6,
-    'max_ipm_iter': 100,
     'tau': 0.995,
     'delta_init': 1e-6,
     'delta_min': 1e-10,
@@ -80,6 +79,7 @@ def solve_unconstrained_ipm(
     init_params, 
     fun,
     convex=False, 
+    maxiter: int = 100,
     solver_options=None, 
     verbose=0
 ):
@@ -92,6 +92,8 @@ def solve_unconstrained_ipm(
     ----------
     init_params : ndarray, shape (n,)
     fun : Callable, x -> scalar
+    maxiter : int, optional, default=100
+        (Static) Maximum IPM iterations.
     solver_options : dict, optional
     verbose : int
 
@@ -105,6 +107,7 @@ def solve_unconstrained_ipm(
         x_init=init_params,
         f_obj=fun,
         convex=convex,
+        maxiter=maxiter,
         solver_options=solver_options,
         verbose=verbose,
     )
@@ -123,6 +126,7 @@ def solve_constrained_ipm(
     h_eq=lambda x: jnp.zeros(0),
     g_ineq=lambda x: jnp.zeros(0),
     convex=False,
+    maxiter: int = 100,
     solver_options=None,
     verbose=0,
 ):
@@ -145,7 +149,6 @@ def solve_constrained_ipm(
         IPM parameters.  Recognised keys:
 
         - ``'tol_kkt'`` (``1e-6``) — KKT residual convergence tolerance.
-        - ``'max_ipm_iter'`` (``100``) — maximum IPM iterations (static).
         - ``'tau'`` (``0.995``) — fraction-to-boundary parameter.
         - ``'delta_init'`` (``1e-6``) — initial primal regularisation.
         - ``'delta_min'`` (``1e-10``) — minimum regularisation.
@@ -169,7 +172,6 @@ def solve_constrained_ipm(
         opts.update(solver_options)
 
     tol_kkt = opts['tol_kkt']
-    max_ipm_iter = opts['max_ipm_iter']
     tau = opts['tau']
     delta_init = opts['delta_init']
     delta_min = opts['delta_min']
@@ -223,8 +225,8 @@ def solve_constrained_ipm(
 
     if verbose > 0:
         jax.debug.print(
-            "IPM SOLVER: n={n}, m={m}, tol_kkt={tol}, max_iter={mi}",
-            n=n, m=m, tol=tol_kkt, mi=max_ipm_iter,
+            "IPM SOLVER: n={n}, m={m}, tol_kkt={tol}, maxiter={mi}",
+            n=n, m=m, tol=tol_kkt, mi=maxiter,
         )
 
     # Cache grad_f, A, g_val in the state to avoid recomputing at
@@ -246,7 +248,7 @@ def solve_constrained_ipm(
     def not_converged(state):
         return (
             (state["n_iter"] == 0)
-            | ((state["n_iter"] < max_ipm_iter) & ~state["converged"])
+            | ((state["n_iter"] < maxiter) & ~state["converged"])
         )
 
     def ipm_step(state):

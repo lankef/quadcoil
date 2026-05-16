@@ -41,7 +41,6 @@ from .kkt_adjoint import stationarity_kkt, adjoint_kkt
 # ── Default options ──────────────────────────────────────────────────────
 
 DEFAULT_SLSQP_OPTIONS = {
-    'max_steps': 200,
     'atol': 1e-7,
     'rtol': 1e-7,
 }
@@ -80,6 +79,7 @@ def solve_unconstrained_slsqp(
     init_params,
     fun,
     convex=False,
+    maxiter: int = 200,
     solver_options=None,
     verbose=0,
     lbfgs_memory=10,
@@ -93,6 +93,8 @@ def solve_unconstrained_slsqp(
     fun : Callable, x -> scalar
     convex : bool
         Unused (for interface compatibility).
+    maxiter : int, optional, default=200
+        (Static) Maximum SQP iterations.
     solver_options : dict, optional
     lbfgs_memory : int, optional, default=10
         (Static) L-BFGS history length.
@@ -107,6 +109,7 @@ def solve_unconstrained_slsqp(
         x_init=init_params,
         f_obj=fun,
         convex=convex,
+        maxiter=maxiter,
         solver_options=solver_options,
         verbose=verbose,
         lbfgs_memory=lbfgs_memory,
@@ -127,6 +130,7 @@ def solve_constrained_slsqp(
     h_eq=lambda x: jnp.zeros(0),
     g_ineq=lambda x: jnp.zeros(0),
     convex=False,
+    maxiter: int = 200,
     solver_options=None,
     verbose=0,
     lbfgs_memory=10,
@@ -151,7 +155,6 @@ def solve_constrained_slsqp(
     solver_options : dict, optional
         SLSQP parameters.  Recognised keys:
 
-        - ``'max_steps'`` (200) — maximum SQP iterations.
         - ``'atol'`` (1e-7) — absolute KKT tolerance.
         - ``'rtol'`` (1e-7) — relative KKT tolerance.
     lbfgs_memory : int, optional, default=10
@@ -180,7 +183,6 @@ def solve_constrained_slsqp(
     if solver_options is not None:
         opts.update(solver_options)
 
-    max_steps = opts['max_steps']
     atol = opts['atol']
     rtol = opts['rtol']
 
@@ -228,7 +230,7 @@ def solve_constrained_slsqp(
     sol = optx.minimise(
         objective, solver, x_init,
         has_aux=True,
-        max_steps=max_steps,
+        max_steps=maxiter,
         throw=False,
     )
 
@@ -247,7 +249,7 @@ def solve_constrained_slsqp(
     # (avoids TracerBoolConversionError inside JIT)
     converged = sol.result == optx.RESULTS.successful
 
-    niter = sol.stats.get('num_steps', jnp.int32(max_steps))
+    niter = sol.stats.get('num_steps', jnp.int32(maxiter))
 
     if verbose > 0:
         debug.print(
