@@ -37,8 +37,9 @@ def solve_unconstrained_auglag_lbfgs(
     init_params,
     fun,
     convex,
-    solver_options,
-    verbose,
+    maxiter: int = 10000,
+    solver_options=None,
+    verbose=0,
     lbfgs_memory=10,
 ):
     r'''
@@ -56,9 +57,10 @@ def solve_unconstrained_auglag_lbfgs(
     solver_options : dict
         L-BFGS options.  Recognised keys:
 
-        - ``'maxiter'`` — maximum iteration count.
         - ``'atol'`` — absolute gradient tolerance.
         - ``'rtol'`` — relative gradient tolerance.
+    maxiter : int, optional, default=10000
+        (Static) Maximum L-BFGS iteration count.
     lbfgs_memory : int, optional, default=10
         (Static) L-BFGS history length.
     verbose : int
@@ -76,9 +78,8 @@ def solve_unconstrained_auglag_lbfgs(
         - ``'fin_du'`` — set to ``jnp.nan`` (not tracked by optimistix).
         - ``'fin_df'`` — set to ``jnp.nan`` (not tracked by optimistix).
     '''
-    maxiter = solver_options['maxiter']
-    atol = solver_options.get('atol', 1e-6)
-    rtol = solver_options.get('rtol', 1e-6)
+    atol = solver_options.get('atol', 1e-6) if solver_options else 1e-6
+    rtol = solver_options.get('rtol', 1e-6) if solver_options else 1e-6
 
     solver = optx.LBFGS(
         rtol=rtol,
@@ -140,20 +141,9 @@ def solve_constrained_auglag_lbfgs(
         h_eq=lambda x:jnp.zeros(0),
         g_ineq=lambda x:jnp.zeros(0),
         convex=False,
-        solver_options={
-            'c_init': 1.,
-            'c_growth_rate': 1.1,
-            'mu_init': jnp.zeros(0),
-            'lam_init': jnp.zeros(0),
-            'xstop_outer': 1e-7,
-            'ctol_outer': 1e-7,
-            'atol_inner': 1e-6,
-            'rtol_inner': 1e-6,
-            'atol_inner_last': 1e-10,
-            'rtol_inner_last': 1e-10,
-            'maxiter_tot': 10000,
-            'maxiter_inner': 500,
-        },
+        maxiter: int = 10000,
+        maxiter_inner: int = 500,
+        solver_options=None,
         verbose=0,
         c_k_safe=1e15,
         gplus_mask=gplus_hard,
@@ -200,8 +190,10 @@ def solve_constrained_auglag_lbfgs(
         - ``'rtol_inner'`` (``1e-6``) — relative gradient tolerance for inner L-BFGS solves.
         - ``'atol_inner_last'`` (``1e-10``) — absolute gradient tolerance for the final inner solve.
         - ``'rtol_inner_last'`` (``1e-10``) — relative gradient tolerance for the final inner solve.
-        - ``'maxiter_tot'`` (``10000``) — maximum total outer-loop iterations.
-        - ``'maxiter_inner'`` (``500``) — maximum inner L-BFGS iterations per outer step.
+    maxiter : int, optional, default=10000
+        (Static) Maximum total outer-loop iterations.
+    maxiter_inner : int, optional, default=500
+        (Static) Maximum inner L-BFGS iterations per outer step.
     verbose : int, optional, default=0
         (Static) Verbosity. ``>1`` prints outer iteration convergence info.
     c_k_safe : float, optional, default=1e15
@@ -232,18 +224,17 @@ def solve_constrained_auglag_lbfgs(
         - ``'last_inner_dl'`` — change in the augmented Lagrangian in the last inner solve.
     '''
     # Reading solver options
-    c_init=solver_options['c_init']
-    c_growth_rate=solver_options['c_growth_rate']
-    mu_init=solver_options['mu_init']
-    lam_init=solver_options['lam_init']
-    xstop_outer=solver_options['xstop_outer']
-    ctol_outer=solver_options['ctol_outer']
-    atol_inner=solver_options['atol_inner']
-    rtol_inner=solver_options['rtol_inner']
-    atol_inner_last=solver_options['atol_inner_last']
-    rtol_inner_last=solver_options['rtol_inner_last']
-    maxiter_tot=solver_options['maxiter_tot']
-    maxiter_inner=solver_options['maxiter_inner']
+    opts = solver_options or {}
+    c_init=opts.get('c_init', 1.)
+    c_growth_rate=opts.get('c_growth_rate', 1.1)
+    mu_init=opts.get('mu_init', jnp.zeros(0))
+    lam_init=opts.get('lam_init', jnp.zeros(0))
+    xstop_outer=opts.get('xstop_outer', 1e-7)
+    ctol_outer=opts.get('ctol_outer', 1e-7)
+    atol_inner=opts.get('atol_inner', 1e-6)
+    rtol_inner=opts.get('rtol_inner', 1e-6)
+    atol_inner_last=opts.get('atol_inner_last', 1e-10)
+    rtol_inner_last=opts.get('rtol_inner_last', 1e-10)
 
     # Has shape n_cons_ineq
     # gplus = lambda x, mu, c: jnp.max(jnp.array([g_ineq(x), -mu/c]), axis=0)
@@ -275,19 +266,19 @@ def solve_constrained_auglag_lbfgs(
             jax.debug.print(
                 'OUTER CONVERGENCE CRITERIA\n'\
                 '    (tot_niter == 0): {x1}\n'\
-                '    (tot_niter < maxiter_tot): {x2}\n'\
+                '    (tot_niter < maxiter): {x2}\n'\
                 '    (outer_dx >= xstop_outer): {x3}\n'\
                 '    (jnp.any(g_k >= ctol_outer) | jnp.any(jnp.abs(h_k) >= ctol_outer)): {x4}\n'\
                 '    (c_k <= c_k_safe): {x5}\n',
                 x1 = (tot_niter == 0),
-                x2 = (tot_niter < maxiter_tot),
+                x2 = (tot_niter < maxiter),
                 x3 = (outer_dx >= xstop_outer),
                 x4 = (jnp.any(g_k >= ctol_outer) | jnp.any(jnp.abs(h_k) >= ctol_outer)),
                 x5 = (c_k <= c_k_safe),
             )
         return(
             (tot_niter == 0) | (
-                (tot_niter < maxiter_tot) 
+                (tot_niter < maxiter) 
                 # & (outer_dx >= xstop_outer * x_norm)
                 & (
                     # Continue iteration when dx is significant
@@ -339,11 +330,8 @@ def solve_constrained_auglag_lbfgs(
         inner_result = solve_unconstrained_auglag_lbfgs(
             x_km1/x_unit, l_k, 
             convex=convex,
-            solver_options={
-                'maxiter': maxiter_inner,
-                'atol': atol_inner,
-                'rtol': rtol_inner,
-            },
+            maxiter=maxiter_inner,
+            solver_options={'atol': atol_inner, 'rtol': rtol_inner},
             verbose=verbose,
             lbfgs_memory=lbfgs_memory,
         )
@@ -384,7 +372,7 @@ def solve_constrained_auglag_lbfgs(
         if verbose>1:
             jax.debug.print(
                 'OUTER: \n'\
-                '    Iteration: {tot_niter}/{maxiter_tot}\n'\
+                '    Iteration: {tot_niter}/{maxiter}\n'\
                 '        f       : {f}\n'\
                 '        g       : {gmin}, {gmax}\n'\
                 '        g+      : {gpmin}, {gpmax}\n'\
@@ -427,7 +415,7 @@ def solve_constrained_auglag_lbfgs(
                 xh=jnp.linalg.norm(grad_h(x_k)),
                 z=niter_inner_k,
                 tot_niter=dict_in['niter']+niter_inner_k,
-                maxiter_tot=maxiter_tot,
+                maxiter=maxiter,
                 outer_dx=jnp.linalg.norm(x_k - x_km1),
                 outer_df=df,
                 outer_dg=dg,

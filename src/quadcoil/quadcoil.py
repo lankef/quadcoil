@@ -34,7 +34,7 @@ config_jax.update('jax_enable_x64', True)
 tol_default = 1e-6
 tol_default_last = 1e-10
 
-SURFACE_TYPE_MAP = {
+surface_type_MAP = {
     'SurfaceRZFourier':        SurfaceRZFourierJAX,
     'SurfaceXYZTensorFourier': SurfaceXYZTensorFourierJAX,
     'SurfaceXYZFourier':       SurfaceXYZFourierJAX,
@@ -52,19 +52,15 @@ SOLVER_OPTIONS_DEFAULT_DICT = {
         'atol_inner_last':  tol_default_last,
         'rtol_inner_last':  tol_default_last,
         'svtol':            tol_default,
-        'maxiter_tot':      10000,
-        'maxiter_inner':    1000,
     },
     'ipm': {
         'tol_kkt': 1e-6,
-        'max_ipm_iter': 100,
         'tau': 0.995,
         'delta_init': 1e-6,
         'delta_min': 1e-10,
         'delta_max': 1e-2,
     },
     'slsqp': {
-        'max_steps': 200,
         'atol': 1e-7,
         'rtol': 1e-7,
     },
@@ -86,10 +82,14 @@ QUADCOIL_STATIC_ARGNAMES=[
     'plasma_stellsym',
     # - WS options
     'surface_type',
-    'offset_smoothing',
+    'winding_stellsym',
     'winding_mpol',
     'winding_ntor',
-    'winding_stellsym',
+    'winding_phi_interp',
+    'winding_theta_interp',
+    'winding_theta_rule_subsample',
+    'winding_surface_mode',
+    'winding_theta_mode',
     # - Objectives
     'objective_name',
     # - Constraints 
@@ -105,6 +105,8 @@ QUADCOIL_STATIC_ARGNAMES=[
     # - Solver options
     'solver',
     'lbfgs_memory',
+    'maxiter',
+    'maxiter_inner',
     # - Other options
     'verbose',
     # Smoothing parameters:
@@ -139,20 +141,27 @@ def quadcoil(
     plasma_quadpoints_phi=None, # Documented
     plasma_quadpoints_theta=None, # Documented
     Bnormal_plasma=None, # Documented
+    surface_type:str='SurfaceRZFourier', # Documented
 
     # - Winding parameters (offset)
     plasma_coil_distance:float=None, # Documented
-    surface_type:str='SurfaceRZFourier', # Documented
-    offset_smoothing:str='intersection', # Documented
+    winding_phi_interp:int=2,
+    winding_theta_interp:int=2,
+    winding_theta_rule_subsample:int=2,
+    winding_lam_tikhonov=1e-5,
+    winding_surface_mode='self-intersection',
+    winding_theta_mode='arclen',
 
-    # - Winding parameters (Providing surface)
+    # - Winding parameters (known surface)
     winding_dofs=None, # Documented
+    winding_stellsym=True,
+
+    # - Winding parameters (shared)
     winding_mpol:int=6, # Documented
     winding_ntor:int=5, # Documented
     winding_quadpoints_phi=None, # Documented
     winding_quadpoints_theta=None, # Documented
-    winding_stellsym=True, # Documented
-
+    
     # - Problem setup
     # Quadcoil objective terms, weights, and units
     # objective_unit differ in that they are not differentiated wrt.
@@ -182,9 +191,11 @@ def quadcoil(
     merge_constraints:bool=False,
 
     # - Auglag options (traced dict; merged with SOLVER_OPTIONS_DEFAULT)
-    solver:str='auglag-lbfgs',
+    solver:str='slsqp', # 'auglag-lbfgs',
     solver_options=None,
     lbfgs_memory:int=10,
+    maxiter:int=None,
+    maxiter_inner:int=None,
 
     # - Experimental
     implicit_linear_solver=None,
@@ -239,12 +250,12 @@ def quadcoil(
         (Static) The surface parametrization. One of ``'SurfaceRZFourier'``,
         ``'SurfaceXYZTensorFourier'``, ``'SurfaceXYZFourier'``.
         Auto-offset (``plasma_coil_distance``) only works with ``'SurfaceRZFourier'``.
-    offset_smoothing : str, optional, default='intersection'
+    winding_surface_mode : str, optional, default='intersection'
         (Static) Self-intersection removal strategy when auto-generating the winding surface.
         One of ``'none'``, ``'intersection'``, or ``'hull'``.
     winding_dofs : ndarray, shape (ndof_winding,)
         (Traced) The winding surface degrees of freedom. Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()`` convention.
-        Will be generated using ``offset_smoothing`` if ``plasma_coil_distance`` is provided. Must be provided otherwise.
+        Will be generated using ``winding_surface_mode`` if ``plasma_coil_distance`` is provided. Must be provided otherwise.
     winding_mpol : int, optional, default=6
         (Static) The number of poloidal Fourier harmonics in the winding surface.
     winding_ntor : int, optional, default=5
@@ -290,6 +301,14 @@ def quadcoil(
         - ``'maxiter_inner'`` (``1000``) — maximum inner L-BFGS iterations per outer step.
     lbfgs_memory : int, optional, default=10
         (Static) L-BFGS history length for the inner solver.
+    maxiter : int, optional, default=None
+        (Static) Maximum solver iterations. Defaults to 10000 for
+        ``'auglag-lbfgs'``, 100 for ``'ipm'``, and 200 for ``'slsqp'``.
+        For ``'auglag-lbfgs'`` this is the outer-loop iteration limit;
+        for ``'ipm'`` and ``'slsqp'`` it is the total iteration limit.
+    maxiter_inner : int, optional, default=None
+        (Static) Maximum inner L-BFGS iterations per outer step (default 500).
+        Only used by ``'auglag-lbfgs'``.
     implicit_linear_solver : lineax.AbstractLinearSolver, optional, default=lineax.AutoLinearSolver(well_posed=True)
         (Static) The lineax linear solver choice for implicit differentiation.
     value_only : bool, optional, default=False
@@ -301,6 +320,17 @@ def quadcoil(
     # ----- Solver options unpacking -----
     if solver_options is None:
         solver_options = SOLVER_OPTIONS_DEFAULT_DICT[solver]
+
+    # ----- maxiter defaults per solver -----
+    if maxiter is None:
+        if solver == 'auglag-lbfgs':
+            maxiter = 10000
+        elif solver == 'ipm':
+            maxiter = 100
+        else:  # slsqp
+            maxiter = 200
+    if maxiter_inner is None:
+        maxiter_inner = 500
 
     # ----- Default parameters -----
     # ess_alpha = jnp.abs(ess_alpha)
@@ -422,7 +452,7 @@ def quadcoil(
     # based on problem setup. (For example, the output will not contain)
     # gradients wrt coil-plasma distances if the winding surface is given. 
     def y_to_qp(y_dict):
-        surface_cls = SURFACE_TYPE_MAP[surface_type]
+        surface_cls = surface_type_MAP[surface_type]
         plasma_surface = surface_cls(
             nfp=nfp, stellsym=plasma_stellsym, 
             mpol=plasma_mpol, ntor=plasma_ntor, 
@@ -445,20 +475,18 @@ def quadcoil(
         # gen_offset_dofs is only implemented for SurfaceRZFourierJAX;
         # other surface types will raise NotImplementedError here.
         else:
-            winding_dofs_temp = plasma_surface.gen_offset_dofs(
+            winding_surface = plasma_surface.gen_winding_surface(
                 d_expand=y_dict['plasma_coil_distance'],
                 mpol=winding_mpol,
                 ntor=winding_ntor,
-                smoothing=offset_smoothing,
-            )
-            winding_surface = surface_cls(
-                nfp=nfp,
-                stellsym=stellsym,
-                mpol=winding_mpol,
-                ntor=winding_ntor,
+                phi_interp=winding_phi_interp,
+                theta_interp=winding_theta_interp,
+                theta_rule_subsample=winding_theta_rule_subsample,
                 quadpoints_phi=winding_quadpoints_phi,
                 quadpoints_theta=winding_quadpoints_theta,
-                dofs=winding_dofs_temp
+                lam_tikhonov=winding_lam_tikhonov,
+                winding_surface_mode=winding_surface_mode,
+                theta_mode=winding_theta_mode,
             )
         if Bnormal_plasma is None:
             Bnormal_plasma_temp = jnp.zeros((
@@ -669,10 +697,10 @@ def quadcoil(
                 init_params=x_flat_init,
                 fun=f_scaled,
                 convex=convex,
+                maxiter=maxiter,
                 solver_options={
-                    'maxiter': solver_options['maxiter_tot'],
-                    'atol': solver_options['atol_inner_last'],
-                    'rtol': solver_options['rtol_inner_last'],
+                    'atol': solver_options.get('atol_inner_last', tol_default_last),
+                    'rtol': solver_options.get('rtol_inner_last', tol_default_last),
                 },
                 verbose=verbose,
                 lbfgs_memory=lbfgs_memory,
@@ -682,6 +710,7 @@ def quadcoil(
                 init_params=x_flat_init,
                 fun=f_scaled,
                 convex=convex,
+                maxiter=maxiter,
                 solver_options=solver_options,
                 verbose=verbose,
             )
@@ -690,6 +719,7 @@ def quadcoil(
                 init_params=x_flat_init,
                 fun=f_scaled,
                 convex=convex,
+                maxiter=maxiter,
                 solver_options=solver_options,
                 verbose=verbose,
                 lbfgs_memory=lbfgs_memory,
@@ -716,6 +746,8 @@ def quadcoil(
                 f_obj=f_scaled,
                 h_eq=h_scaled,
                 g_ineq=g_scaled,
+                maxiter=maxiter,
+                maxiter_inner=maxiter_inner,
                 solver_options={**solver_options, 'lam_init': lam_init, 'mu_init': mu_init},
                 verbose=verbose,
                 lbfgs_memory=lbfgs_memory,
@@ -727,6 +759,7 @@ def quadcoil(
                 h_eq=h_scaled,
                 g_ineq=g_scaled,
                 convex=convex,
+                maxiter=maxiter,
                 solver_options=solver_options,
                 verbose=verbose,
             )
@@ -737,6 +770,7 @@ def quadcoil(
                 h_eq=h_scaled,
                 g_ineq=g_scaled,
                 convex=convex,
+                maxiter=maxiter,
                 solver_options=solver_options,
                 verbose=verbose,
                 lbfgs_memory=lbfgs_memory,

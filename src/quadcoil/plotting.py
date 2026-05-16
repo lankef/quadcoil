@@ -241,7 +241,7 @@ def gamma_and_field_to_vtk(gamma, f, name):
     # Create a structured grid in PyVista
     grid = pv.StructuredGrid()
     grid.points = points
-    grid.dimensions = [m, n, 1]  # Structured grid dimensions
+    grid.dimensions = [n, m, 1]  # Structured grid dimensions (n first: fastest-varying axis)
     grid["f"] = vectors  # Add the vector field to the grid
 
     # Save the grid to a VTK file for ParaView

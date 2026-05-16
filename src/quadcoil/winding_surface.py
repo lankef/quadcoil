@@ -9,6 +9,8 @@ from .surface import SurfaceRZFourierJAX
 from .quadcoil_params import QuadcoilParams
 from .quantity import Phi_with_net_current
 from .quantity.current import _K
+from .math_utils import project_points_to_plane
+import optimistix as optx
 
 # An approximation for unit normal.
 # and include the endpoints
@@ -95,67 +97,107 @@ def _get_line_intersection(p0, p1, p2, p3):
     t = ( s2[0] * (p0[1] - p2[1]) - s2[1] * (p0[0] - p2[0])) * inv_denom
     return (s >= 0) & (s <= 1) & (t >= 0) & (t <= 1) & (denom!=0)
 
-# @jit
-def _polygon_self_intersection(r_pol, z_pol):
-    """Return a mask that removes self-intersecting polygon regions.
 
-    The output has value 1 on vertices considered valid and 0 on vertices
-    adjacent to self-intersecting edges.
+@jit
+def bisect_phi(offset_surface, plane_data, rtol=1e-3, atol=1e-3):
+    """Per-plane bisection of phi so each point lands on its fitted plane.
+
+    For each (i, j) with i in [0, n) and j in [0, m), find phi such that
+
+        ((offset_surface.gamma_at_point(phi, quadpoints_theta[j])
+          - plane_data['origin'][i]) . plane_data['normal'][i]) == 0
+
+    using optimistix's :class:`Bisection`.  The search bracket for slice i is
+    ``[quadpoints_phi[i] - 1/(2 nfp), quadpoints_phi[i] + 1/(2 nfp)]``
+    (one half field period centred on the original quadrature angle), and all
+    n * m scalar bisections are vmapped so they run in parallel.
+
+    Returns
+    -------
+    grid_phi : ndarray, shape (n, m)
+        Phi values such that the n slices each lie on their respective plane.
     """
-    len_theta = len(r_pol)
-    # Takes a planar polygon and removes self-intersecting regions.
-    # Returns a weight array that is 1 for every point where the 
-    # adjacent edges contain self-intersection.
-    # Assumes that the first point in the input is on the polygon to keep.
-    # shape: len_phi, 2 (r, z)
-    p0_in = jnp.concatenate([r_pol[:, None], z_pol[:, None]], axis=-1)
-    p1_in = jnp.roll(p0_in, -1, axis=0)
-    # shape: len_phi, 4 (r0, z0, r1, z1)
-    p0p1 = jnp.concatenate([p0_in, p1_in], axis=1)
-    # Outer scan
-    def outer_loop(carry_outer, x_outer):
-        index_a, weight = carry_outer
-        def inner_loop(carry, x):
-            # carry is (index of p0p1, ([r0, z0, r1, z1]), index of p2p3)
-            # x is ([r2, z2, r3, z3])
-            index_a, r0z0r1z1, index_b = carry
-            # Is the index of the second line segment
-            # one greater or lower than that of the current line segment?
-            # If so, _get_line_intersection will throw a False positive
-            # and has to be disregarded.
-            is_overlapping = (
-                (index_a == index_b) 
-                | (index_a == (index_b+1)%len_theta)
-                | ((index_a+1)%len_theta == index_b)
-            )
-            p0_i = r0z0r1z1[:2]
-            p1_i = r0z0r1z1[2:]
-            p2_i = x[:2]
-            p3_i = x[2:]
-            # True when intersection is present
-            is_intersect = _get_line_intersection(p0_i, p1_i, p2_i, p3_i)
-            return (index_a, r0z0r1z1, index_b+1), is_intersect & jnp.logical_not(is_overlapping)
-        _, is_intersect = scan(inner_loop, (index_a, x_outer, 0), p0p1)
-        has_self_intersection = jnp.any(is_intersect)
-        # flip the sign of weight if self intersection is detected. 
-        # We assume that the outboard side is not self-intersecting (weight=1)
-        # This will allow us to mark all self-intersecting regions with 
-        # weight = -1.
-        weight = jnp.where(has_self_intersection, -weight, weight)
-        # if has_self_intersection:
-        #     plt.plot(p0p1[:, 0], p0p1[:, 1])
-        #     plt.scatter(p0p1[:, 0], p0p1[:, 1], alpha = is_intersect)
-        #     plt.show()
-        return (index_a + 1, weight), weight
-    _, weight = scan(outer_loop, (0, 1), p0p1)
-    # Convert weight = +-1 to 0 and 1
-    weight = (weight+1)/2
-    # Thus far we've marked all vertices where the edge
-    # that follows contains self-intersection. We now also
-    # change the weight of the vertices that is preceded 
-    # by a self-intersecting edge.
-    weight = jnp.where(jnp.roll(weight, 1)==0, 0, 1)
-    return(weight)
+    nfp = offset_surface.nfp
+    quadpoints_theta = offset_surface.quadpoints_theta
+    quadpoints_phi = offset_surface.quadpoints_phi
+    solver = optx.Bisection(rtol=rtol, atol=atol, flip='detect')
+
+    def residual(phi, args):
+        theta_j, origin_i, normal_i = args
+        g = offset_surface.gamma_at_point(phi, theta_j)
+        return jnp.dot(g - origin_i, normal_i)
+
+    if offset_surface.stellsym:
+        half_width = 0.25 / nfp
+    else:
+        half_width = 0.5 / nfp
+    # half_width = 0.5
+    
+    def solve_one(theta_j, origin_i, normal_i, phi_center):
+        sol = optx.root_find(
+            residual, solver, y0=phi_center,
+            args=(theta_j, origin_i, normal_i),
+            options=dict(
+                lower=phi_center - half_width,
+                upper=phi_center + half_width,
+            ),
+            throw=False,
+        )
+        return sol.value
+
+    # Inner vmap: over the m theta points (axis 0 of quadpoints_theta).
+    # Outer vmap: over the n planes (axis 0 of origin/normal and quadpoints_phi).
+    over_theta  = vmap(solve_one,  in_axes=(0, None, None, None))
+    over_planes = vmap(over_theta, in_axes=(None, 0, 0, 0))
+    return over_planes(
+        quadpoints_theta,
+        plane_data['origin'],
+        plane_data['normal'],
+        quadpoints_phi,
+    )
+
+
+def _polygon_self_intersection(r_pol, z_pol):
+    """Mark self-intersecting regions of a closed planar polygon.
+    Vectorized O(N^2) all-pairs implementation. Output is binary in {0, 1};
+    the function is traceable end-to-end and produces clean (zero) gradients
+    almost everywhere thanks to the safe-where pattern below.
+    """
+    N = r_pol.shape[0]
+    # Edge endpoints, shape (N, 2). Edge i goes from p_curr[i] to p_next[i].
+    p_curr = jnp.stack([r_pol, z_pol], axis=-1)
+    p_next = jnp.roll(p_curr, -1, axis=0)
+    # Pairwise broadcast:
+    #   axis 0 -> "this" edge  (a)
+    #   axis 1 -> "other" edge (b)
+    p0 = p_curr[:, None, :]   # (N, 1, 2)
+    p1 = p_next[:, None, :]   # (N, 1, 2)
+    p2 = p_curr[None, :, :]   # (1, N, 2)
+    p3 = p_next[None, :, :]   # (1, N, 2)
+    s1 = p1 - p0              # (N, 1, 2)
+    s2 = p3 - p2              # (1, N, 2)
+    denom = -s2[..., 0] * s1[..., 1] + s1[..., 0] * s2[..., 1]   # (N, N)
+    # Double-where: makes the backward pass NaN-safe when denom == 0
+    nonzero     = denom != 0
+    safe_denom  = jnp.where(nonzero, denom, 1.0)
+    inv_denom   = jnp.where(nonzero, 1.0 / safe_denom, 0.0)
+    dx = p0[..., 0] - p2[..., 0]                                  # (N, N)
+    dy = p0[..., 1] - p2[..., 1]                                  # (N, N)
+    s  = (-s1[..., 1] * dx + s1[..., 0] * dy) * inv_denom
+    t  = ( s2[..., 0] * dy - s2[..., 1] * dx) * inv_denom
+    intersect = (s >= 0) & (s <= 1) & (t >= 0) & (t <= 1) & nonzero
+    # Drop self / cyclic-adjacent edge pairs (they share a vertex)
+    idx     = jnp.arange(N)
+    a, b    = idx[:, None], idx[None, :]
+    overlap = (a == b) | (a == (b + 1) % N) | ((a + 1) % N == b)
+    intersect = intersect & ~overlap
+    bad_edge = jnp.any(intersect, axis=1)                          # (N,) bool
+    # Reproduce the original parity-toggle sweep:
+    # weight[i] = 1 if an even number of bad edges have been seen in [0..i], else 0.
+    weight = 1 - (jnp.cumsum(bad_edge.astype(jnp.int32)) % 2)      # (N,) in {0,1}
+    # Original post-processing (kept for behavior parity).
+    weight = jnp.where(jnp.roll(weight, 1) == 0, 0, 1)
+    return weight.astype(r_pol.dtype)
 
 def _graham_scan(r_expand, z_expand):
     """Return a boolean mask marking points on the convex hull."""
@@ -347,160 +389,6 @@ def gen_winding_surface_arc(
     )
     return(dofs_expand)
 
-
-def gen_winding_surface_general(
-        plasma_gamma, d_expand, 
-        nfp, stellsym,
-        cls,
-        unitnormal=None,
-        mpol=5, ntor=5,
-        pol_interp=2,
-        tor_interp=2,
-        lam_tikhonov=1e-5,
-        rule='self-intersection',
-    ):
-    """Generate winding-surface DOFs using generalized surface types with optional plane fitting.
-
-    After creating a uniform offset, invalid points are filtered with
-    ``rule``. For non-RZ surface types, each toroidal slice is projected
-    onto a least-squares fit plane to extract better R,Z coordinates before
-    arc-length parameterization and fitting with ``cls.fit_dofs_from_gamma``.
-    
-    Parameters
-    ----------
-    plasma_gamma : ndarray, shape (n_phi, n_theta, 3)
-        Plasma surface points in Cartesian coordinates.
-    d_expand : float
-        Offset distance for winding surface.
-    nfp : int
-        Number of field periods.
-    stellsym : bool
-        Stellarator symmetry flag.
-    unitnormal : ndarray, optional
-        Unit normal vectors for offset. If None, computed from plasma_gamma.
-    mpol, ntor : int
-        Maximum poloidal and toroidal mode numbers.
-    pol_interp, tor_interp : int
-        Interpolation factors for poloidal and toroidal directions.
-    lam_tikhonov : float
-        Tikhonov regularization parameter.
-    rule : str, {'self-intersection', 'hull'}
-        Method for filtering invalid points.
-    cls : class, optional
-        Surface class to use (SurfaceRZFourierJAX, SurfaceXYZTensorFourierJAX, etc.).
-        If None, defaults to SurfaceRZFourierJAX.
-        
-    Returns
-    -------
-    dofs_expand : ndarray
-        Fitted DOF vector for the specified surface type.
-        
-    Notes
-    -----
-    - For cls=SurfaceRZFourierJAX: uses direct cylindrical R,Z extraction (backward compatible)
-    - For other surface types: uses plane fitting for better coordinate extraction
-    - The R,Z values for non-RZ surfaces are only used for self-intersection filtering,
-      so their precise offset doesn't affect the final fitted surface
-    """
-    from .math_utils import project_points_to_plane
-    
-    # ----- Create uniform offset -----
-    uniform_offset_dofs = gen_winding_surface_offset(
-        plasma_gamma, d_expand, 
-        nfp, stellsym,
-        unitnormal=unitnormal,
-        mpol=mpol, ntor=ntor,
-    )
-    
-    # ----- Interpolate to generate smooth poloidal cross sections -----
-    phi_expand = jnp.linspace(0, 1/nfp, plasma_gamma.shape[0] * tor_interp)
-    uniform_offset_surface_jax = cls(
-        nfp=nfp, stellsym=stellsym, 
-        mpol=mpol, ntor=ntor, 
-        quadpoints_phi=phi_expand, 
-        quadpoints_theta=jnp.linspace(0, 1, plasma_gamma.shape[1] * pol_interp, endpoint=False), 
-        dofs=uniform_offset_dofs
-    )
-    gamma_uniform = uniform_offset_surface_jax.gamma()
-    
-    # ----- Trimming based on stellarator symmetry -----
-    # Fit only half a field period when stellsym.
-    if stellsym:
-        # If stellsym, then only use half of the field period for surface fitting
-        len_phi = len(phi_expand)//2
-        gamma_uniform = gamma_uniform[:len_phi]
-        phi_expand = phi_expand[:len_phi]
-        # finding center to generate poloidal parameterization
-        r_plasma = jnp.sqrt(plasma_gamma[:len_phi, :, 1]**2 + plasma_gamma[:len_phi, :, 0]**2)
-        z_plasma = plasma_gamma[:len_phi, :, 2]
-    else:
-        gamma_uniform = gamma_uniform
-        # Copy the gamma from the next and last fp.
-        # finding center to generate poloidal parameterization
-        r_plasma = jnp.sqrt(plasma_gamma[:, :, 1]**2 + plasma_gamma[:, :, 0]**2)
-        z_plasma = plasma_gamma[:, :, 2]
-    r_center = jnp.average(r_plasma, axis=-1)
-    z_center = jnp.average(z_plasma, axis=-1)
-    
-    # ----- Extract R, Z coordinates -----
-    if cls == SurfaceRZFourierJAX:
-        # Backward compatible: direct cylindrical conversion
-        r_expand = jnp.sqrt(gamma_uniform[:, :, 0]**2 + gamma_uniform[:, :, 1]**2)
-        z_expand = gamma_uniform[:, :, 2]
-    else:
-        # New approach: plane-fit each poloidal slice
-        # Apply vmap over toroidal dimension (axis 0)
-        batched_project = vmap(project_points_to_plane, in_axes=0, out_axes=(0, 0, 0))
-        x_pol, y_pol, plane_data = batched_project(gamma_uniform)
-        
-        # Convert plane coordinates to R, Z for self-intersection filtering
-        # Note: these R,Z are only used for weight_remove_invalid, so exact offset doesn't matter
-        plane_origins = plane_data['origin']  # shape (n_phi, 3)
-        r_plane_center = jnp.sqrt(plane_origins[:, 0]**2 + plane_origins[:, 1]**2)
-        
-        # R: approximate radial distance from toroidal axis
-        r_expand = r_plane_center[:, None] + x_pol
-        
-        # Z: approximate vertical position
-        z_expand = plane_origins[:, 2][:, None] + y_pol
-    
-    # ----- Removing self-intersection -----
-    if rule == 'self-intersection':
-        rule_f = _polygon_self_intersection
-    elif rule == 'hull':
-        rule_f = _graham_scan
-    else:
-        raise ValueError('rule must to be \'intersection\' '
-                         'or \'hull\'. The current value is: '+ rule)
-    weight_remove_invalid = vmap(rule_f, in_axes=0)(r_expand, z_expand)
-    
-    # ----- Calculating parameterization -----
-    r_wrapped = jnp.pad(r_expand, pad_width=((0, 0), (0, 1)), mode='wrap')
-    z_wrapped = jnp.pad(z_expand, pad_width=((0, 0), (0, 1)), mode='wrap')
-    # Compute the differences along axis=1 (between successive points)
-    dr = jnp.diff(r_wrapped, axis=1)
-    dz = jnp.diff(z_wrapped, axis=1)
-    # Compute the Euclidean distance for each segment
-    segment_lengths = jnp.sqrt(dr**2 + dz**2)
-    # Sum the segment lengths to get the total arclength for each curve
-    arclengths = jnp.cumsum(segment_lengths, axis=1)
-    theta_arc = (arclengths - arclengths[:, 0][:, None]) / arclengths[:, -1][:, None]
-    phi_expand, theta_arc = jnp.broadcast_arrays(phi_expand[:, None], theta_arc)
-
-    # ----- Fitting surface -----
-    dofs_expand = cls._fit_dofs_from_gamma(
-        phi_target=phi_expand,
-        theta_target=theta_arc,
-        gamma_target=gamma_uniform,
-        nfp=nfp,
-        stellsym=stellsym,
-        mpol=mpol,
-        ntor=ntor,
-        lam_tikhonov=lam_tikhonov,
-        custom_weight=weight_remove_invalid,
-    )
-    return(dofs_expand)
-
 # ----- Meshing -----
 def _f_K_integrand(qp, dofs):
     # The linear operator corresponding to the f_K.
@@ -559,23 +447,22 @@ def least_square_meshing(
         'quadpoints_phi': quadpoints_phi_offset,
         'quadpoints_theta': quadpoints_theta_offset,
         'stellsym': surf.stellsym,
-        'eval_surface': surf,
     }
-    qp_theta = QuadcoilParams(
+    theta_qp = QuadcoilParams(
         net_poloidal_current_amperes=0,
         net_toroidal_current_amperes=1,
         **qp_dummy_kwargs
     )
-    dofs_tor = {'phi': qp_nescoil_like_meshing(qp_theta, weights=weights, f_affine=f_affine)}
-    theta_val = Phi_with_net_current(qp_theta, dofs_tor)
+    theta_dofs = {'phi': qp_nescoil_like_meshing(theta_qp, weights=weights, f_affine=f_affine)}
+    theta_val = Phi_with_net_current(theta_qp, theta_dofs)
     if skip_tor:
         return theta_val
-    qp_phi = QuadcoilParams(
+    phi_qp = QuadcoilParams(
         net_poloidal_current_amperes=1,
         net_toroidal_current_amperes=0,
         **qp_dummy_kwargs
     )
-    dofs_pol = {'phi': qp_nescoil_like_meshing(qp_phi, weights=weights, f_affine=f_affine)}
-    phi_val = Phi_with_net_current(qp_phi, dofs_pol)
-    return phi_val, theta_val, qp_phi, dofs_pol
+    phi_dofs = {'phi': qp_nescoil_like_meshing(phi_qp, weights=weights, f_affine=f_affine)}
+    phi_val = Phi_with_net_current(phi_qp, phi_dofs)
+    return phi_val, theta_val, phi_qp, phi_dofs, theta_dofs, theta_val
     

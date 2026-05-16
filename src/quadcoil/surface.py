@@ -2,7 +2,12 @@ from functools import partial, lru_cache
 from jax import jit, tree_util, grad, jacfwd, vmap
 from jax.scipy.special import factorial
 from math import comb
-from .math_utils import norm_helper, is_ndarray
+from .math_utils import (
+    norm_helper, is_ndarray, 
+    project_points_to_rz_plane,
+    project_points_to_plane,
+    project_points_to_known_plane,
+)
 import numpy as np
 import jax.numpy as jnp
 import sys
@@ -470,21 +475,414 @@ class SurfaceJAX:
     # ------------------------------------------------------------------
 
     def uniform_offset(
-        self, d_expand: float,
+        self, d_expand,
         quadpoints_phi=None,
         quadpoints_theta=None,
     ):
+        # Generate an exact offset surface
         return SurfaceOffsetJAX(
             base_surface=self, 
             d_expand=d_expand,
             quadpoints_phi=quadpoints_phi,
             quadpoints_theta=quadpoints_theta,
         )
+        
+    @partial(jit, static_argnames=[
+        'mpol',
+        'ntor',
+        'phi_interp',
+        'theta_interp',
+        'theta_rule_subsample',
+        'winding_surface_mode',
+        'theta_mode',
+        'weight_mode',
+    ])
+    def gen_winding_surface_dofs(
+        self,
+        d_expand,
+        mpol=7,
+        ntor=7,
+        phi_interp:int=2,
+        theta_interp:int=5,
+        theta_rule_subsample:int=5,
+        lam_tikhonov=1e-5,
+        winding_surface_mode='self-intersection',
+        theta_mode='arclen',
+        weight_mode=None,
+    ):
+        """Fit winding surface DOFs from a uniform normal offset of this surface.
 
+        Generates an exact offset surface, bisects poloidal slices onto best-fit
+        planes, computes arc-length or arc-tan parameterisation, removes
+        self-intersecting regions, and solves a weighted least-squares fit.
+        Please see ``SurfaceJAX.gen_winding_surface()`` for parameters.
+
+        Returns
+        -------
+        dofs : jnp.ndarray
+            DOF vector for the fitted surface (same layout as ``self.dofs``).
+        """
+        from .winding_surface import bisect_phi, _polygon_self_intersection, _graham_scan
+        from .math_utils import (
+            project_points_to_rz_plane,
+            project_points_to_plane,
+            project_points_to_known_plane,
+        )
+
+        cls = type(self)
+
+        if weight_mode is None:
+            if cls == SurfaceRZFourierJAX:
+                # For RZFourier surfaces, the inboard sections often have complex
+                # features with small element size. This needs to be treated
+                # carefully. So we weigh only by the poloidal arclen.
+                weight_mode = 'poloidal_arclen'
+            else:
+                # For xyz tensor surfaces, there's a bigger likelihood that the
+                # fit planes collide. When this happens, using the area of each
+                # element to weigh can remove this type of artifacts better.
+                weight_mode = 'area'
+
+        # Defining quadpoints
+        self_n_phi = len(self.quadpoints_phi)
+        self_n_theta = len(self.quadpoints_theta)
+        # Only process half a FP for stellsym configs
+        if self.stellsym:
+            n_phi_target = (self_n_phi * phi_interp + 1) // 2
+        else:
+            n_phi_target = self_n_phi * phi_interp
+        n_theta_target = self_n_theta * theta_interp
+
+        # The sample CONTAINS endpoints in PHI AND THETA
+        # Convention:
+        # - Grids quantities wrapped in the toroidal direction only are marked _tw.
+        # - Grids quantities wrapped in the poloidal direction only are marked _pw.
+        # - Grids quantities wrapped in both directions are marked _tpw.
+        # We generate a uniform offset surface wrapped in the toroidal direction.
+        # This wrapping is useful when assigning phi parameterization and weights
+        # to each sample point.
+        quadpoints_phi_sample_tw = jnp.linspace(
+            0,
+            0.5 / self.nfp if self.stellsym else 1.0 / self.nfp,
+            n_phi_target + 1,
+            endpoint=True,
+        )
+        quadpoints_theta_sample = jnp.linspace(0, 1, n_theta_target, endpoint=False)
+
+        source_surface_tw = self.copy_and_set_quadpoints(
+            quadpoints_phi=quadpoints_phi_sample_tw,
+            quadpoints_theta=quadpoints_theta_sample,
+        )
+        # Generating an exact offset surface.
+        offset_surface_tw = source_surface_tw.uniform_offset(d_expand=d_expand)
+        # shapes: [n_phi_target+1, n_theta_target, 3]
+        gamma_uniform_tw = offset_surface_tw.gamma()
+        gammadash1_uniform_tw = offset_surface_tw.gammadash1()
+
+        # Finding fit planes to poloidal sections
+        # ----- Extract R, Z coordinates -----
+        batched_reproject = vmap(project_points_to_known_plane, in_axes=(0, 0), out_axes=(0, 0))
+        if cls == SurfaceRZFourierJAX:
+            batched_project = vmap(project_points_to_rz_plane, in_axes=(0, 0, 0), out_axes=(0, 0, 0))
+        else:
+            # New approach: plane-fit each poloidal slice
+            # Apply vmap over toroidal dimension (axis 0)
+            batched_project = vmap(project_points_to_plane, in_axes=(0, 0, 0), out_axes=(0, 0, 0))
+
+        # Estimate of each plane's normal vector.
+        # To make sure that every plane's normal is oriented to the same direction.
+        # May be unnecessary and a source of AD instability,
+        # but left in for stability for now.
+        # shapes: [n_phi_target+1, 3]
+        normals_for_sign_tw = jnp.average(gammadash1_uniform_tw * offset_surface_tw.da()[:, :, None], axis=1)
+        # Conduct plane fits. Here, we throw away the theta endpoints
+        # to avoid double counting. Rolled along toroidal, but not poloidal directions.
+        # Shapes: [n_phi_target+1, n_theta_target]
+        _, _, plane_data_tw = batched_project(gamma_uniform_tw, normals_for_sign_tw, offset_surface_tw.da())
+
+        # Initializing phi and theta grid.
+        # Shapes: [n_phi_target+1, n_theta_target]
+        phi_grid_tw, theta_grid_tw = jnp.meshgrid(quadpoints_phi_sample_tw, quadpoints_theta_sample)
+        phi_grid_tw = phi_grid_tw.T
+        theta_grid_tw = theta_grid_tw.T
+
+        phi_grid_bisect_tw = bisect_phi(offset_surface_tw, plane_data_tw)
+
+        # try:
+        #     phi_grid_bisect_tw = bisect_phi(offset_surface_tw, plane_data_tw)
+        # except Exception as e:
+        #     raise ValueError(
+        #         'Winding surface smoothing failed. '
+        #         'There may be toroidal self-intersection.'
+        #     ) from e
+        gamma_pol_bisect_tw = offset_surface_tw.gamma_at_point(phi_grid_bisect_tw, theta_grid_tw)
+
+        # Shapes: [n_phi_target+1, n_theta_target]
+        r_pol_new_tw, z_pol_new_tw = batched_reproject(gamma_pol_bisect_tw, plane_data_tw)
+        # Shapes: [n_phi_target, n_theta_target]
+        r_pol_new, z_pol_new = r_pol_new_tw[:-1, :], z_pol_new_tw[:-1, :]
+
+        # ----- Calculating parameterization -----
+        r_pol_new_tpw = jnp.pad(r_pol_new_tw, pad_width=((0, 0), (0, 1)), mode='wrap')
+        z_pol_new_tpw = jnp.pad(z_pol_new_tw, pad_width=((0, 0), (0, 1)), mode='wrap')
+        # Compute the differences along axis=1 (between successive points)
+        dr_tw = jnp.diff(r_pol_new_tpw, axis=1)
+        dz_tw = jnp.diff(z_pol_new_tpw, axis=1)
+        # Compute the Euclidean distance for each segment
+        # Shapes: [n_phi_target+1, n_theta_target]
+        seglengths_tw = jnp.sqrt(dr_tw ** 2 + dz_tw ** 2)
+        # Sum the segment lengths to get the total arclength for each curve
+        # Shapes: [n_phi_target+1, n_theta_target]
+        arclengths_tw = jnp.cumsum(seglengths_tw, axis=1)
+        # Shapes: [n_phi_target, n_theta_target]
+        arclengths = arclengths_tw[:-1, :]
+
+        # ----- Removing self-intersection -----
+        # We re-project the newton-shifted points to the best-fit planes, and
+        # scan for self-intersections using their projection in the best-fit planes.
+        if winding_surface_mode == 'self-intersection':
+            rule_f = _polygon_self_intersection
+        elif winding_surface_mode == 'hull':
+            rule_f = _graham_scan
+        else:
+            raise ValueError(
+                "winding_surface_mode must be 'self-intersection' or 'hull'. Got: " + repr(winding_surface_mode)
+            )
+
+        weight_subsample = vmap(rule_f, in_axes=0)(
+            r_pol_new[:, ::theta_rule_subsample],
+            z_pol_new[:, ::theta_rule_subsample],
+        )
+        batch_interp = vmap(jnp.interp, in_axes=(0, 0, 0), out_axes=0)
+        weight_remove_invalid = batch_interp(
+            arclengths,
+            arclengths[:, ::theta_rule_subsample],
+            weight_subsample,
+        )
+
+        # ----- Assigning theta to fit points -----
+        # Generates an array called theta_target
+        # Shapes: [n_phi_target, n_theta_target]
+        if theta_mode == 'arctan':
+            theta_target = (
+                jnp.arctan2(z_pol_new, r_pol_new) / jnp.pi / 2 + 0.5
+            )
+            theta_target = jnp.unwrap(theta_target, period=1)
+        elif theta_mode == 'arclen':
+            # First we select the point closest to the axis' projection
+            # on the outboard side as the origin
+            theta_target = (arclengths - arclengths[:, 0][:, None]) / arclengths[:, -1][:, None]
+            # The outboard side tends to be concave.
+            # First we eliminate all points with r smaller than the axis.
+            z_for_proj = jnp.where(r_pol_new > 0, z_pol_new, jnp.inf)
+            ind_proj = jnp.argmin(z_for_proj ** 2, axis=1)
+            # Then we shift the theta based on the theta closest to z=0
+            theta_shift = theta_target[jnp.arange(theta_target.shape[0]), ind_proj][:, None]
+            theta_target = theta_target - theta_shift
+        else:
+            raise NotImplementedError(
+                "theta_mode must be 'arctan' or 'arclen'. Got: " + repr(theta_mode)
+            )
+
+        # Now, we need to make theta respect stellsym. We know that the [0, :]
+        # poloidal section is the symmetry surface and needs to be symmetrical
+        # w.r.t. an axis going through the theta = 0 and theta = 0.5 points.
+        if self.stellsym:
+            # First, make sure that the symmetry point has theta=0.
+            theta_target = theta_target - theta_target[0, 0]
+            # Second, make sure that theta[n] - 1/n is anti-symmetric.
+            theta_pert = (theta_target - quadpoints_theta_sample)[0, 1:]
+            # Average (theta-1/n) of the symmetry plane (excluding at the symmetric
+            # point) with its reflection
+            theta_pert2 = (theta_pert - np.flip(theta_pert)) / 2
+            theta_target = theta_target.at[0, 1:].set(theta_pert2 + quadpoints_theta_sample[1:])
+
+        # ----- Assigning phi to fit points -----
+        # The toroidal angle of each plane is determined by the arclen of the axis.
+        # The toroidal wrapping all the way back when defining quadpoints_phi_sample_tw
+        # allows us to properly normalize toroidal axis arclen into an angular variable
+        # without improperly treating the length of the last element.
+        # Shape: [n_phi_target]
+        axis_seglengths = jnp.linalg.norm(jnp.diff(plane_data_tw['origin'], axis=0), axis=1)
+        # The cumsum call tosses the first element. Here we add it back.
+        # Shape: [n_phi_target+1]
+        axis_arclengths_tw = jnp.insert(jnp.cumsum(axis_seglengths), 0, 0.)
+        # Shape: [n_phi_target+1]
+        quadpoints_phi_new_tw = axis_arclengths_tw / axis_arclengths_tw[-1] * quadpoints_phi_sample_tw[-1]
+        # Shape: [n_phi_target, n_theta_target]
+        phi_target, theta_target = jnp.broadcast_arrays(quadpoints_phi_new_tw[:-1, None], theta_target)
+
+        # ----- Computing fit weights -----
+        if weight_mode == 'poloidal_arclen':
+            weights = seglengths_tw[:-1, :]
+        elif weight_mode == 'area':
+            gamma_pol_bisect_tpw = jnp.pad(
+                gamma_pol_bisect_tw, pad_width=((0, 0), (0, 1), (0, 0)), mode='wrap'
+            )
+            weights = jnp.linalg.norm(jnp.cross(
+                gamma_pol_bisect_tpw[1:, :-1] - gamma_pol_bisect_tpw[:-1, :-1],
+                gamma_pol_bisect_tpw[:-1, 1:] - gamma_pol_bisect_tpw[:-1, :-1],
+                axis=-1,
+            ), axis=-1)
+        else:
+            raise NotImplementedError(
+                "weight_mode must be 'poloidal_arclen' or 'area'. Got: " + repr(weight_mode)
+            )
+
+        # Remove the toroidal wrapping to get the actual least-squares fit points.
+        gamma_pol_bisect = gamma_pol_bisect_tw[:-1, :]
+
+        return cls._fit_dofs_from_gamma(
+            phi_target=phi_target,
+            theta_target=theta_target,
+            gamma_target=gamma_pol_bisect,
+            nfp=self.nfp,
+            stellsym=self.stellsym,
+            mpol=mpol,
+            ntor=ntor,
+            lam_tikhonov=lam_tikhonov,
+            custom_weight=weight_remove_invalid * weights,
+        )
+
+    @partial(jit, static_argnames=[
+        'mpol',
+        'ntor',
+        'phi_interp',
+        'theta_interp',
+        'theta_rule_subsample',
+        'winding_surface_mode',
+        'theta_mode',
+        'weight_mode',
+    ])
+    def gen_winding_surface(
+        self,
+        d_expand,
+        mpol=7,
+        ntor=7,
+        phi_interp:int=2,
+        theta_interp:int=5,
+        theta_rule_subsample:int=None,
+        quadpoints_phi=None,
+        quadpoints_theta=None,
+        lam_tikhonov=1e-5,
+        winding_surface_mode='self-intersection',
+        theta_mode='arclen',
+        weight_mode=None,
+    ):
+        """Generate a smoothed winding surface from a uniform normal offset.
+
+        Parameters
+        ----------
+        d_expand : float
+            Normal offset distance.
+        mpol, ntor : int
+            Fourier resolution of the fitted surface.
+        phi_interp : int
+        theta_interp : int
+            Toroidal/poloidal oversampling factor over ``self.quadpoints_theta`` during the Fourier fit.
+            higher values leads to more accurate offset surfaces.
+        theta_rule_subsample : int
+            Poloidal subsampling stride for removing self-intersection relative to
+            ``len(self.quadpoints_theta) * theta_interp``. This is necessary because 
+            the complexity of the self-intersection check is O(``len(self.quadpoints_theta)**2``).
+            The default value is ``theta_interp``.
+        quadpoints_phi, quadpoints_theta : array or None
+            Quadrature points for the output surface.  Defaults to
+            ``jnp.linspace(0, 1, self.nfp*len(self.quadpoints_phi), endpoint=False)`` and
+            ``jnp.linspace(0, 1, len(self.quadpoints_theta), endpoint=False)``.
+        lam_tikhonov : float
+            Tikhonov regularization weight for least-square surface fit.
+        winding_surface_mode : {'uniform', 'self-intersection'}
+            Type of winding surface to generate. 
+        theta_mode : {'arclen', 'arctan'}
+            Function to use for assigning poloidal parameterization. ``'arctan'`` uses 
+            arctan on poloidal section, using the center-of-weight of the plasma
+            poloidal cross sections as origin. ``'arclen'`` uses the arc lengths of the 
+            winding surface's poloidal cross sections. ``'arctan'`` generates smoother 
+            surfaces, but can misbehave when the winding surface is concave. ``'arctan'``
+            is robust for concave winding surfaces but less smooth.
+        weight_mode : {'poloidal_arclen', 'area'} or None
+            How to weight fit points. Can be based on arclength of poloidal cross sections
+            or the surface jacobian. ``'poloidal_arclen'`` behaves better for compact 
+            configurations. ``'area'`` behaves better for long-aspect ratio, helical 
+            configurations. 
+
+        Returns
+        -------
+        fit_surface : same type as ``self``
+            Fitted winding surface with the given quadrature points.
+        """
+        if quadpoints_phi is None:
+            quadpoints_phi = jnp.linspace(0, 1, self.nfp*len(self.quadpoints_phi), endpoint=False)
+        if quadpoints_theta is None:
+            quadpoints_theta = jnp.linspace(0, 1, len(self.quadpoints_theta), endpoint=False)
+        if winding_surface_mode == 'uniform':
+            return self.uniform_offset(
+                d_expand=d_expand,
+                quadpoints_phi=quadpoints_phi,
+                quadpoints_theta=quadpoints_theta,
+            )
+        if theta_rule_subsample is None:
+            theta_rule_subsample = theta_interp
+        dofs = self.gen_winding_surface_dofs(
+            d_expand=d_expand,
+            mpol=mpol,
+            ntor=ntor,
+            phi_interp=phi_interp,
+            theta_interp=theta_interp,
+            theta_rule_subsample=theta_rule_subsample,
+            lam_tikhonov=lam_tikhonov,
+            winding_surface_mode=winding_surface_mode,
+            theta_mode=theta_mode,
+            weight_mode=weight_mode,
+        )
+        return type(self)(
+            nfp=self.nfp,
+            stellsym=self.stellsym,
+            mpol=mpol,
+            ntor=ntor,
+            quadpoints_phi=quadpoints_phi,
+            quadpoints_theta=quadpoints_theta,
+            dofs=dofs,
+        )
+
+    @classmethod
+    @partial(jit, static_argnames=['cls', 'nfp', 'stellsym', 'mpol', 'ntor'])
+    def fit(
+        cls, 
+        phi_target, theta_target,
+        gamma_target,
+        nfp: int, stellsym: bool,
+        quadpoints_phi, quadpoints_theta,
+        mpol: int = 7, ntor: int = 7,
+        lam_tikhonov=0.,
+        custom_weight=None
+    ):
+        # Fit a Fourier surface from sample points.
+        dofs = cls._fit_dofs_from_gamma(
+            phi_target=phi_target, 
+            theta_target=theta_target,
+            gamma_target=gamma_target,
+            nfp=nfp, 
+            stellsym=stellsym,
+            mpol=mpol, 
+            ntor=ntor,
+            lam_tikhonov=lam_tikhonov,
+            custom_weight=custom_weight
+        )
+        return cls(
+            nfp=nfp,
+            stellsym=stellsym,
+            mpol=mpol,
+            ntor=ntor,
+            quadpoints_phi=quadpoints_phi,
+            quadpoints_theta=quadpoints_theta,
+            dofs=dofs,
+        )
     # ------------------------------------------------------------------
     # Winding surface helpers
     # ------------------------------------------------------------------
-
+    
     @classmethod
     @partial(jit, static_argnames=['cls', 'nfp', 'stellsym', 'mpol', 'ntor'])
     def _fit_dofs_from_gamma(
@@ -606,40 +1004,6 @@ class SurfaceRZFourierJAX(SurfaceJAX):
     # ------------------------------------------------------------------
     # Construction helpers
     # ------------------------------------------------------------------
-
-    def gen_offset_dofs(self, d_expand,
-            mpol=5, ntor=5, smoothing='intersection',
-            pol_interp=2, tor_interp=2,
-            lam_tikhonov=1e-5):
-        from .winding_surface import gen_winding_surface_offset, gen_winding_surface_arc
-        if smoothing == 'none':
-            return gen_winding_surface_offset(
-                plasma_gamma=self.gamma(),
-                d_expand=d_expand,
-                nfp=self.nfp,
-                stellsym=self.stellsym,
-                mpol=mpol,
-                ntor=ntor,
-            )
-        elif smoothing in ('intersection', 'hull'):
-            rule = 'self-intersection' if smoothing == 'intersection' else 'hull'
-            return gen_winding_surface_arc(
-                plasma_gamma=self.gamma(),
-                d_expand=d_expand,
-                nfp=self.nfp,
-                stellsym=self.stellsym,
-                mpol=mpol,
-                ntor=ntor,
-                pol_interp=pol_interp,
-                tor_interp=tor_interp,
-                lam_tikhonov=lam_tikhonov,
-                rule=rule,
-            )
-        else:
-            raise ValueError(
-                "smoothing must be 'none', 'intersection', or 'hull'. "
-                "Got: " + repr(smoothing)
-            )
 
     def from_simsopt(simsopt_surf):
         return SurfaceRZFourierJAX(
@@ -1145,32 +1509,35 @@ class SurfaceXYZTensorFourierJAX(SurfaceJAX):
         ndof_z = len(rows_z)
         ndof_total = ndof_x + ndof_y + ndof_z
 
-        quadpoints_phi = phi_grid[:, 0]      # (nphi,)
-        quadpoints_theta = theta_grid[0, :]  # (ntheta,)
-        nphi = quadpoints_phi.shape[0]
-        ntheta = quadpoints_theta.shape[0]
+        # NOTE: phi_grid and theta_grid are (nphi, ntheta) 2-D arrays.  The
+        # previous implementation collapsed them via ``phi_grid[:, 0]`` and
+        # ``theta_grid[0, :]``, implicitly assuming a tensor-product grid.
+        # That was silently wrong whenever the targets were per-point (as
+        # produced by e.g. ``bisect_phi``), causing the fit matrix to use
+        # the wrong (phi, theta) coordinates per grid point.  We now use
+        # the broadcastable ``_xyztensor_V_at_point`` / ``_xyztensor_W_at_point``
+        # helpers, which evaluate the bases at each (phi_grid[i, j],
+        # theta_grid[i, j]) independently.
+        nphi = phi_grid.shape[0]
+        ntheta = phi_grid.shape[1]
 
         # ----------------------------------------------------------------
         # Vectorised construction of the (nphi, ntheta, 3, ndof) operator.
         #
         # For each active DOF (r, c), the corresponding column of the
-        # operator is V_a[:, c] * W_b[:, r] (outer product), with Leibniz-
-        # rule trig factors for the x and y channels:
+        # operator is V_a[i, j, c] * W_b[i, j, r], with Leibniz-rule trig
+        # factors for the x and y channels:
         #
         #   d^a x / dphi^a = sum_k C(a,k) [xhat^(k) * D^(a-k)cos
         #                                  - yhat^(k) * D^(a-k)sin]
         #   d^a y / dphi^a = sum_k C(a,k) [xhat^(k) * D^(a-k)sin
         #                                  + yhat^(k) * D^(a-k)cos]
-        #
-        # where xhat^(k)[i, j, idx] = V_k[i, cols_x[idx]] * W_b[j, rows_x[idx]]
-        # and similarly for yhat (over y DOF indices).  z is not rotated, so
-        # z_op[i, j, idx] = V_a[i, cols_z[idx]] * W_b[j, rows_z[idx]].
         # ----------------------------------------------------------------
-        Wb = _xyztensor_W(quadpoints_theta, mpol, dash2_order)            # (ntheta, 2*mpol+1)
+        Wb = _xyztensor_W_at_point(theta_grid, mpol, dash2_order)        # (nphi, ntheta, 2*mpol+1)
         Vks = [
-            _xyztensor_V(quadpoints_phi, ntor, nfp, k)
+            _xyztensor_V_at_point(phi_grid, ntor, nfp, k)
             for k in range(dash1_order + 1)
-        ]                                                                  # each (nphi, 2*ntor+1)
+        ]                                                                # each (nphi, ntheta, 2*ntor+1)
 
         # Active gather indices (numpy ints -> static JAX gather).
         cols_x_j = jnp.asarray(cols_x)
@@ -1181,20 +1548,20 @@ class SurfaceXYZTensorFourierJAX(SurfaceJAX):
         rows_z_j = jnp.asarray(rows_z)
 
         # Per-channel hat operators of shape (nphi, ntheta, ndof_*).
-        # Va_x[k][i, idx] = Vk[i, cols_x[idx]];  Wb_x[j, idx] = Wb[j, rows_x[idx]]
-        Wb_x = Wb[:, rows_x_j]               # (ntheta, ndof_x)
-        Wb_y = Wb[:, rows_y_j]               # (ntheta, ndof_y)
-        Wb_z = Wb[:, rows_z_j]               # (ntheta, ndof_z)
+        Wb_x = Wb[:, :, rows_x_j]            # (nphi, ntheta, ndof_x)
+        Wb_y = Wb[:, :, rows_y_j]            # (nphi, ntheta, ndof_y)
+        Wb_z = Wb[:, :, rows_z_j]            # (nphi, ntheta, ndof_z)
 
-        xhat_ops = [Vk[:, cols_x_j][:, None, :] * Wb_x[None, :, :] for Vk in Vks]
-        yhat_ops = [Vk[:, cols_y_j][:, None, :] * Wb_y[None, :, :] for Vk in Vks]
-        z_op_z = Vks[dash1_order][:, cols_z_j][:, None, :] * Wb_z[None, :, :]
+        xhat_ops = [Vk[:, :, cols_x_j] * Wb_x for Vk in Vks]
+        yhat_ops = [Vk[:, :, cols_y_j] * Wb_y for Vk in Vks]
+        z_op_z = Vks[dash1_order][:, :, cols_z_j] * Wb_z
 
-        # Derivatives of cos(phi_rad) and sin(phi_rad) w.r.t. phi_norm.
+        # Derivatives of cos(phi_rad) and sin(phi_rad) w.r.t. phi_norm,
+        # now evaluated per (i, j) on the 2-D phi_grid.
         pi2 = 2.0 * jnp.pi
-        phi_r = pi2 * quadpoints_phi
-        cosphi = jnp.cos(phi_r)[:, None, None]   # (nphi, 1, 1)
-        sinphi = jnp.sin(phi_r)[:, None, None]
+        phi_r = pi2 * phi_grid                              # (nphi, ntheta)
+        cosphi = jnp.cos(phi_r)[:, :, None]                 # (nphi, ntheta, 1)
+        sinphi = jnp.sin(phi_r)[:, :, None]
 
         def _dcos(k):
             r = k % 4
@@ -2129,7 +2496,7 @@ class SurfaceOffsetJAX(SurfaceJAX):
     def __init__(
         self, 
         base_surface, 
-        d_expand: float,
+        d_expand,
         quadpoints_phi=None,
         quadpoints_theta=None,
     ):
@@ -2173,9 +2540,6 @@ class SurfaceOffsetJAX(SurfaceJAX):
         jnp.ndarray, shape (nphi, ntheta, 3)
             The quantity ``d^(a+b) (gamma + d*unitnormal) / d phi^a d theta^b``.
         """
-        if self.d_expand == 0.:
-            return self.base_surface.gammadash(a, b)
-        
         return (self.base_surface.gammadash(a, b) + 
                 self.d_expand * self.base_surface.unitnormaldash(a, b))
 
@@ -2187,8 +2551,6 @@ class SurfaceOffsetJAX(SurfaceJAX):
         :meth:`unitnormaldash_at_point`, so the cost is the cost of the base
         surface's at-point evaluators plus a single AD pass for the normal.
         """
-        if self.d_expand == 0.:
-            return self.base_surface.gammadash_at_point(phi, theta, a, b)
         return (
             self.base_surface.gammadash_at_point(phi, theta, a, b)
             + self.d_expand
@@ -2264,6 +2626,14 @@ class SurfaceOffsetJAX(SurfaceJAX):
             "gen_winding_surface() is not supported for SurfaceOffsetJAX. "
             "Use base_surface.gen_winding_surface() instead."
         )
+
+    def gen_winding_surface_dofs(self, d_expand, unitnormal=None,
+                           mpol=7, ntor=7, pol_interp=2, tor_interp=2,
+                           lam_tikhonov=1e-5, rule='self-intersection'):
+        raise NotImplementedError(
+            "gen_winding_surface_dofs() is not supported for SurfaceOffsetJAX. "
+            "Use base_surface.gen_winding_surface() instead."
+        )
     
     @classmethod
     def from_simsopt(cls, surface_simsopt):
@@ -2291,11 +2661,11 @@ class SurfaceOffsetJAX(SurfaceJAX):
     
     def tree_flatten(self):
         """Flatten for JAX transformations."""
-        children = (self.base_surface,)
-        aux_data = {'d_expand': self.d_expand}
+        children = (self.base_surface, self.d_expand)
+        aux_data = {}
         return children, aux_data
     
     @classmethod
     def tree_unflatten(cls, aux_data, children):
         """Unflatten for JAX transformations."""
-        return cls(children[0], aux_data['d_expand'])
+        return cls(children[0], children[1])

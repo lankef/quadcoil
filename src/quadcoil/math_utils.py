@@ -206,23 +206,29 @@ safe_linear_solve.defvjp(safe_linear_solve_fwd, safe_linear_solve_bwd)
 # ======================================================================
 
 @jit
-def project_points_to_plane(gamma_pol):
+def project_points_to_plane(gamma_pol, normal_for_sign, weights=None):
     """
     Project 3D points onto least-squares fit plane and return 2D coordinates.
     
-    This function fits a plane to 3D points using SVD (least-squares), projects
-    the points onto that plane, and returns their coordinates in the plane's
-    local 2D coordinate system.
+    This function fits a plane to 3D points using (weighted) SVD
+    (least-squares), projects the points onto that plane, and returns their
+    coordinates in the plane's local 2D coordinate system.
     
-    The plane is fit to minimize the sum of squared perpendicular distances from
-    the points to the plane. The plane passes through the centroid of the points,
-    and the normal vector is the singular vector corresponding to the smallest
-    singular value.
+    The plane is fit to minimize the (weighted) sum of squared perpendicular
+    distances from the points to the plane. The plane passes through the
+    (weighted) centroid of the points, and the normal vector is the singular
+    vector corresponding to the smallest singular value of the
+    sqrt-weight-scaled centered point matrix.
     
     Parameters
     ----------
     gamma_pol : ndarray, shape (n, 3)
         3D points to project onto the fitted plane.
+    weights : ndarray, shape (n,), optional
+        Non-negative per-point weights for the plane fit.  Larger weights
+        pull the fitted plane closer to the corresponding points.  If
+        ``None`` (default), all points are weighted equally.  The weights
+        are used internally only up to an overall positive scale.
     
     Returns
     -------
@@ -232,11 +238,12 @@ def project_points_to_plane(gamma_pol):
         Y coordinates of points in the plane's local coordinate system.
     plane_data : dict
         Dictionary containing plane parameters:
-        - 'origin': ndarray, shape (3,) - Point on plane (centroid)
+        - 'origin': ndarray, shape (3,) - Point on plane (weighted centroid)
         - 'normal': ndarray, shape (3,) - Unit normal vector
         - 'u_axis': ndarray, shape (3,) - First basis vector in plane
         - 'v_axis': ndarray, shape (3,) - Second basis vector in plane
-        - 'fitting_error': float - RMS distance of points from fitted plane
+        - 'fitting_error': float - weighted RMS distance of points from
+          fitted plane
     
     Notes
     -----
@@ -259,27 +266,40 @@ def project_points_to_plane(gamma_pol):
     >>> R_pol, Z_pol, plane_data = project_points_to_plane(points)
     >>> print(f"RMS fitting error: {plane_data['fitting_error']:.6f}")
     """
-    # Step 1: Compute centroid (origin of the plane)
-    p0 = jnp.mean(gamma_pol, axis=0)
+    # Step 0: Normalise weights.  When ``weights`` is None we use uniform
+    # weights; otherwise we rescale so they sum to ``n`` so that the
+    # weighted RMS matches the unweighted RMS in the equal-weight limit.
+    n = gamma_pol.shape[0]
+    if weights is None:
+        w = jnp.ones((n,), dtype=gamma_pol.dtype)
+    else:
+        w = jnp.asarray(weights, dtype=gamma_pol.dtype)
+        w = w * (n / jnp.sum(w))
+    sqrt_w = jnp.sqrt(w)
+
+    # Step 1: Compute weighted centroid (origin of the plane)
+    p0 = jnp.sum(w[:, None] * gamma_pol, axis=0) / jnp.sum(w)
     centered = gamma_pol - p0
-    
-    # Step 2: SVD to find the plane normal
-    # The normal is the right singular vector with smallest singular value
-    U, S, Vt = jnp.linalg.svd(centered, full_matrices=False)
+
+    # Step 2: SVD on sqrt-weight-scaled centered points to find plane normal.
+    # The normal is the right singular vector with smallest singular value.
+    U, S, Vt = jnp.linalg.svd(sqrt_w[:, None] * centered, full_matrices=False)
     normal = Vt[-1, :]
     normal = normal / jnp.linalg.norm(normal)
+    normal = normal * jnp.sign(normal @ normal_for_sign)
     
-    # Step 3: Construct orthonormal basis in the plane
-    # Choose an arbitrary vector that is not parallel to the normal
-    # If normal is mostly aligned with x-axis, use y-axis, otherwise use x-axis
-    arbitrary = jnp.where(
-        jnp.abs(normal[0]) < 0.9,
-        jnp.array([1.0, 0.0, 0.0]),
-        jnp.array([0.0, 1.0, 0.0])
-    )
+    # # Step 3: Construct orthonormal basis in the plane
+    # # Choose an arbitrary vector that is not parallel to the normal
+    # # If normal is mostly aligned with x-axis, use y-axis, otherwise use x-axis
+    # arbitrary = jnp.where(
+    #     jnp.abs(normal[2]) < 0.9,
+    #     jnp.array([1.0, 0.0, 0.0]),
+    #     jnp.array([0.0, 1.0, 0.0])
+    # )
     
-    # First basis vector in plane
-    u = jnp.cross(normal, arbitrary)
+    # # First basis vector in plane
+    # u = jnp.cross(normal, arbitrary)
+    u = jnp.cross(normal, p0)
     u = u / jnp.linalg.norm(u)
     
     # Second basis vector in plane (completes right-handed system)
@@ -296,8 +316,8 @@ def project_points_to_plane(gamma_pol):
     R_pol = jnp.dot(relative, u)
     Z_pol = jnp.dot(relative, v)
     
-    # Compute fitting error (RMS distance from plane)
-    fitting_error = jnp.sqrt(jnp.mean(distances**2))
+    # Weighted RMS distance from plane
+    fitting_error = jnp.sqrt(jnp.sum(w * distances**2) / jnp.sum(w))
     
     # Package plane parameters
     plane_data = {
@@ -312,7 +332,7 @@ def project_points_to_plane(gamma_pol):
 
 
 @jit
-def project_points_to_rz_plane(gamma_pol):
+def project_points_to_rz_plane(gamma_pol, normal_for_sign, weights=None):
     """
     Project 3D (XYZ) points onto the least-squares best-fit RZ half-plane.
 
@@ -321,42 +341,50 @@ def project_points_to_rz_plane(gamma_pol):
     ``n = (-sin phi, cos phi, 0)`` and its in-plane basis is
     ``r_axis = (cos phi, sin phi, 0)`` and ``z_axis = (0, 0, 1)``.
 
-    The optimal ``phi`` is found analytically by minimising the sum of
-    squared perpendicular distances::
+    The optimal ``phi`` is found analytically by minimising the (weighted)
+    sum of squared perpendicular distances::
 
-        f(phi) = sum(-x_i sin phi + y_i cos phi)^2
+        f(phi) = sum_i w_i (-x_i sin phi + y_i cos phi)^2
 
-    Setting df/dphi = 0 and verifying the second derivative gives the
-    closed form::
+    Setting df/dphi = 0 and verifying the second derivative gives the same
+    closed form as the unweighted case, but with weighted moments::
 
-        phi = atan2(2 * sum(x_i * y_i), sum(x_i^2) - sum(y_i^2)) / 2
+        phi = atan2(2 * sum(w_i x_i y_i),
+                    sum(w_i x_i^2) - sum(w_i y_i^2)) / 2
 
     Parameters
     ----------
     gamma_pol : ndarray, shape (n, 3)
         3D points in Cartesian (XYZ) coordinates, typically a poloidal
         cross-section of a stellarator surface.
+    weights : ndarray, shape (n,), optional
+        Non-negative per-point weights for the plane fit.  Larger weights
+        pull the fitted RZ plane closer to the corresponding points.  If
+        ``None`` (default), all points are weighted equally.  The weights
+        are used internally only up to an overall positive scale.
 
     Returns
     -------
     R_pol : ndarray, shape (n,)
         Radial coordinate of each point in the fitted RZ plane,
         ``R_i = x_i cos phi + y_i sin phi``.  Always non-negative when
-        the centroid has positive major radius.
+        the weighted centroid has positive major radius.
     Z_pol : ndarray, shape (n,)
         Vertical coordinate, equal to ``gamma_pol[:, 2]``.
     plane_data : dict
         Plane parameters compatible with :func:`raytrace_to_plane` and
         :func:`reconstruct_3d_from_plane`:
 
-        - ``'origin'``: ndarray (3,) — centroid projected onto the RZ plane
+        - ``'origin'``: ndarray (3,) — weighted centroid projected onto the
+          RZ plane
         - ``'normal'``: ndarray (3,) — unit normal ``(-sin phi, cos phi, 0)``
         - ``'r_axis'``: ndarray (3,) — radial unit vector ``(cos phi, sin phi, 0)``
         - ``'z_axis'``: ndarray (3,) — ``(0, 0, 1)``
         - ``'u_axis'``: same as ``r_axis`` (for use with reconstruct_3d_from_plane)
         - ``'v_axis'``: same as ``z_axis`` (for use with reconstruct_3d_from_plane)
         - ``'phi'``: scalar — optimal toroidal angle in radians
-        - ``'fitting_error'``: float — RMS distance of points from the plane
+        - ``'fitting_error'``: float — weighted RMS distance of points from
+          the plane
 
     Notes
     -----
@@ -373,11 +401,22 @@ def project_points_to_rz_plane(gamma_pol):
     y = gamma_pol[:, 1]
     z = gamma_pol[:, 2]
 
-    # Closed-form least-squares toroidal angle
-    # Minimises sum(-x_i sin phi + y_i cos phi)^2 over phi.
-    A = jnp.sum(x ** 2)
-    B = jnp.sum(y ** 2)
-    C = jnp.sum(x * y)
+    # Normalise weights: uniform when None, otherwise rescaled so they sum
+    # to ``n``.  Only the relative weights affect the fit; the rescaling
+    # makes the weighted RMS reduce to the unweighted RMS for equal weights.
+    n = gamma_pol.shape[0]
+    if weights is None:
+        w = jnp.ones((n,), dtype=gamma_pol.dtype)
+    else:
+        w = jnp.asarray(weights, dtype=gamma_pol.dtype)
+        w = w * (n / jnp.sum(w))
+    w_sum = jnp.sum(w)
+
+    # Closed-form weighted least-squares toroidal angle.
+    # Minimises sum_i w_i (-x_i sin phi + y_i cos phi)^2 over phi.
+    A = jnp.sum(w * x ** 2)
+    B = jnp.sum(w * y ** 2)
+    C = jnp.sum(w * x * y)
     phi = jnp.arctan2(2.0 * C, A - B) / 2.0
 
     cos_phi = jnp.cos(phi)
@@ -388,8 +427,10 @@ def project_points_to_rz_plane(gamma_pol):
     normal = jnp.stack([-sin_phi, cos_phi, zero])
     z_axis = jnp.array([0.0, 0.0, 1.0])
 
-    # Ensure the centroid lies at positive R (flip phi by pi if needed).
-    R_centroid = jnp.mean(x) * cos_phi + jnp.mean(y) * sin_phi
+    # Ensure the weighted centroid lies at positive R (flip phi by pi if needed).
+    x_mean_w = jnp.sum(w * x) / w_sum
+    y_mean_w = jnp.sum(w * y) / w_sum
+    R_centroid = x_mean_w * cos_phi + y_mean_w * sin_phi
     sign = jnp.sign(R_centroid)
     r_axis = sign * r_axis
     normal = sign * normal
@@ -398,13 +439,13 @@ def project_points_to_rz_plane(gamma_pol):
     R_pol = x * r_axis[0] + y * r_axis[1]   # dot with r_axis (z-component is 0)
     Z_pol = z
 
-    # Fitting error
+    # Weighted RMS fitting error
     distances = x * normal[0] + y * normal[1]   # dot with normal (z-component is 0)
-    fitting_error = jnp.sqrt(jnp.mean(distances ** 2))
+    fitting_error = jnp.sqrt(jnp.sum(w * distances ** 2) / w_sum)
 
-    # Origin: centroid projected onto the RZ plane (lies on z-axis side)
-    R_mean = jnp.mean(R_pol)
-    Z_mean = jnp.mean(Z_pol)
+    # Origin: weighted centroid projected onto the RZ plane (lies on z-axis side)
+    R_mean = jnp.sum(w * R_pol) / w_sum
+    Z_mean = jnp.sum(w * Z_pol) / w_sum
     origin = jnp.stack([R_mean * r_axis[0], R_mean * r_axis[1], Z_mean])
 
     plane_data = {
