@@ -19,7 +19,7 @@ def _K(qp, dofs, winding_surface_mode=False):
     if winding_surface_mode=='divide':
         n_phi_1fp = len(qp.winding_surface.quadpoints_phi)//qp.winding_surface.nfp
         quadpoints_phi_new = qp.winding_surface.quadpoints_phi[:n_phi_1fp]
-        surface_choice = qp.winding_surface.surf.copy_and_set_quadpoints(
+        surface_choice = qp.winding_surface.copy_and_set_quadpoints(
             quadpoints_phi=quadpoints_phi_new,
             quadpoints_theta=qp.winding_surface.quadpoints_theta
         )

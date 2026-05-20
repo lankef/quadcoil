@@ -23,7 +23,7 @@ from quadcoil.solver import (
 from quadcoil.wrapper import _parse_objectives, _parse_constraints, _resolve_quadpoints
 from functools import partial
 from quadcoil.quantity import Bnormal
-from jax import jacfwd, jacrev, jit, block_until_ready, debug, flatten_util, eval_shape
+from jax import jacfwd, jacrev, jit, block_until_ready, debug, flatten_util, eval_shape, grad
 from jax import config as config_jax
 import jax.numpy as jnp
 import lineax as lx
@@ -97,6 +97,9 @@ QUADCOIL_STATIC_ARGNAMES=[
     'constraint_type',
     # - Metrics
     'metric_name',
+    # - Preconditioning options
+    'precond',
+    'svd_truncation',
     # - Constraint handling and adjoint
     'value_only',
     'convex',
@@ -178,24 +181,26 @@ def quadcoil(
     
     # - Metrics to study
     metric_name=('f_B', 'f_K'),
+
+    # - Preconditioning options
+    precond=None, # Supported options are 'ess', 'svd' and None
+    svd_truncation=None,
+    precond_options={},
     
     # - Constraint handling and adjoint
     value_only=False,
-    smoothing='slack',
+    smoothing='approx',
     smoothing_params={'lse_epsilon': 1e-3},
     convex:bool=False,
 
     # - Solver options
-    # ess_alpha=1., # ESS factor, see Algorithm 2 of arxiv 2509.16320    
     verbose:int=0,
     merge_constraints:bool=False,
-
-    # - Auglag options (traced dict; merged with SOLVER_OPTIONS_DEFAULT)
     solver:str='slsqp', # 'auglag-lbfgs',
     solver_options=None,
-    lbfgs_memory:int=10,
+    lbfgs_memory:int=10, # applicable for 'slsqp' only
     maxiter:int=None,
-    maxiter_inner:int=None,
+    maxiter_inner:int=None, # applicable for 'auglag-lbfgs' only
 
     # - Experimental
     implicit_linear_solver=None,
@@ -331,6 +336,14 @@ def quadcoil(
             maxiter = 200
     if maxiter_inner is None:
         maxiter_inner = 500
+
+    # ----- Warning for constraint treatment -----
+    if smoothing == 'slack' and solver != 'auglag-lbfgs':
+        warnings.warn(
+            'We only recommend using smoothing=\'slack\' '
+            'with solver=\'auglag-lbfgs\'. The current value of '
+            'solver is ' + solver
+        )
 
     # ----- Default parameters -----
     # ess_alpha = jnp.abs(ess_alpha)
