@@ -43,7 +43,8 @@ NESCOIL_STATIC_ARGNAMES = [
     'plasma_ntor',
     'plasma_stellsym',
     'surface_type',
-    'offset_smoothing',
+    'winding_surface_mode',
+    'winding_theta_mode',
     'winding_mpol',
     'winding_ntor',
     'winding_stellsym',
@@ -73,7 +74,6 @@ def nescoil(
 
     plasma_coil_distance: float = None,
     surface_type: str = 'SurfaceRZFourier',
-    offset_smoothing: str = 'intersection',
 
     winding_dofs=None,
     winding_mpol: int = 6,
@@ -81,6 +81,12 @@ def nescoil(
     winding_quadpoints_phi=None,
     winding_quadpoints_theta=None,
     winding_stellsym: bool = True,
+    winding_phi_interp: int = 2,
+    winding_theta_interp: int = 5,
+    winding_theta_rule_subsample: int = None,
+    winding_lam_tikhonov: float = 1e-5,
+    winding_surface_mode: str = 'self-intersection',
+    winding_theta_mode: str = 'arclen',
 ):
     r'''
     Solves a NESCOIL problem: finds the current potential :math:`\Phi_{sv}`
@@ -129,9 +135,6 @@ def nescoil(
         Must be provided if ``winding_dofs`` is not.
     surface_type : str, optional, default='SurfaceRZFourier'
         (Static) The surface type string (reserved for future use).
-    offset_smoothing : str, optional, default='intersection'
-        (Static) Self-intersection removal strategy when auto-generating the winding surface.
-        One of ``'none'``, ``'intersection'``, or ``'hull'``.
     winding_dofs : ndarray, shape (ndof_winding,), optional, default=None
         The winding surface degrees of freedom. Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()``
         convention. Will be generated from ``plasma_coil_distance`` if not provided.
@@ -188,23 +191,20 @@ def nescoil(
             quadpoints_theta=winding_quadpoints_theta,
             dofs=winding_dofs
         )
-    # winding surface is not provided. 
-    # Its dofs will not be among x.
+    # winding surface is not provided; auto-generate from plasma_coil_distance.
     else:
-        winding_dofs_temp = plasma_surface.gen_offset_dofs(
+        winding_surface = plasma_surface.gen_winding_surface(
             d_expand=plasma_coil_distance,
             mpol=winding_mpol,
             ntor=winding_ntor,
-            smoothing=offset_smoothing,
-        )
-        winding_surface = SurfaceRZFourierJAX(
-            nfp=nfp,
-            stellsym=stellsym,
-            mpol=winding_mpol,
-            ntor=winding_ntor,
+            phi_interp=winding_phi_interp,
+            theta_interp=winding_theta_interp,
+            theta_rule_subsample=winding_theta_rule_subsample,
             quadpoints_phi=winding_quadpoints_phi,
             quadpoints_theta=winding_quadpoints_theta,
-            dofs=winding_dofs_temp
+            lam_tikhonov=winding_lam_tikhonov,
+            winding_surface_mode=winding_surface_mode,
+            theta_mode=winding_theta_mode,
         )
     if Bnormal_plasma is None:
         Bnormal_plasma_temp = jnp.zeros((

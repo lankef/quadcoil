@@ -1,8 +1,7 @@
 from .auglag import (
     solve_constrained_auglag_lbfgs,
     solve_unconstrained_auglag_lbfgs,
-    stationarity_auglag_lbfgs,
-    adjoint_auglag_lbfgs,
+    recover_multipliers,
     # Different shapes for constraint function g 
     gplus_hard,
     gplus_elu,
@@ -11,14 +10,10 @@ from .auglag import (
 from .ipm import (
     solve_constrained_ipm,
     solve_unconstrained_ipm,
-    stationarity_ipm,
-    adjoint_ipm,
 )
 from .slsqp import (
     solve_constrained_slsqp,
     solve_unconstrained_slsqp,
-    stationarity_slsqp,
-    adjoint_slsqp,
 )
 from .kkt_adjoint import (
     stationarity_kkt,

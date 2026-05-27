@@ -8,7 +8,7 @@ Potential further optimisations
     for printing. These are gated behind a static `if` so they are
     compiled away when verbose<=1, but if verbose were ever traced
     they would become unnecessary overhead.
-#6  stationarity_auglag_lbfgs computes two SVDs (one on the 3 Hessian
+#6  stationarity_kkt computes two SVDs (one on the 3 Hessian
     terms, one on the concatenated projection).  For large n, consider
     making the SVD preconditioning optional or using a cheaper
     approximation (e.g. incomplete Cholesky).
@@ -23,7 +23,6 @@ from jax.lax import while_loop
 from jax import config as config_jax
 config_jax.update('jax_enable_x64', True)
 
-from .kkt_adjoint import stationarity_kkt, adjoint_kkt
 import optimistix as optx
 
 lstsq_vmap = vmap(jnp.linalg.lstsq)
@@ -488,8 +487,8 @@ def _print_max_blank(a):
 
 # ── KKT-based stationarity and adjoint ───────────────────────────────────
 
-def _recover_multipliers(x_opt, y_flat, f_g_ineq_h_eq_from_y, unravel_y,
-                         unravel_unscale_x):
+def recover_multipliers(x_opt, y_flat, f_g_ineq_h_eq_from_y, unravel_y,
+                        flat_x_to_dofs):
     r'''
     Recover Lagrange multipliers at the solution by solving the KKT
     stationarity condition as a least-squares problem:
@@ -509,7 +508,7 @@ def _recover_multipliers(x_opt, y_flat, f_g_ineq_h_eq_from_y, unravel_y,
         ``(y_dict) -> (f_obj, g_ineq, h_eq, n_g, n_h, aux_dofs)``
     unravel_y : Callable
         ``(y_flat) -> y_dict``
-    unravel_unscale_x : Callable
+    flat_x_to_dofs : Callable
         ``(x_flat) -> dofs_dict``
 
     Returns
@@ -520,9 +519,9 @@ def _recover_multipliers(x_opt, y_flat, f_g_ineq_h_eq_from_y, unravel_y,
         Recovered equality multipliers.
     '''
     f_obj, g_ineq, h_eq, _, _, _ = f_g_ineq_h_eq_from_y(unravel_y(y_flat))
-    f_scaled = lambda x: f_obj(unravel_unscale_x(x))
-    g_scaled = lambda x: g_ineq(unravel_unscale_x(x))
-    h_scaled = lambda x: h_eq(unravel_unscale_x(x))
+    f_scaled = lambda x: f_obj(flat_x_to_dofs(x))
+    g_scaled = lambda x: g_ineq(flat_x_to_dofs(x))
+    h_scaled = lambda x: h_eq(flat_x_to_dofs(x))
 
     grad_f = grad(f_scaled)(x_opt)
     J_g = jacrev(g_scaled)(x_opt)          # (n_g, n_x)
@@ -533,129 +532,3 @@ def _recover_multipliers(x_opt, y_flat, f_g_ineq_h_eq_from_y, unravel_y,
 
     n_g = J_g.shape[0]
     return z_all[:n_g], z_all[n_g:]
-
-
-def stationarity_auglag_lbfgs(
-    constrained,
-    convex,
-    solve_results,
-    y_flat,
-    f_g_ineq_h_eq_from_y,
-    unravel_y,
-    unravel_unscale_x,
-    solver_options,
-    verbose,
-):
-    r'''
-    Build KKT stationarity data for implicit differentiation through the
-    augmented-Lagrangian solution.
-
-    Recovers dual variables via least-squares on the KKT stationarity
-    condition, then delegates to the shared :func:`kkt_adjoint.stationarity_kkt`.
-
-    Called once per ``quadcoil()`` invocation; the returned ``stationarity_data``
-    dict is then passed into :func:`adjoint_auglag_lbfgs` once per metric.
-
-    Parameters
-    ----------
-    constrained : bool
-        Whether the problem has constraints.
-    convex : bool
-        Whether to assume the problem is convex.
-    solve_results : dict
-        Output of :func:`solve_constrained_auglag_lbfgs` or
-        :func:`solve_unconstrained_auglag_lbfgs`.
-    y_flat : ndarray
-        Flattened problem parameters.
-    f_g_ineq_h_eq_from_y : Callable
-        ``(y_dict) -> (f_obj, g_ineq, h_eq, n_g, n_h, aux_dofs)``
-    unravel_y : Callable
-        ``(y_flat) -> y_dict``
-    unravel_unscale_x : Callable
-        ``(x_flat) -> dofs_dict``
-    solver_options : dict
-        Solver options (passed through; unused by the KKT path).
-    verbose : int
-        Verbosity level.
-
-    Returns
-    -------
-    stationarity_data : dict
-        Opaque state consumed by :func:`adjoint_auglag_lbfgs`.
-    '''
-    x_opt = solve_results['fin_x']
-
-    if not constrained:
-        return stationarity_kkt(
-            constrained=False,
-            convex=convex,
-            x_opt=x_opt,
-            z_opt=jnp.zeros(0, dtype=x_opt.dtype),
-            y_flat=y_flat,
-            f_g_ineq_h_eq_from_y=f_g_ineq_h_eq_from_y,
-            unravel_y=unravel_y,
-            unravel_unscale_x=unravel_unscale_x,
-            verbose=verbose,
-        )
-
-    z_ineq, z_eq = _recover_multipliers(
-        x_opt, y_flat, f_g_ineq_h_eq_from_y, unravel_y, unravel_unscale_x,
-    )
-    z_combined = jnp.concatenate([z_ineq, z_eq])
-
-    def f_g_combined_from_y(y_dict):
-        f_obj, g_ineq, h_eq, n_g, n_h, aux = f_g_ineq_h_eq_from_y(y_dict)
-        g_combined = lambda dofs: jnp.concatenate([g_ineq(dofs), h_eq(dofs)])
-        h_empty = lambda dofs: jnp.zeros(0)
-        return f_obj, g_combined, h_empty, n_g + n_h, 0, aux
-
-    return stationarity_kkt(
-        constrained=True,
-        convex=convex,
-        x_opt=x_opt,
-        z_opt=z_combined,
-        y_flat=y_flat,
-        f_g_ineq_h_eq_from_y=f_g_combined_from_y,
-        unravel_y=unravel_y,
-        unravel_unscale_x=unravel_unscale_x,
-        verbose=verbose,
-    )
-
-
-def adjoint_auglag_lbfgs(
-    f_metric,
-    stationarity_data,
-    y_flat,
-    implicit_linear_solver,
-    verbose,
-):
-    r'''
-    Compute dm/dy via the KKT adjoint system.
-    Delegates to the shared :func:`kkt_adjoint.adjoint_kkt`.
-
-    Parameters
-    ----------
-    f_metric : Callable
-        ``(x_flat, y_flat) -> scalar``.
-    stationarity_data : dict
-        Output of :func:`stationarity_auglag_lbfgs`.
-    y_flat : ndarray
-        Flattened problem parameters.
-    implicit_linear_solver : lineax.AbstractLinearSolver
-        Linear solver for the KKT system.
-    verbose : int
-        Verbosity level.
-
-    Returns
-    -------
-    metric_value : scalar
-    dfdy_arr : ndarray, shape ``(ny,)``
-    debug_info : dict
-    '''
-    return adjoint_kkt(
-        f_metric=f_metric,
-        stationarity_data=stationarity_data,
-        y_flat=y_flat,
-        implicit_linear_solver=implicit_linear_solver,
-        verbose=verbose,
-    )

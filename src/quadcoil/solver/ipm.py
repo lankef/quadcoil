@@ -12,8 +12,6 @@ Dual variables z > 0 are the Lagrange multipliers.
 Provides the QUADCOIL solver interface:
     solve_unconstrained_ipm
     solve_constrained_ipm
-    stationarity_ipm
-    adjoint_ipm
 
 Adapted from pdip_solver.py (reference implementation).
 
@@ -22,7 +20,7 @@ Potential further optimisations
 #4  AAt_reg in SOC backtracking is recomputed every IPM iteration.
     For larger m, cache it or use the W_c factorization via the
     Schur-complement identity to compute the SOC projection.
-#6  stationarity_ipm materialises the full (n+m)x(n+m) KKT Jacobian.
+#6  stationarity_kkt materialises the full (n+m)x(n+m) KKT Jacobian.
     For large m this is wasteful; a Schur-complement adjoint that
     only forms the n×n reduced system would save memory and FLOPs.
 """
@@ -35,7 +33,6 @@ import lineax as lx
 from jax import config as config_jax
 config_jax.update('jax_enable_x64', True)
 
-from .kkt_adjoint import stationarity_kkt, adjoint_kkt
 
 
 
@@ -428,95 +425,3 @@ def solve_constrained_ipm(
         'fin_kkt_res': final["kkt_res"],
         'converged':   final["converged"],
     }
-
-
-# ── Stationarity (KKT Jacobian setup) ───────────────────────────────────
-
-def stationarity_ipm(
-    constrained,
-    convex,
-    solve_results,
-    y_flat,
-    f_g_ineq_h_eq_from_y,
-    unravel_y,
-    unravel_unscale_x,
-    solver_options,
-    verbose,
-):
-    r'''
-    Build the KKT stationarity condition for implicit differentiation
-    through the IPM solution.  Delegates to the shared
-    :func:`kkt_adjoint.stationarity_kkt`.
-
-    Parameters
-    ----------
-    constrained : bool
-    convex : bool
-    solve_results : dict
-        Output of :func:`solve_constrained_ipm` or
-        :func:`solve_unconstrained_ipm`.
-    y_flat : ndarray
-    f_g_ineq_h_eq_from_y : Callable
-    unravel_y : Callable
-    unravel_unscale_x : Callable
-    solver_options : dict
-    verbose : int
-
-    Returns
-    -------
-    stationarity_data : dict
-        Opaque state consumed by :func:`adjoint_ipm`.
-    '''
-    x_opt = solve_results['fin_x']
-    z_opt = solve_results.get('fin_z', jnp.zeros(0, dtype=x_opt.dtype))
-
-    return stationarity_kkt(
-        constrained=constrained,
-        convex=convex,
-        x_opt=x_opt,
-        z_opt=z_opt,
-        y_flat=y_flat,
-        f_g_ineq_h_eq_from_y=f_g_ineq_h_eq_from_y,
-        unravel_y=unravel_y,
-        unravel_unscale_x=unravel_unscale_x,
-        verbose=verbose,
-    )
-
-
-# ── Adjoint (per-metric derivative) ─────────────────────────────────────
-
-def adjoint_ipm(
-    f_metric,
-    stationarity_data,
-    y_flat,
-    implicit_linear_solver,
-    verbose,
-):
-    r'''
-    Compute the total derivative of a single metric w.r.t. all problem
-    parameters via the KKT adjoint.  Delegates to the shared
-    :func:`kkt_adjoint.adjoint_kkt`.
-
-    Parameters
-    ----------
-    f_metric : Callable
-        ``(x_flat, y_flat) -> scalar``.
-    stationarity_data : dict
-        Output of :func:`stationarity_ipm`.
-    y_flat : ndarray
-    implicit_linear_solver : lineax.AbstractLinearSolver
-    verbose : int
-
-    Returns
-    -------
-    metric_value : scalar
-    dfdy_arr : ndarray, shape ``(ny,)``
-    debug_info : dict
-    '''
-    return adjoint_kkt(
-        f_metric=f_metric,
-        stationarity_data=stationarity_data,
-        y_flat=y_flat,
-        implicit_linear_solver=implicit_linear_solver,
-        verbose=verbose,
-    )

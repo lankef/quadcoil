@@ -1,11 +1,9 @@
 """
 SLSQP solver backend for QUADCOIL using slsqp-jax (Optimistix interface).
 
-Provides the standard four-function QUADCOIL solver interface:
+Provides the QUADCOIL solver interface:
     solve_unconstrained_slsqp
     solve_constrained_slsqp
-    stationarity_slsqp
-    adjoint_slsqp
 
 Notation/convention differences (quadcoil vs slsqp-jax):
 ──────────────────────────────────────────────────────────
@@ -35,7 +33,6 @@ from slsqp_jax import SLSQP, SLSQPConfig, ToleranceConfig
 from jax import config as config_jax
 config_jax.update('jax_enable_x64', True)
 
-from .kkt_adjoint import stationarity_kkt, adjoint_kkt
 
 
 # ── Default options ──────────────────────────────────────────────────────
@@ -214,7 +211,7 @@ def solve_constrained_slsqp(
     # ── Configure SLSQP solver ───────────────────────────────────────────
     from slsqp_jax import LBFGSConfig
     config = SLSQPConfig(
-        tolerance=ToleranceConfig(atol=atol, rtol=rtol),
+        tolerance=ToleranceConfig(atol=atol, rtol=rtol, max_steps=maxiter),
         lbfgs=LBFGSConfig(memory=lbfgs_memory),
     )
 
@@ -270,76 +267,3 @@ def solve_constrained_slsqp(
         'niter':       niter,
         'converged':   converged,
     }
-
-
-# ── Stationarity (delegates to shared KKT module) ───────────────────────
-
-def stationarity_slsqp(
-    constrained,
-    convex,
-    solve_results,
-    y_flat,
-    f_g_ineq_h_eq_from_y,
-    unravel_y,
-    unravel_unscale_x,
-    solver_options,
-    verbose,
-):
-    r'''
-    Build KKT stationarity data for implicit differentiation through the
-    SLSQP solution.  Delegates to the shared :func:`kkt_adjoint.stationarity_kkt`.
-
-    Parameters
-    ----------
-    (Same interface as stationarity_ipm.)
-
-    Returns
-    -------
-    stationarity_data : dict
-    '''
-    x_opt = solve_results['fin_x']
-    z_opt = solve_results.get('fin_z', jnp.zeros(0, dtype=x_opt.dtype))
-
-    return stationarity_kkt(
-        constrained=constrained,
-        convex=convex,
-        x_opt=x_opt,
-        z_opt=z_opt,
-        y_flat=y_flat,
-        f_g_ineq_h_eq_from_y=f_g_ineq_h_eq_from_y,
-        unravel_y=unravel_y,
-        unravel_unscale_x=unravel_unscale_x,
-        verbose=verbose,
-    )
-
-
-# ── Adjoint (delegates to shared KKT module) ────────────────────────────
-
-def adjoint_slsqp(
-    f_metric,
-    stationarity_data,
-    y_flat,
-    implicit_linear_solver,
-    verbose,
-):
-    r'''
-    Compute dm/dy via the KKT adjoint system.
-    Delegates to the shared :func:`kkt_adjoint.adjoint_kkt`.
-
-    Parameters
-    ----------
-    (Same interface as adjoint_ipm.)
-
-    Returns
-    -------
-    metric_value : scalar
-    dfdy_arr : ndarray, shape (ny,)
-    debug_info : dict
-    '''
-    return adjoint_kkt(
-        f_metric=f_metric,
-        stationarity_data=stationarity_data,
-        y_flat=y_flat,
-        implicit_linear_solver=implicit_linear_solver,
-        verbose=verbose,
-    )

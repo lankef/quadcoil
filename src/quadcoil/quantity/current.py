@@ -1,12 +1,12 @@
 import jax.numpy as jnp
 from jax import jit
 from functools import partial
-from quadcoil.math_utils import mu_0
+from quadcoil.math_utils import mu_0, project_arr_cylindrical
 from .quantity import _Quantity
 
 # ----- Implementations -----
-@partial(jit, static_argnames=('winding_surface_mode',))
-def _K(qp, dofs, winding_surface_mode=False):
+@partial(jit, static_argnames=('winding_surface_mode', 'cyl_mode'))
+def _K(qp, dofs, winding_surface_mode=False, cyl_mode=False):
     # winding_surface_mode is for using 
     # one or more field periods.
     phi_mn = dofs['phi']
@@ -58,7 +58,12 @@ def _K(qp, dofs, winding_surface_mode=False):
         dg2 * G
         - dg1 * I
     )
-    return b_K@phi_mn + c_K
+    K_xyz = b_K@phi_mn + c_K
+    if cyl_mode:
+        gamma = surface_choice.gamma()
+        K_cyl = project_arr_cylindrical(gamma, K_xyz)
+        return K_cyl
+    return K_xyz
 _K_desc_unit = lambda scales: scales["B"] / mu_0 # based on infinite solenoid: B = mu_0 K_pol.
 
 # @jit # Not needed because _K is jitted and this can make compile time excessive
@@ -123,6 +128,14 @@ _f_huber_K_desc_unit = lambda scales: _K_desc_unit(scales) * scales["R0"] * scal
 # a private function.
 K = _Quantity.generate_c2(
     func=_K, 
+    compatibility=['<=', '>='], 
+    desc_unit=_K_desc_unit,
+)
+
+_K_cyl = lambda qp, dofs: _K(qp, dofs, cyl_mode=True)
+
+K_cyl = _Quantity.generate_c2(
+    func=_K_cyl, 
     compatibility=['<=', '>='], 
     desc_unit=_K_desc_unit,
 )

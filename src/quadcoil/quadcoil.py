@@ -3,6 +3,7 @@ from quadcoil import (
     SurfaceRZFourierJAX, SurfaceXYZTensorFourierJAX, SurfaceXYZFourierJAX,
     QuadcoilParams, 
     is_ndarray, tree_len,
+    qp_nescoil,
 )
 
 from quadcoil.solver import (
@@ -12,17 +13,14 @@ from quadcoil.solver import (
     solve_unconstrained_auglag_lbfgs,
     solve_unconstrained_ipm,
     solve_unconstrained_slsqp,
-    stationarity_auglag_lbfgs,
-    stationarity_ipm,
-    stationarity_slsqp,
-    adjoint_auglag_lbfgs,
-    adjoint_ipm,
-    adjoint_slsqp,
+    recover_multipliers,
+    stationarity_kkt,
+    adjoint_kkt,
 )
 
 from quadcoil.wrapper import _parse_objectives, _parse_constraints, _resolve_quadpoints
 from functools import partial
-from quadcoil.quantity import Bnormal
+from quadcoil.quantity import Bnormal, K_cyl
 from jax import jacfwd, jacrev, jit, block_until_ready, debug, flatten_util, eval_shape, grad
 from jax import config as config_jax
 import jax.numpy as jnp
@@ -76,6 +74,7 @@ QUADCOIL_STATIC_ARGNAMES=[
     'stellsym',
     'mpol',
     'ntor',
+    'phi_init_with_nescoil',
     # - Plasma options
     'plasma_mpol',
     'plasma_ntor',
@@ -99,7 +98,7 @@ QUADCOIL_STATIC_ARGNAMES=[
     'metric_name',
     # - Preconditioning options
     'precond',
-    'svd_truncation',
+    'precond_dims',
     # - Constraint handling and adjoint
     'value_only',
     'convex',
@@ -135,6 +134,8 @@ def quadcoil(
     quadpoints_phi=None, # Documented
     quadpoints_theta=None, # Documented
     phi_init=None,  # Documented
+    # Whether to initalize with nescoil sln. Will override phi_init and phi_unit.
+    phi_init_with_nescoil=False, 
     # Current potential's normalization constant. 
     # By default will be generated from net total current.
     phi_unit=None, # Documented
@@ -183,9 +184,13 @@ def quadcoil(
     metric_name=('f_B', 'f_K'),
 
     # - Preconditioning options
-    precond=None, # Supported options are 'ess', 'svd' and None
-    svd_truncation=None,
-    precond_options={},
+    precond=None, # Supported options are 'ess', 'svd', 'svd_K' and None
+    precond_dims=None,
+    precond_options={
+        'svd_safe_thres': 0.,
+        'ess_alpha': 1.,
+        'ess_p': 2.,
+    },
     
     # - Constraint handling and adjoint
     value_only=False,
@@ -237,7 +242,7 @@ def quadcoil(
     phi_init : ndarray, optional, default=None
         (Traced) The initial guess. All zeros by default.
     phi_unit : float, optional, default=None
-        (Traced) Current potential's normalization constant.
+        (Traced) Current potential's normalization constant. Only applies when ``precond!='svd'``
         By default will be generated from total net current.
     plasma_stellsym : bool, default=True
         (Static) Whether the plasma has stellarator symmetry.
@@ -333,7 +338,7 @@ def quadcoil(
         elif solver == 'ipm':
             maxiter = 100
         else:  # slsqp
-            maxiter = 200
+            maxiter = 500
     if maxiter_inner is None:
         maxiter_inner = 500
 
@@ -346,7 +351,6 @@ def quadcoil(
         )
 
     # ----- Default parameters -----
-    # ess_alpha = jnp.abs(ess_alpha)
     (
         plasma_quadpoints_phi, plasma_quadpoints_theta,
         winding_quadpoints_phi, winding_quadpoints_theta,
@@ -594,45 +598,118 @@ def quadcoil(
     f_obj, g_ineq, h_eq, n_g, n_h, aux_dofs_init = f_g_ineq_h_eq_from_y(y_dict_current)
     constrained = not ((n_g == 0) and (n_h == 0))
 
-    if phi_init is None:
-        phi_init = jnp.zeros(qp.ndofs)
-    # not really used in initialization, but used 
-    # to calculate phi scaling, the initial value 
-    # of lam and mu, and the initial value of aux 
-    # variables.
-    dofs_dict_init = {'phi': phi_init}
-    # ----- Calculating the unit of phi -----
-    # phi need to be normalized to ~1 for the optimizer to behave well.
-    # by default we do this using the initial value of Bnormal
-    if phi_unit is None:
-        # Scaling current potential dofs to ~1
-        # By default, we use the Bnormal value when 
-        # phi=0 to generate this scaling factor.
-        Bnormal_estimate = jnp.average(jnp.abs(Bnormal(qp, dofs_dict_init))) # Unit: T
-        if plasma_coil_distance is not None:
-            phi_unit = Bnormal_estimate * 1e7 * jnp.abs(plasma_coil_distance)
-        else:
-            # The minor radius can be estimated from the 
-            # n=0, m=1 rc mode of the surface.
-            plasma_minor = plasma_dofs[plasma_ntor*2 + 1]
-            winding_minor = winding_dofs[winding_ntor*2 + 1]
-            phi_unit = Bnormal_estimate * 1e7 * jnp.abs(plasma_minor - winding_minor)
-    # # ESS scaling (See Chris Jang's paper at https://arxiv.org/pdf/2509.16320) 
-    # ess_factor = jnp.exp(
-    #     -ess_alpha 
-    #     * jnp.linalg.norm(jnp.array(qp.make_mn()), ord=1, axis=0)
-    # )
-    # ess_factor = ess_factor / jnp.average(ess_factor)
-    # phi_unit = phi_unit * ess_factor
+    if phi_init_with_nescoil:
+        if phi_init or phi_unit is not None:
+            warnings.warn(
+                'phi_init_with_nescoil is True, but '
+                'phi_init or phi_unit are not None, and '
+                'they will be replaced with the NESCOIL values.'
+            )
+        phi_init = qp_nescoil(qp)
+        phi_unit = jnp.max(jnp.abs(phi_init))
+        dofs_init = {'phi': phi_init}
+    else:
+        if phi_init is None:
+            phi_init = jnp.zeros(qp.ndofs)
+        dofs_init = {'phi': phi_init}
+        # ----- Calculating the unit of phi -----
+        # phi need to be normalized to ~1 for the optimizer to behave well.
+        # by default we do this using the initial value of Bnormal
+        if phi_unit is None:
+            # Scaling current potential dofs to ~1
+            # By default, we use the Bnormal value when 
+            # phi=0 to generate this scaling factor.
+            Bnormal_estimate = jnp.average(jnp.abs(Bnormal(qp, dofs_init))) # Unit: T
+            if plasma_coil_distance is not None:
+                phi_unit = Bnormal_estimate * 1e7 * jnp.abs(plasma_coil_distance)
+            else:
+                # The minor radius can be estimated from the 
+                # n=0, m=1 rc mode of the surface.
+                plasma_minor = plasma_dofs[plasma_ntor*2 + 1]
+                winding_minor = winding_dofs[winding_ntor*2 + 1]
+                phi_unit = Bnormal_estimate * 1e7 * jnp.abs(plasma_minor - winding_minor)
+                    
+
+
+            
+    # ----- Preconditioning -----
+    
     # ----- Creating scaled, flattened dof, 'x_flat_init' -----
     # The actual, unit-free, variable used for initialization,
     # and by the optimizer. The dof that the optimizer operates on is a
     # flattened version of this dictionary.
+    if precond is None:
+        _precond_phi = lambda phi: phi / phi_unit
+        _recover_phi = lambda x: x * phi_unit
+        
+    elif precond in ('svd', 'svd_K'):
+        # Preparing quantities for SVD-based pre-conditioning
+        # This is the maximum difference in order-of-magnitude 
+        # across all singular values
+        svd_safe_thres = precond_options['svd_safe_thres']
+        # Materializing the Bnormal matrix using lineax, since 
+        # unlike REGCOIL, our Bnormal is a direct implementation of 
+        # the Biot-Savart law in QUADCOIL.
+        if precond == 'svd':
+            precond_f = lambda x, qp=qp: Bnormal(qp, {'phi': x}) - Bnormal(qp, {'phi': jnp.zeros_like(phi_init)})
+        else:
+            precond_f = lambda x, qp=qp: K_cyl(qp, {'phi': x}) - K_cyl(qp, {'phi': jnp.zeros_like(phi_init)})
+        precond_op = lx.FunctionLinearOperator(
+            fn=precond_f, 
+            input_structure=phi_init
+        ).as_matrix()
+        # Performing SVD
+        precond_U, precond_s, precond_Vh = jnp.linalg.svd(precond_op, full_matrices=False)
+        # In case there are very small singular values, use 
+        # svd_safe_thres as a thresold to prevent divide 
+        # by zero.
+        svd_scale = jnp.where(
+            precond_s<jnp.max(precond_s)*svd_safe_thres, 
+            jnp.max(precond_s)*svd_safe_thres, 
+            precond_s
+        )
+        # Default: no SVD truncation
+        if precond_dims is None:
+            precond_dims = qp.ndofs
+            
+        def _precond_phi(phi):
+            phi_projected = precond_Vh @ phi
+            x_padded = phi_projected * svd_scale
+            return x_padded[:precond_dims]
+        
+        def _recover_phi(x):
+            x_padded = jnp.concatenate([x, jnp.zeros(precond_Vh.shape[0] - len(x))])
+            x_scaled = x_padded / svd_scale
+            phi_recovered = precond_Vh.T @ x_scaled
+            return phi_recovered
+            
+    elif precond == 'ess':
+        # Preparing quantities for 
+        ess_alpha = jnp.abs(precond_options['ess_alpha'])
+        # p for Lp norm has to be > 1
+        ess_p = jnp.where(precond_options['ess_p'] < 1, 1, precond_options['ess_p'])
+        # Calculating the ESS factor
+        ess_mn = jnp.array(qp.make_mn()) 
+        ess_Lp_norm = jnp.sum(jnp.abs(ess_mn) ** ess_p, axis=0) ** (1/ess_p)
+        ess_factor = jnp.exp(ess_alpha * ess_Lp_norm)
+        
+        def _precond_phi(phi):
+            return phi / phi_unit * ess_factor
+        
+        def _recover_phi(x):
+            return x / ess_factor * phi_unit
+            
+    else:
+        raise ValueError(f"Unknown preconditioner: {precond}")
+
+    # Converting the preconditioned dofs into a flattened array
+    # by first replacing the phi element with a 'phi_precond' 
+    # element, and then unraveling.
     x_dict = {
-       'phi_scaled': phi_init/phi_unit,
+       'phi_precond': _precond_phi(phi_init),
        # And auxiliary vars. Because we have already implemented 
        # scaling for them in _add_quantity instances, we do not 
-       # need to scale them here.
+       # need to precondition them here.
     }
     # Calculating the structure of auxiliary dofs from the problem setup (qp).
     # The current dictionary's items are either None (scalar), tuple (known shape), or 
@@ -640,7 +717,7 @@ def quadcoil(
     for key in aux_dofs_init.keys():
         if callable(aux_dofs_init[key]): 
             # Callable(qp: QuadcoilParams, dofs: dict, f_unit: float)
-            x_dict[key] = aux_dofs_init[key](qp, {'phi': phi_init})
+            x_dict[key] = aux_dofs_init[key](qp, dofs_init)
         else:
             try:
                 x_dict[key] = jnp.array(aux_dofs_init[key])
@@ -650,36 +727,35 @@ def quadcoil(
                     'and cannot be converted to an array. Its value is: '\
                     f'{str(aux_dofs_init[key])}. This is dur to improper '\
                     'implementation of the physical quantity. Please contact the developers.')
-    # dofs_init is a dict for readability. However, for simple
-    # implementation, we need to unravel it into a jax array. 
-    # Here we perform the unraveling. 
-    # *** x_flat_init is the actual dof manipulated by the optimizers! ***
+                
+    # We now flatten x into a jax array so that we can pass it into a solver.
     x_flat_init, unravel_x = flatten_util.ravel_pytree(x_dict)
     
-    ndofs_tot = len(x_flat_init) # This counts the aux vars too
-    ny = tree_len(y_dict_current)
-    # This block prints out a summary on the auxiliary vars and 
-    # phi degrees of freedom.
-    def unravel_unscale_x(x, unravel_x=unravel_x, phi_unit=phi_unit):
+
+    def flat_x_to_dofs(x, unravel_x=unravel_x, phi_unit=phi_unit):
         d = unravel_x(x)
         # Replace scaled phi with regular phi
         # after unraveling for passing into 
         # f_obj, g_ineq and h_eq.
-        dofs_temp = {k: v for k, v in {**d, "phi": d["phi_scaled"] * phi_unit}.items() if k != "phi_scaled"}
+        dofs_temp = {
+            k: v for k, v in {**d, "phi": _recover_phi(d["phi_precond"])}.items() if k != "phi_precond"
+        }
         return(dofs_temp)
-    # ----- Scaling f, g, h and initializing mu and lam -----
-    # f, g and h should take x_flat_init, the flattened, scaled dofs.
-    # *** f_scaled, g_scaled and h_scaled are the actual functions 
-    # seen by the optimizer! ***
-    f_scaled = lambda x_scaled, f_obj=f_obj: f_obj(unravel_unscale_x(x_scaled))
-    g_scaled = lambda x_scaled, g_ineq=g_ineq: g_ineq(unravel_unscale_x(x_scaled))
-    h_scaled = lambda x_scaled, h_eq=h_eq: h_eq(unravel_unscale_x(x_scaled))
+
+    # Versions of f, g, h that takes in the flat, preconditioned x array.
+    f_precond = lambda x_precond, f_obj=f_obj: f_obj(flat_x_to_dofs(x_precond))
+    g_precond = lambda x_precond, g_ineq=g_ineq: g_ineq(flat_x_to_dofs(x_precond))
+    h_precond = lambda x_precond, h_eq=h_eq: h_eq(flat_x_to_dofs(x_precond))
     
-    mu_init = jnp.zeros(eval_shape(g_scaled, x_flat_init).shape)
-    lam_init = jnp.zeros(eval_shape(h_scaled, x_flat_init).shape)
+    mu_init = jnp.zeros(eval_shape(g_precond, x_flat_init).shape)
+    lam_init = jnp.zeros(eval_shape(h_precond, x_flat_init).shape)
     
     # ----- Summarizing initialization -----
+    # This block prints out a summary on the auxiliary vars and 
+    # phi degrees of freedom.
     if verbose>0:
+        ny = tree_len(y_dict_current)
+        ndofs_tot = len(x_flat_init) # This counts the aux vars too
         dofs_summary = []
         for key, value in x_dict.items():
             dofs_summary.append(f"    {key}: {jnp.atleast_1d(value).shape}")
@@ -708,7 +784,7 @@ def quadcoil(
         if solver == 'auglag-lbfgs':
             solve_results = solve_unconstrained_auglag_lbfgs(
                 init_params=x_flat_init,
-                fun=f_scaled,
+                fun=f_precond,
                 convex=convex,
                 maxiter=maxiter,
                 solver_options={
@@ -721,7 +797,7 @@ def quadcoil(
         elif solver == 'ipm':
             solve_results = solve_unconstrained_ipm(
                 init_params=x_flat_init,
-                fun=f_scaled,
+                fun=f_precond,
                 convex=convex,
                 maxiter=maxiter,
                 solver_options=solver_options,
@@ -730,7 +806,7 @@ def quadcoil(
         elif solver == 'slsqp':
             solve_results = solve_unconstrained_slsqp(
                 init_params=x_flat_init,
-                fun=f_scaled,
+                fun=f_precond,
                 convex=convex,
                 maxiter=maxiter,
                 solver_options=solver_options,
@@ -740,7 +816,7 @@ def quadcoil(
         else:
             raise ValueError(f"Unknown solver: {solver}")
         x_flat_opt = solve_results['fin_x']
-        dofs_opt = unravel_unscale_x(x_flat_opt)
+        dofs_opt = flat_x_to_dofs(x_flat_opt)
         if verbose>0:       
             debug.print(
                 '----- Solver status summary -----\n'\
@@ -756,9 +832,9 @@ def quadcoil(
         if solver == 'auglag-lbfgs':
             solve_results = solve_constrained_auglag_lbfgs(
                 x_init=x_flat_init,
-                f_obj=f_scaled,
-                h_eq=h_scaled,
-                g_ineq=g_scaled,
+                f_obj=f_precond,
+                h_eq=h_precond,
+                g_ineq=g_precond,
                 maxiter=maxiter,
                 maxiter_inner=maxiter_inner,
                 solver_options={**solver_options, 'lam_init': lam_init, 'mu_init': mu_init},
@@ -768,9 +844,9 @@ def quadcoil(
         elif solver == 'ipm':
             solve_results = solve_constrained_ipm(
                 x_init=x_flat_init,
-                f_obj=f_scaled,
-                h_eq=h_scaled,
-                g_ineq=g_scaled,
+                f_obj=f_precond,
+                h_eq=h_precond,
+                g_ineq=g_precond,
                 convex=convex,
                 maxiter=maxiter,
                 solver_options=solver_options,
@@ -779,9 +855,9 @@ def quadcoil(
         elif solver == 'slsqp':
             solve_results = solve_constrained_slsqp(
                 x_init=x_flat_init,
-                f_obj=f_scaled,
-                h_eq=h_scaled,
-                g_ineq=g_scaled,
+                f_obj=f_precond,
+                h_eq=h_precond,
+                g_ineq=g_precond,
                 convex=convex,
                 maxiter=maxiter,
                 solver_options=solver_options,
@@ -792,7 +868,7 @@ def quadcoil(
             raise ValueError(f"Unknown solver: {solver}")
         # The optimum, unit-less.
         x_flat_opt = solve_results['fin_x']
-        dofs_opt = unravel_unscale_x(x_flat_opt)
+        dofs_opt = flat_x_to_dofs(x_flat_opt)
         if verbose>0:       
             debug.print(
                 '----- Solver status summary -----\n'\
@@ -804,7 +880,9 @@ def quadcoil(
                 niter=solve_results['niter'],
                 solve_results=solve_results
             )
-    # ----- Calculating metrics and gradients
+            
+    # ----- Calculating metrics and gradients -----
+    
     if value_only: 
         out_dict = {}
         for metric_name_i in metric_name:
@@ -822,84 +900,68 @@ def quadcoil(
     y_flat, unravel_y = flatten_util.ravel_pytree(y_dict_current)
 
     # ----- Stationarity conditions -----
+    
+    # Each solver has slightly different stationarity condition.
+    x_opt = solve_results['fin_x']
     if solver == 'auglag-lbfgs':
-        stationarity_data = stationarity_auglag_lbfgs(
-            constrained=constrained,
-            convex=convex,
-            solve_results=solve_results,
-            y_flat=y_flat,
-            f_g_ineq_h_eq_from_y=f_g_ineq_h_eq_from_y,
-            unravel_y=unravel_y,
-            unravel_unscale_x=unravel_unscale_x,
-            solver_options=solver_options,
-            verbose=verbose,
+        z_ineq, z_eq = recover_multipliers(
+            x_opt, y_flat, f_g_ineq_h_eq_from_y, unravel_y, flat_x_to_dofs,
         )
-    elif solver == 'ipm':
-        stationarity_data = stationarity_ipm(
-            constrained=constrained,
-            convex=convex,
-            solve_results=solve_results,
-            y_flat=y_flat,
-            f_g_ineq_h_eq_from_y=f_g_ineq_h_eq_from_y,
-            unravel_y=unravel_y,
-            unravel_unscale_x=unravel_unscale_x,
-            solver_options=solver_options,
-            verbose=verbose,
-        )
-    elif solver == 'slsqp':
-        stationarity_data = stationarity_slsqp(
-            constrained=constrained,
-            convex=convex,
-            solve_results=solve_results,
-            y_flat=y_flat,
-            f_g_ineq_h_eq_from_y=f_g_ineq_h_eq_from_y,
-            unravel_y=unravel_y,
-            unravel_unscale_x=unravel_unscale_x,
-            solver_options=solver_options,
-            verbose=verbose,
-        )
+        z_opt = jnp.concatenate([z_ineq, z_eq])
+
+        def f_g_combined_from_y(y_dict):
+            f_obj_i, g_ineq_i, h_eq_i, n_g_i, n_h_i, aux = f_g_ineq_h_eq_from_y(y_dict)
+            g_combined = lambda dofs: jnp.concatenate([g_ineq_i(dofs), h_eq_i(dofs)])
+            h_empty = lambda dofs: jnp.zeros(0)
+            return f_obj_i, g_combined, h_empty, n_g_i + n_h_i, 0, aux
+
+        f_g_for_kkt = f_g_combined_from_y
+    elif solver in ('ipm', 'slsqp'):
+        z_opt = solve_results.get('fin_z', jnp.zeros(0, dtype=x_opt.dtype))
+        f_g_for_kkt = f_g_ineq_h_eq_from_y
     else:
         raise ValueError(f"Unknown solver: {solver}")
 
+    if not constrained:
+        z_opt = jnp.zeros(0, dtype=x_opt.dtype)
+
+    stationarity_data = stationarity_kkt(
+        constrained=constrained,
+        convex=convex,
+        x_opt=x_opt,
+        z_opt=z_opt,
+        y_flat=y_flat,
+        f_g_ineq_h_eq_from_y=f_g_for_kkt,
+        unravel_y=unravel_y,
+        flat_x_to_dofs=flat_x_to_dofs,
+        verbose=verbose,
+    )
+
     out_dict = {}
+
+    # If nescoil initial conditions are used, output it
+    # solution too.
+    if phi_init_with_nescoil:
+        out_dict['dofs_nescoil'] = {'phi': phi_init}
 
     for metric_name_i in metric_name:
         if metric_name_i == 'f_obj':
             f_metric = lambda xp, y: f_obj(
                 qp_temp=y_to_qp(unravel_y(y)),
-                x=unravel_unscale_x(xp)
+                x=flat_x_to_dofs(xp)
             )
         else:
             f_metric = lambda xp, y: get_quantity(metric_name_i)(
                 y_to_qp(unravel_y(y)),
-                unravel_unscale_x(xp)
+                flat_x_to_dofs(xp)
             )
-        if solver == 'auglag-lbfgs':
-            metric_result_i, dfdy_arr, debug_info_i = adjoint_auglag_lbfgs(
-                f_metric=f_metric,
-                stationarity_data=stationarity_data,
-                y_flat=y_flat,
-                implicit_linear_solver=implicit_linear_solver,
-                verbose=verbose,
-            )
-        elif solver == 'ipm':
-            metric_result_i, dfdy_arr, debug_info_i = adjoint_ipm(
-                f_metric=f_metric,
-                stationarity_data=stationarity_data,
-                y_flat=y_flat,
-                implicit_linear_solver=implicit_linear_solver,
-                verbose=verbose,
-            )
-        elif solver == 'slsqp':
-            metric_result_i, dfdy_arr, debug_info_i = adjoint_slsqp(
-                f_metric=f_metric,
-                stationarity_data=stationarity_data,
-                y_flat=y_flat,
-                implicit_linear_solver=implicit_linear_solver,
-                verbose=verbose,
-            )
-        else:
-            raise ValueError(f"Unknown solver: {solver}")
+        metric_result_i, dfdy_arr, debug_info_i = adjoint_kkt(
+            f_metric=f_metric,
+            stationarity_data=stationarity_data,
+            y_flat=y_flat,
+            implicit_linear_solver=implicit_linear_solver,
+            verbose=verbose,
+        )
         dfdy_dict = {f"df_d{key}": value for key, value in unravel_y(dfdy_arr).items()}
         if verbose > 0:
             grad_avgs = {}

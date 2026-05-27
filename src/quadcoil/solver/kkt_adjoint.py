@@ -39,7 +39,7 @@ def stationarity_kkt(
     y_flat,
     f_g_ineq_h_eq_from_y,
     unravel_y,
-    unravel_unscale_x,
+    flat_x_to_dofs,
     verbose,
 ):
     r'''
@@ -63,7 +63,7 @@ def stationarity_kkt(
         ``(y_dict) -> (f_obj, g_ineq, h_eq, n_g, n_h, aux_dofs)``
     unravel_y : Callable
         ``(y_flat) -> y_dict``
-    unravel_unscale_x : Callable
+    flat_x_to_dofs : Callable
         ``(x_flat) -> dofs_dict``
     verbose : int
 
@@ -79,7 +79,7 @@ def stationarity_kkt(
     if not constrained:
         def f_xy(x, y):
             f_obj, _, _, _, _, _ = f_g_ineq_h_eq_from_y(unravel_y(y))
-            return f_obj(unravel_unscale_x(x))
+            return f_obj(flat_x_to_dofs(x))
 
         grad_x_f = jacrev(f_xy, argnums=0)
         tags = (lx.symmetric_tag, lx.positive_semidefinite_tag) if convex \
@@ -102,11 +102,11 @@ def stationarity_kkt(
 
         def _f_scaled(x, y=y_flat):
             f_obj, _, _, _, _, _ = f_g_ineq_h_eq_from_y(unravel_y(y))
-            return f_obj(unravel_unscale_x(x))
+            return f_obj(flat_x_to_dofs(x))
 
         def _g_scaled(x, y=y_flat):
             _, g_ineq, _, _, _, _ = f_g_ineq_h_eq_from_y(unravel_y(y))
-            return g_ineq(unravel_unscale_x(x))
+            return g_ineq(flat_x_to_dofs(x))
 
         def _lagrangian(x, y=y_flat, z=z_opt):
             return _f_scaled(x, y) + jnp.dot(z, _g_scaled(x, y))
@@ -130,8 +130,8 @@ def stationarity_kkt(
         # R_y: KKT residual as a function of y (x, z frozen at optimum)
         def R_y(y, x=x_opt, z=z_opt):
             f_obj_y, g_ineq_y, _, _, _, _ = f_g_ineq_h_eq_from_y(unravel_y(y))
-            f_sc = lambda xx: f_obj_y(unravel_unscale_x(xx))
-            g_sc = lambda xx: g_ineq_y(unravel_unscale_x(xx))
+            f_sc = lambda xx: f_obj_y(flat_x_to_dofs(xx))
+            g_sc = lambda xx: g_ineq_y(flat_x_to_dofs(xx))
             L_x = lambda xx: f_sc(xx) + jnp.dot(z, g_sc(xx))
             grad_x_L = grad(L_x)(x)
             g_v = g_sc(x)
