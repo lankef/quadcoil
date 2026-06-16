@@ -20,8 +20,8 @@ from quadcoil.solver.ipm import (
     solve_constrained_ipm as solve_constrained_ipm_opt,
     solve_unconstrained_ipm as solve_unconstrained_ipm_opt,
 )
-from quadcoil.solver.auglag import (
-    adjoint_auglag_lbfgs as adjoint_auglag_lbfgs_opt,
+from quadcoil.solver.kkt_adjoint import (
+    adjoint_kkt as adjoint_auglag_lbfgs_opt,
 )
 
 # Legacy solvers
@@ -128,8 +128,8 @@ class TestAuglagOptimization(unittest.TestCase):
         """Build a minimal stationarity_data dict for the constrained case."""
         from quadcoil.solver.auglag import (
             solve_constrained_auglag_lbfgs, gplus_hard,
-            stationarity_auglag_lbfgs,
         )
+        from quadcoil.solver.kkt_adjoint import stationarity_kkt
         x0 = jnp.zeros(n)
         g_ineq = lambda x: jnp.array([jnp.sum(x) - 1.0])
         h_eq = lambda x: jnp.zeros(0)
@@ -143,7 +143,8 @@ class TestAuglagOptimization(unittest.TestCase):
 
     def test_adjoint_constrained(self):
         """Verify optimized adjoint matches legacy for a constrained problem."""
-        from quadcoil.solver.auglag import stationarity_auglag_lbfgs
+        from quadcoil.solver.kkt_adjoint import stationarity_kkt
+        from quadcoil.solver.auglag import recover_multipliers
         from quadcoil.solver.auglag_legacy import (
             stationarity_auglag_lbfgs as stationarity_leg,
             adjoint_auglag_lbfgs as adjoint_leg,
@@ -172,11 +173,24 @@ class TestAuglagOptimization(unittest.TestCase):
 
         solver_options = {'svtol': 1e-6}
 
-        stat_opt = stationarity_auglag_lbfgs(
-            constrained=True, convex=True, solve_results=solve_res,
-            y_flat=y_flat, f_g_ineq_h_eq_from_y=f_g_h_from_y,
-            unravel_y=unravel_y, unravel_unscale_x=unravel_unscale_x,
-            solver_options=solver_options, verbose=0,
+        x_opt = solve_res['fin_x']
+        z_ineq, z_eq = recover_multipliers(
+            x_opt, y_flat, f_g_h_from_y, unravel_y, unravel_unscale_x,
+        )
+        z_opt = jnp.concatenate([z_ineq, z_eq])
+
+        def f_g_combined_from_y(y_dict):
+            f_obj_i, g_ineq_i, h_eq_i, n_g_i, n_h_i, aux = f_g_h_from_y(y_dict)
+            g_combined = lambda dofs: jnp.concatenate([g_ineq_i(dofs), h_eq_i(dofs)])
+            h_empty = lambda dofs: jnp.zeros(0)
+            return f_obj_i, g_combined, h_empty, n_g_i + n_h_i, 0, aux
+
+        stat_opt = stationarity_kkt(
+            constrained=True, convex=True,
+            x_opt=x_opt, z_opt=z_opt,
+            y_flat=y_flat, f_g_ineq_h_eq_from_y=f_g_combined_from_y,
+            unravel_y=unravel_y, flat_x_to_dofs=unravel_unscale_x,
+            verbose=0,
         )
         stat_leg = stationarity_leg(
             constrained=True, convex=True, solve_results=solve_res,
