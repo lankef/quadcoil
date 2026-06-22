@@ -135,7 +135,7 @@ def quadcoil(
     quadpoints_theta=None, # Documented
     phi_init=None,  # Documented
     # Whether to initalize with nescoil sln. Will override phi_init and phi_unit.
-    phi_init_with_nescoil=False, 
+    phi_init_with_nescoil=True, 
     # Current potential's normalization constant. 
     # By default will be generated from net total current.
     phi_unit=None, # Documented
@@ -184,7 +184,7 @@ def quadcoil(
     metric_name=('f_B', 'f_K'),
 
     # - Preconditioning options
-    precond=None, # Supported options are 'ess', 'svd', 'svd_K' and None
+    precond='svd', # Supported options are 'ess', 'svd', 'svd_K' and None
     precond_dims=None,
     precond_options={
         'svd_safe_thres': 0.,
@@ -201,7 +201,7 @@ def quadcoil(
     # - Solver options
     verbose:int=0,
     merge_constraints:bool=False,
-    solver:str='slsqp', # 'auglag-lbfgs',
+    solver:str='auglag-lbfgs', # 'auglag-lbfgs',
     solver_options=None,
     lbfgs_memory:int=10, # applicable for 'slsqp' only
     maxiter:int=None,

@@ -239,7 +239,7 @@ class QuadcoilParams(_Params):
             n = jnp.append(n_first, n)
         return m, n
 
-    def change_phi_resolution(self, phi_mn, mpol, ntor):
+    def change_phi_resolution(self, dofs, mpol, ntor):
         r'''
         Convert a stream-function coefficient array ``phi_mn`` that is
         compatible with *this* ``QuadcoilParams`` (i.e. has ``self.ndofs``
@@ -273,7 +273,8 @@ class QuadcoilParams(_Params):
             everything else copied from ``self``.
         '''
         import numpy as _np
-
+        rest = dofs.copy()
+        phi_mn = rest.pop('phi')
         qp_new = QuadcoilParams(
             plasma_surface=self.plasma_surface,
             winding_surface=self.winding_surface,
@@ -339,8 +340,8 @@ class QuadcoilParams(_Params):
                 key = (int(m_new[j]), int(n_new[j]))
                 if key in old_cos_lookup:
                     phi_new[j] = phi_np[old_cos_lookup[key]]
-
-        return jnp.asarray(phi_new), qp_new
+        rest['phi'] = jnp.asarray(phi_new)
+        return qp_new, rest
     
     # @lru_cache()
     @partial(jit, static_argnames=[
