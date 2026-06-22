@@ -21,7 +21,7 @@ In other words, it's a "winding surface" code. However, unlike other winding sur
 Installation
 ------------
 
-QUADCOIL requires JAX. For the JAX installation guide, see `here <https://docs.jax.dev/en/latest/installation.html>`_. 
+QUADCOIL depends on JAX, Lineax, Optimistix, and slsqp-jax. Since JAX installation can be platform-specific, see the JAX installation guide `here <https://docs.jax.dev/en/latest/installation.html>`_.
 
 Clone the `QUADCOIL source files  <https://github.com/lankef/quadcoil>`_, 
 and then run:

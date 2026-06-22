@@ -1,24 +1,69 @@
 from quadcoil import (
     merge_callables, get_quantity,
-    gen_winding_surface_arc, 
-    SurfaceRZFourierJAX, QuadcoilParams, 
-    solve_constrained, run_opt_lbfgs,
+    SurfaceRZFourierJAX, SurfaceXYZTensorFourierJAX, SurfaceXYZFourierJAX,
+    QuadcoilParams, 
     is_ndarray, tree_len,
-    gplus_hard,
+    qp_nescoil,
+)
+
+from quadcoil.solver import (
+    solve_constrained_auglag_lbfgs, 
+    solve_constrained_ipm,
+    solve_constrained_slsqp,
+    solve_unconstrained_auglag_lbfgs,
+    solve_unconstrained_ipm,
+    solve_unconstrained_slsqp,
+    recover_multipliers,
+    stationarity_kkt,
+    adjoint_kkt,
 )
 
 from quadcoil.wrapper import _parse_objectives, _parse_constraints, _resolve_quadpoints
 from functools import partial
-from quadcoil.quantity import Bnormal
-from jax import jacfwd, jacrev, jvp, jit, hessian, block_until_ready, debug, flatten_util, eval_shape
+from quadcoil.quantity import Bnormal, K_cyl
+from jax import jacfwd, jacrev, jit, block_until_ready, debug, flatten_util, eval_shape, grad
 from jax import config as config_jax
 import jax.numpy as jnp
 import lineax as lx
 import warnings
 config_jax.update('jax_enable_x64', True)
 
+
 tol_default = 1e-6
 tol_default_last = 1e-10
+
+surface_type_MAP = {
+    'SurfaceRZFourier':        SurfaceRZFourierJAX,
+    'SurfaceXYZTensorFourier': SurfaceXYZTensorFourierJAX,
+    'SurfaceXYZFourier':       SurfaceXYZFourierJAX,
+}
+
+# Stores the default options for each solver.
+SOLVER_OPTIONS_DEFAULT_DICT = {
+    'auglag-lbfgs': {
+        'c_init':           1.,
+        'c_growth_rate':    2.,
+        'xstop_outer':      tol_default,
+        'ctol_outer':       tol_default,
+        'atol_inner':       tol_default,
+        'rtol_inner':       tol_default,
+        'atol_inner_last':  tol_default_last,
+        'rtol_inner_last':  tol_default_last,
+        'svtol':            tol_default,
+    },
+    'ipm': {
+        'tol_kkt': 1e-6,
+        'tau': 0.995,
+        'delta_init': 1e-6,
+        'delta_min': 1e-10,
+        'delta_max': 1e-2,
+    },
+    'slsqp': {
+        'atol': 1e-7,
+        'rtol': 1e-7,
+    },
+}
+
 # The list of all static arguments of 
 # quadcoil. Also used in the DESC interface.
 # All other vars are assumed traced. If you
@@ -29,15 +74,21 @@ QUADCOIL_STATIC_ARGNAMES=[
     'stellsym',
     'mpol',
     'ntor',
+    'phi_init_with_nescoil',
     # - Plasma options
     'plasma_mpol',
     'plasma_ntor',
     'plasma_stellsym',
     # - WS options
-    'winding_surface_generator',
+    'surface_type',
+    'winding_stellsym',
     'winding_mpol',
     'winding_ntor',
-    'winding_stellsym',
+    'winding_phi_interp',
+    'winding_theta_interp',
+    'winding_theta_rule_subsample',
+    'winding_surface_mode',
+    'winding_theta_mode',
     # - Objectives
     'objective_name',
     # - Constraints 
@@ -45,16 +96,20 @@ QUADCOIL_STATIC_ARGNAMES=[
     'constraint_type',
     # - Metrics
     'metric_name',
-    # - Solver options
-    'convex',
-    'maxiter_tot',
-    'maxiter_inner',
-    'merge_constraints',
-    'max_linesearch_steps',
-    # 'maxiter_inner_last',
-    'gplus_mask',
-    'implicit_linear_solver',
+    # - Preconditioning options
+    'precond',
+    'precond_dims',
+    # - Constraint handling and adjoint
     'value_only',
+    'convex',
+    'merge_constraints',
+    'implicit_linear_solver',
+    # - Solver options
+    'solver',
+    'lbfgs_memory',
+    'maxiter',
+    'maxiter_inner',
+    # - Other options
     'verbose',
     # Smoothing parameters:
     'smoothing',
@@ -79,6 +134,8 @@ def quadcoil(
     quadpoints_phi=None, # Documented
     quadpoints_theta=None, # Documented
     phi_init=None,  # Documented
+    # Whether to initalize with nescoil sln. Will override phi_init and phi_unit.
+    phi_init_with_nescoil=True, 
     # Current potential's normalization constant. 
     # By default will be generated from net total current.
     phi_unit=None, # Documented
@@ -88,19 +145,27 @@ def quadcoil(
     plasma_quadpoints_phi=None, # Documented
     plasma_quadpoints_theta=None, # Documented
     Bnormal_plasma=None, # Documented
+    surface_type:str='SurfaceRZFourier', # Documented
 
     # - Winding parameters (offset)
     plasma_coil_distance:float=None, # Documented
-    winding_surface_generator=gen_winding_surface_arc, # Documented
+    winding_phi_interp:int=2,
+    winding_theta_interp:int=2,
+    winding_theta_rule_subsample:int=2,
+    winding_lam_tikhonov=1e-5,
+    winding_surface_mode='self-intersection',
+    winding_theta_mode='arclen',
 
-    # - Winding parameters (Providing surface)
+    # - Winding parameters (known surface)
     winding_dofs=None, # Documented
+    winding_stellsym=True,
+
+    # - Winding parameters (shared)
     winding_mpol:int=6, # Documented
     winding_ntor:int=5, # Documented
     winding_quadpoints_phi=None, # Documented
     winding_quadpoints_theta=None, # Documented
-    winding_stellsym=True, # Documented
-
+    
     # - Problem setup
     # Quadcoil objective terms, weights, and units
     # objective_unit differ in that they are not differentiated wrt.
@@ -118,37 +183,31 @@ def quadcoil(
     # - Metrics to study
     metric_name=('f_B', 'f_K'),
 
-    # - Solver options
-    # ess_alpha=1., # ESS factor, see Algorithm 2 of arxiv 2509.16320    
+    # - Preconditioning options
+    precond='svd', # Supported options are 'ess', 'svd', 'svd_K' and None
+    precond_dims=None,
+    precond_options={
+        'svd_safe_thres': 0.,
+        'ess_alpha': 1.,
+        'ess_p': 2.,
+    },
+    
+    # - Constraint handling and adjoint
     value_only=False,
-    smoothing='slack',
+    smoothing='approx',
     smoothing_params={'lse_epsilon': 1e-3},
     convex:bool=False,
+
+    # - Solver options
     verbose:int=0,
     merge_constraints:bool=False,
-
-    # - Auglag options
-    c_init:float=1.,
-    c_growth_rate:float=2.,
-    xstop_outer:float=tol_default, # convergence rate tolerance
-    # gtol_outer:float=1e-7, # gradient tolerance
-    ctol_outer:float=tol_default, # constraint tolerance
-    # was 0., but we change this because we changed the logic to req x, u, g 
-    # convergence rate to all be smaller than the thres, because sometimes small x results in 
-    # large change in f.
-    fstop_inner:float=tol_default,
-    xstop_inner:float=tol_default,
-    gtol_inner:float=tol_default,
-    fstop_inner_last:float=0.,
-    xstop_inner_last:float=tol_default_last,
-    gtol_inner_last:float=tol_default_last,
-    svtol:float=tol_default,
-    maxiter_tot:int=10000,
-    maxiter_inner:int=1000,
-    max_linesearch_steps:int=20,
+    solver:str='auglag-lbfgs', # 'auglag-lbfgs',
+    solver_options=None,
+    lbfgs_memory:int=10, # applicable for 'slsqp' only
+    maxiter:int=None,
+    maxiter_inner:int=None, # applicable for 'auglag-lbfgs' only
 
     # - Experimental
-    gplus_mask=gplus_hard, # gplus_elu,
     implicit_linear_solver=None,
 ):
     r'''
@@ -183,7 +242,7 @@ def quadcoil(
     phi_init : ndarray, optional, default=None
         (Traced) The initial guess. All zeros by default.
     phi_unit : float, optional, default=None
-        (Traced) Current potential's normalization constant.
+        (Traced) Current potential's normalization constant. Only applies when ``precond!='svd'``
         By default will be generated from total net current.
     plasma_stellsym : bool, default=True
         (Static) Whether the plasma has stellarator symmetry.
@@ -197,11 +256,16 @@ def quadcoil(
         (Traced) The magnetic field distribution on the plasma surface. Will be filled with zeros by default.
     plasma_coil_distance : float, optional, default=None
         (Traced) The coil-plasma distance. Is set to ``None`` by default, but a value must be provided if ``winding_dofs`` is not provided.
-    winding_surface_generator : callable, optional, default=gen_winding_surface_atan
-        (Static) The winding surface generator.
+    surface_type : str, optional, default='SurfaceRZFourier'
+        (Static) The surface parametrization. One of ``'SurfaceRZFourier'``,
+        ``'SurfaceXYZTensorFourier'``, ``'SurfaceXYZFourier'``.
+        Auto-offset (``plasma_coil_distance``) only works with ``'SurfaceRZFourier'``.
+    winding_surface_mode : str, optional, default='intersection'
+        (Static) Self-intersection removal strategy when auto-generating the winding surface.
+        One of ``'none'``, ``'intersection'``, or ``'hull'``.
     winding_dofs : ndarray, shape (ndof_winding,)
         (Traced) The winding surface degrees of freedom. Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()`` convention.
-        Will be generated using ``winding_surface_generator`` if ``plasma_coil_distance`` is provided. Must be provided otherwise.
+        Will be generated using ``winding_surface_mode`` if ``plasma_coil_distance`` is provided. Must be provided otherwise.
     winding_mpol : int, optional, default=6
         (Static) The number of poloidal Fourier harmonics in the winding surface.
     winding_ntor : int, optional, default=5
@@ -230,35 +294,31 @@ def quadcoil(
         (Static) The names of the functions to diagnose the coil configurations with. Will be differentiated w.r.t. other input quantities.
     convex : bool, optional, default=False
         (Static) Whether to assume the problem is convex. When ``True``, QUADCOIL will apply some limited simplifications.
-    c_init : float, optional, default=1.
-        (Traced) The initial :math:`c` factor. Please see *Constrained Optimization and Lagrange Multiplier Methods* Chapter 3.
-    c_growth_rate : float, optional, default=1.2
-        (Traced) The growth rate of the :math:`c` factor.
-    xstop_outer : float, optional, default=1e-7
-        (Traced) ``x`` convergence rate of the outer augmented 
-        Lagrangian loop. Terminates when ``dx`` falls below this. 
-    ctol_outer : float, optional, default=1e-7
-        (Traced) Tolerance of the constraint KKT conditions in the outer
-        Lagrangian loop. 
-    fstop_inner, fstop_inner_last : float, optional, default=1e-7
-        (Traced) ``f`` convergence rate of the inner LBFGS 
-        Lagrangian loop. Terminates when ``df`` falls below this. 
-    xstop_inner, xstop_inner_last : float, optional, default=0
-        (Traced) ``x`` convergence rate of the outer augmented 
-        Lagrangian loop. Terminates when ``dx`` falls below this. 
-    gtol_inner, gtol_inner_last : float, optional, default=0.1
-        (Traced) Gradient tolerance of the inner LBFGS iteration, normalized by the starting gradient.
-    svtol : float, optional, default=0.1
-        (Traced) Singular-value cut-off threshold during the pre-conditioning. Will treat 
-        singular values smaller than ``svtol * jnp.max(s)`` as 0
-    maxiter_tot : int, optional, default=50.
-        (Static) The maximum of the outer iteration.
-    maxiter_inner, maxiter_inner_last : int, optional, default=500
-        (Static) The maximum of the inner iteration.
-    max_linesearch_steps : int
-        (Static) The maximum steps count in the LBFGS line search.
-    gplus_mask : Callable, optional, default=quadcoil.gplus_hard
-        (Static) The form of g+. Soft thresholding may improve derivative effectiveness.
+    solver_options : dict, optional, default=None
+        (Traced) Augmented-Lagrangian and inner-solver options. Merged with
+        ``SOLVER_OPTIONS_DEFAULT``; unspecified keys take their defaults.
+        Recognised keys and defaults:
+        - ``'c_init'`` (``1.``) — initial penalty :math:`c` factor.
+        - ``'c_growth_rate'`` (``2.``) — multiplicative growth of :math:`c` each outer step.
+        - ``'xstop_outer'`` (``1e-6``) — outer-loop ``x`` convergence rate tolerance.
+        - ``'ctol_outer'`` (``1e-6``) — outer-loop constraint-violation tolerance.
+        - ``'atol_inner'`` (``1e-6``) — absolute gradient tolerance for inner L-BFGS solves.
+        - ``'rtol_inner'`` (``1e-6``) — relative gradient tolerance for inner L-BFGS solves.
+        - ``'atol_inner_last'`` (``1e-10``) — absolute gradient tolerance for the final inner solve.
+        - ``'rtol_inner_last'`` (``1e-10``) — relative gradient tolerance for the final inner solve.
+        - ``'svtol'`` (``1e-6``) — singular-value cut-off for pre-conditioning.
+        - ``'maxiter_tot'`` (``10000``) — maximum outer-loop iterations.
+        - ``'maxiter_inner'`` (``1000``) — maximum inner L-BFGS iterations per outer step.
+    lbfgs_memory : int, optional, default=10
+        (Static) L-BFGS history length for the inner solver.
+    maxiter : int, optional, default=None
+        (Static) Maximum solver iterations. Defaults to 10000 for
+        ``'auglag-lbfgs'``, 100 for ``'ipm'``, and 200 for ``'slsqp'``.
+        For ``'auglag-lbfgs'`` this is the outer-loop iteration limit;
+        for ``'ipm'`` and ``'slsqp'`` it is the total iteration limit.
+    maxiter_inner : int, optional, default=None
+        (Static) Maximum inner L-BFGS iterations per outer step (default 500).
+        Only used by ``'auglag-lbfgs'``.
     implicit_linear_solver : lineax.AbstractLinearSolver, optional, default=lineax.AutoLinearSolver(well_posed=True)
         (Static) The lineax linear solver choice for implicit differentiation.
     value_only : bool, optional, default=False
@@ -267,8 +327,30 @@ def quadcoil(
         (Static) Print general info when ``verbose==1``. 
         Print inside the outer iteration loop, too, when ``verbose==2``.
     '''
+    # ----- Solver options unpacking -----
+    if solver_options is None:
+        solver_options = SOLVER_OPTIONS_DEFAULT_DICT[solver]
+
+    # ----- maxiter defaults per solver -----
+    if maxiter is None:
+        if solver == 'auglag-lbfgs':
+            maxiter = 10000
+        elif solver == 'ipm':
+            maxiter = 100
+        else:  # slsqp
+            maxiter = 500
+    if maxiter_inner is None:
+        maxiter_inner = 500
+
+    # ----- Warning for constraint treatment -----
+    if smoothing == 'slack' and solver != 'auglag-lbfgs':
+        warnings.warn(
+            'We only recommend using smoothing=\'slack\' '
+            'with solver=\'auglag-lbfgs\'. The current value of '
+            'solver is ' + solver
+        )
+
     # ----- Default parameters -----
-    # ess_alpha = jnp.abs(ess_alpha)
     (
         plasma_quadpoints_phi, plasma_quadpoints_theta,
         winding_quadpoints_phi, winding_quadpoints_theta,
@@ -349,17 +431,9 @@ def quadcoil(
             'Objective names: {objective_name}\n'\
             'Objective units: {objective_unit}\n'\
             'Objective weights: {objective_weight}\n'\
-            'Numerical parameters:\n'\
-            '    c_init: {c_init}\n'\
-            '    c_growth_rate: {c_growth_rate}\n'\
-            '    xstop_outer: {xstop_outer}\n'\
-            # '    gtol_outer: {gtol_outer}\n'\
-            '    ctol_outer: {ctol_outer}\n'\
-            '    fstop_inner: {fstop_inner}\n'\
-            '    xstop_inner: {xstop_inner}\n'\
-            '    gtol_inner: {gtol_inner}\n'\
-            '    maxiter_tot: {maxiter_tot}\n'\
-            '    maxiter_inner: {maxiter_inner}',
+            'Solver type: {solver}\n'\
+            'Solver options:\n'\
+            '{solver_options}\n',
             smoothing=smoothing,
             n_quadpoints_phi=len(quadpoints_phi),
             n_quadpoints_theta=len(quadpoints_theta),
@@ -376,16 +450,8 @@ def quadcoil(
             objective_name=objective_name,
             objective_unit=objective_unit,
             objective_weight=objective_weight,
-            c_init=c_init,
-            c_growth_rate=c_growth_rate,
-            xstop_outer=xstop_outer,
-            # gtol_outer=gtol_outer,
-            ctol_outer=ctol_outer,
-            fstop_inner=fstop_inner,
-            xstop_inner=xstop_inner,
-            gtol_inner=gtol_inner,
-            maxiter_tot=maxiter_tot,
-            maxiter_inner=maxiter_inner,
+            solver=solver,
+            solver_options=solver_options,
         )
     
     # ----- Helper functions -----
@@ -403,7 +469,8 @@ def quadcoil(
     # based on problem setup. (For example, the output will not contain)
     # gradients wrt coil-plasma distances if the winding surface is given. 
     def y_to_qp(y_dict):
-        plasma_surface = SurfaceRZFourierJAX(
+        surface_cls = surface_type_MAP[surface_type]
+        plasma_surface = surface_cls(
             nfp=nfp, stellsym=plasma_stellsym, 
             mpol=plasma_mpol, ntor=plasma_ntor, 
             quadpoints_phi=plasma_quadpoints_phi, 
@@ -413,7 +480,7 @@ def quadcoil(
         # winding surface is provided. 
         # Its dofs will be among x.
         if plasma_coil_distance is None:
-            winding_surface = SurfaceRZFourierJAX(
+            winding_surface = surface_cls(
                 nfp=nfp, stellsym=winding_stellsym, 
                 mpol=winding_mpol, ntor=winding_ntor, 
                 quadpoints_phi=winding_quadpoints_phi, 
@@ -422,22 +489,21 @@ def quadcoil(
             )
         # winding surface is not provided. 
         # Its dofs will not be among x.
+        # gen_offset_dofs is only implemented for SurfaceRZFourierJAX;
+        # other surface types will raise NotImplementedError here.
         else:
-            winding_dofs_temp = winding_surface_generator(
-                plasma_gamma=plasma_surface.gamma(), 
-                d_expand=y_dict['plasma_coil_distance'], 
-                nfp=plasma_surface.nfp, stellsym=plasma_surface.stellsym,
+            winding_surface = plasma_surface.gen_winding_surface(
+                d_expand=y_dict['plasma_coil_distance'],
                 mpol=winding_mpol,
                 ntor=winding_ntor,
-            )
-            winding_surface = SurfaceRZFourierJAX(
-                nfp=nfp,
-                stellsym=stellsym,
-                mpol=winding_mpol,
-                ntor=winding_ntor,
+                phi_interp=winding_phi_interp,
+                theta_interp=winding_theta_interp,
+                theta_rule_subsample=winding_theta_rule_subsample,
                 quadpoints_phi=winding_quadpoints_phi,
                 quadpoints_theta=winding_quadpoints_theta,
-                dofs=winding_dofs_temp
+                lam_tikhonov=winding_lam_tikhonov,
+                winding_surface_mode=winding_surface_mode,
+                theta_mode=winding_theta_mode,
             )
         if Bnormal_plasma is None:
             Bnormal_plasma_temp = jnp.zeros((
@@ -524,54 +590,126 @@ def quadcoil(
         n_h = len(h_list)
         return f_obj_x, g_ineq_x, h_eq_x, n_g, n_h, aux_dofs_init
 
-    
     # ----- Creating Initializing phi -----
     # Defining a shared problem parameter object
     qp = y_to_qp(y_dict_current)
     # f, g, h are Callable(qp, {'phi':, ..., })
     # i.e., they accepts unscaled input
     f_obj, g_ineq, h_eq, n_g, n_h, aux_dofs_init = f_g_ineq_h_eq_from_y(y_dict_current)
-    unconstrained = ((n_g == 0) and (n_h == 0))
+    constrained = not ((n_g == 0) and (n_h == 0))
 
-    if phi_init is None:
-        phi_init = jnp.zeros(qp.ndofs)
-    # not really used in initialization, but used 
-    # to calculate phi scaling, the initial value 
-    # of lam and mu, and the initial value of aux 
-    # variables.
-    dofs_dict_init = {'phi': phi_init}
-    # ----- Calculating the unit of phi -----
-    # phi need to be normalized to ~1 for the optimizer to behave well.
-    # by default we do this using the initial value of Bnormal
-    if phi_unit is None:
-        # Scaling current potential dofs to ~1
-        # By default, we use the Bnormal value when 
-        # phi=0 to generate this scaling factor.
-        Bnormal_estimate = jnp.average(jnp.abs(Bnormal(qp, dofs_dict_init))) # Unit: T
-        if plasma_coil_distance is not None:
-            phi_unit = Bnormal_estimate * 1e7 * jnp.abs(plasma_coil_distance)
-        else:
-            # The minor radius can be estimated from the 
-            # n=0, m=1 rc mode of the surface.
-            plasma_minor = plasma_dofs[plasma_ntor*2 + 1]
-            winding_minor = winding_dofs[winding_ntor*2 + 1]
-            phi_unit = Bnormal_estimate * 1e7 * jnp.abs(plasma_minor - winding_minor)
-    # # ESS scaling (See Chris Jang's paper at https://arxiv.org/pdf/2509.16320) 
-    # ess_factor = jnp.exp(
-    #     -ess_alpha 
-    #     * jnp.linalg.norm(jnp.array(qp.make_mn()), ord=1, axis=0)
-    # )
-    # ess_factor = ess_factor / jnp.average(ess_factor)
-    # phi_unit = phi_unit * ess_factor
+    if phi_init_with_nescoil:
+        if phi_init or phi_unit is not None:
+            warnings.warn(
+                'phi_init_with_nescoil is True, but '
+                'phi_init or phi_unit are not None, and '
+                'they will be replaced with the NESCOIL values.'
+            )
+        phi_init = qp_nescoil(qp)
+        phi_unit = jnp.max(jnp.abs(phi_init))
+        dofs_init = {'phi': phi_init}
+    else:
+        if phi_init is None:
+            phi_init = jnp.zeros(qp.ndofs)
+        dofs_init = {'phi': phi_init}
+        # ----- Calculating the unit of phi -----
+        # phi need to be normalized to ~1 for the optimizer to behave well.
+        # by default we do this using the initial value of Bnormal
+        if phi_unit is None:
+            # Scaling current potential dofs to ~1
+            # By default, we use the Bnormal value when 
+            # phi=0 to generate this scaling factor.
+            Bnormal_estimate = jnp.average(jnp.abs(Bnormal(qp, dofs_init))) # Unit: T
+            if plasma_coil_distance is not None:
+                phi_unit = Bnormal_estimate * 1e7 * jnp.abs(plasma_coil_distance)
+            else:
+                # The minor radius can be estimated from the 
+                # n=0, m=1 rc mode of the surface.
+                plasma_minor = plasma_dofs[plasma_ntor*2 + 1]
+                winding_minor = winding_dofs[winding_ntor*2 + 1]
+                phi_unit = Bnormal_estimate * 1e7 * jnp.abs(plasma_minor - winding_minor)
+                    
+
+
+            
+    # ----- Preconditioning -----
+    
     # ----- Creating scaled, flattened dof, 'x_flat_init' -----
     # The actual, unit-free, variable used for initialization,
     # and by the optimizer. The dof that the optimizer operates on is a
     # flattened version of this dictionary.
+    if precond is None:
+        _precond_phi = lambda phi: phi / phi_unit
+        _recover_phi = lambda x: x * phi_unit
+        
+    elif precond in ('svd', 'svd_K'):
+        # Preparing quantities for SVD-based pre-conditioning
+        # This is the maximum difference in order-of-magnitude 
+        # across all singular values
+        svd_safe_thres = precond_options['svd_safe_thres']
+        # Materializing the Bnormal matrix using lineax, since 
+        # unlike REGCOIL, our Bnormal is a direct implementation of 
+        # the Biot-Savart law in QUADCOIL.
+        if precond == 'svd':
+            precond_f = lambda x, qp=qp: Bnormal(qp, {'phi': x}) - Bnormal(qp, {'phi': jnp.zeros_like(phi_init)})
+        else:
+            precond_f = lambda x, qp=qp: K_cyl(qp, {'phi': x}) - K_cyl(qp, {'phi': jnp.zeros_like(phi_init)})
+        precond_op = lx.FunctionLinearOperator(
+            fn=precond_f, 
+            input_structure=phi_init
+        ).as_matrix()
+        # Performing SVD
+        precond_U, precond_s, precond_Vh = jnp.linalg.svd(precond_op, full_matrices=False)
+        # In case there are very small singular values, use 
+        # svd_safe_thres as a thresold to prevent divide 
+        # by zero.
+        svd_scale = jnp.where(
+            precond_s<jnp.max(precond_s)*svd_safe_thres, 
+            jnp.max(precond_s)*svd_safe_thres, 
+            precond_s
+        )
+        # Default: no SVD truncation
+        if precond_dims is None:
+            precond_dims = qp.ndofs
+            
+        def _precond_phi(phi):
+            phi_projected = precond_Vh @ phi
+            x_padded = phi_projected * svd_scale
+            return x_padded[:precond_dims]
+        
+        def _recover_phi(x):
+            x_padded = jnp.concatenate([x, jnp.zeros(precond_Vh.shape[0] - len(x))])
+            x_scaled = x_padded / svd_scale
+            phi_recovered = precond_Vh.T @ x_scaled
+            return phi_recovered
+            
+    elif precond == 'ess':
+        # Preparing quantities for 
+        ess_alpha = jnp.abs(precond_options['ess_alpha'])
+        # p for Lp norm has to be > 1
+        ess_p = jnp.where(precond_options['ess_p'] < 1, 1, precond_options['ess_p'])
+        # Calculating the ESS factor
+        ess_mn = jnp.array(qp.make_mn()) 
+        ess_Lp_norm = jnp.sum(jnp.abs(ess_mn) ** ess_p, axis=0) ** (1/ess_p)
+        ess_factor = jnp.exp(ess_alpha * ess_Lp_norm)
+        
+        def _precond_phi(phi):
+            return phi / phi_unit * ess_factor
+        
+        def _recover_phi(x):
+            return x / ess_factor * phi_unit
+            
+    else:
+        raise ValueError(f"Unknown preconditioner: {precond}")
+
+    # Converting the preconditioned dofs into a flattened array
+    # by first replacing the phi element with a 'phi_precond' 
+    # element, and then unraveling.
     x_dict = {
-       'phi_scaled': phi_init/phi_unit,
+       'phi_precond': _precond_phi(phi_init),
        # And auxiliary vars. Because we have already implemented 
        # scaling for them in _add_quantity instances, we do not 
-       # need to scale them here.
+       # need to precondition them here.
     }
     # Calculating the structure of auxiliary dofs from the problem setup (qp).
     # The current dictionary's items are either None (scalar), tuple (known shape), or 
@@ -579,7 +717,7 @@ def quadcoil(
     for key in aux_dofs_init.keys():
         if callable(aux_dofs_init[key]): 
             # Callable(qp: QuadcoilParams, dofs: dict, f_unit: float)
-            x_dict[key] = aux_dofs_init[key](qp, {'phi': phi_init})
+            x_dict[key] = aux_dofs_init[key](qp, dofs_init)
         else:
             try:
                 x_dict[key] = jnp.array(aux_dofs_init[key])
@@ -589,36 +727,35 @@ def quadcoil(
                     'and cannot be converted to an array. Its value is: '\
                     f'{str(aux_dofs_init[key])}. This is dur to improper '\
                     'implementation of the physical quantity. Please contact the developers.')
-    # dofs_init is a dict for readability. However, for simple
-    # implementation, we need to unravel it into a jax array. 
-    # Here we perform the unraveling. 
-    # *** x_flat_init is the actual dof manipulated by the optimizers! ***
+                
+    # We now flatten x into a jax array so that we can pass it into a solver.
     x_flat_init, unravel_x = flatten_util.ravel_pytree(x_dict)
     
-    ndofs_tot = len(x_flat_init) # This counts the aux vars too
-    ny = tree_len(y_dict_current)
-    # This block prints out a summary on the auxiliary vars and 
-    # phi degrees of freedom.
-    def unravel_unscale_x(x, unravel_x=unravel_x, phi_unit=phi_unit):
+
+    def flat_x_to_dofs(x, unravel_x=unravel_x, phi_unit=phi_unit):
         d = unravel_x(x)
         # Replace scaled phi with regular phi
         # after unraveling for passing into 
         # f_obj, g_ineq and h_eq.
-        dofs_temp = {k: v for k, v in {**d, "phi": d["phi_scaled"] * phi_unit}.items() if k != "phi_scaled"}
+        dofs_temp = {
+            k: v for k, v in {**d, "phi": _recover_phi(d["phi_precond"])}.items() if k != "phi_precond"
+        }
         return(dofs_temp)
-    # ----- Scaling f, g, h and initializing mu and lam -----
-    # f, g and h should take x_flat_init, the flattened, scaled dofs.
-    # *** f_scaled, g_scaled and h_scaled are the actual functions 
-    # seen by the optimizer! ***
-    f_scaled = lambda x_scaled, f_obj=f_obj: f_obj(unravel_unscale_x(x_scaled))
-    g_scaled = lambda x_scaled, g_ineq=g_ineq: g_ineq(unravel_unscale_x(x_scaled))
-    h_scaled = lambda x_scaled, h_eq=h_eq: h_eq(unravel_unscale_x(x_scaled))
+
+    # Versions of f, g, h that takes in the flat, preconditioned x array.
+    f_precond = lambda x_precond, f_obj=f_obj: f_obj(flat_x_to_dofs(x_precond))
+    g_precond = lambda x_precond, g_ineq=g_ineq: g_ineq(flat_x_to_dofs(x_precond))
+    h_precond = lambda x_precond, h_eq=h_eq: h_eq(flat_x_to_dofs(x_precond))
     
-    mu_init = jnp.zeros(eval_shape(g_scaled, x_flat_init).shape)
-    lam_init = jnp.zeros(eval_shape(h_scaled, x_flat_init).shape)
+    mu_init = jnp.zeros(eval_shape(g_precond, x_flat_init).shape)
+    lam_init = jnp.zeros(eval_shape(h_precond, x_flat_init).shape)
     
     # ----- Summarizing initialization -----
+    # This block prints out a summary on the auxiliary vars and 
+    # phi degrees of freedom.
     if verbose>0:
+        ny = tree_len(y_dict_current)
+        ndofs_tot = len(x_flat_init) # This counts the aux vars too
         dofs_summary = []
         for key, value in x_dict.items():
             dofs_summary.append(f"    {key}: {jnp.atleast_1d(value).shape}")
@@ -643,101 +780,109 @@ def quadcoil(
     # When unconstrained, this function instead serves the 
     # purpose of "zooming in" when iteration step lengths
     # are small.
-    if unconstrained:
-        x_flat_opt, val_l_k, grad_l_k, niter_inner_k, dx_k, du_k, dL_k = run_opt_lbfgs(
-            init_params=x_flat_init,
-            fun=f_scaled,
-            maxiter=maxiter_tot,
-            fstop=fstop_inner_last,
-            xstop=xstop_inner_last,
-            gtol=gtol_inner,
-            max_linesearch_steps=max_linesearch_steps,
-            verbose=verbose,
-        )
-        dofs_opt = unravel_unscale_x(x_flat_opt)
-        solve_results = {
-            'inner_fin_f': val_l_k,
-            'inner_fin_x': x_flat_opt,
-            'inner_fin_niter': niter_inner_k,
-            'inner_fin_dx_scaled': dx_k,
-            'inner_fin_du': du_k,
-            'inner_fin_df': dL_k,
-            # The scaling factor for the next iteration
-            # 'x_unit': jnp.average(jnp.abs(x_k)),
-        }
+    if not constrained:
+        if solver == 'auglag-lbfgs':
+            solve_results = solve_unconstrained_auglag_lbfgs(
+                init_params=x_flat_init,
+                fun=f_precond,
+                convex=convex,
+                maxiter=maxiter,
+                solver_options={
+                    'atol': solver_options.get('atol_inner_last', tol_default_last),
+                    'rtol': solver_options.get('rtol_inner_last', tol_default_last),
+                },
+                verbose=verbose,
+                lbfgs_memory=lbfgs_memory,
+            )
+        elif solver == 'ipm':
+            solve_results = solve_unconstrained_ipm(
+                init_params=x_flat_init,
+                fun=f_precond,
+                convex=convex,
+                maxiter=maxiter,
+                solver_options=solver_options,
+                verbose=verbose,
+            )
+        elif solver == 'slsqp':
+            solve_results = solve_unconstrained_slsqp(
+                init_params=x_flat_init,
+                fun=f_precond,
+                convex=convex,
+                maxiter=maxiter,
+                solver_options=solver_options,
+                verbose=verbose,
+                lbfgs_memory=lbfgs_memory,
+            )
+        else:
+            raise ValueError(f"Unknown solver: {solver}")
+        x_flat_opt = solve_results['fin_x']
+        dofs_opt = flat_x_to_dofs(x_flat_opt)
         if verbose>0:       
             debug.print(
                 '----- Solver status summary -----\n'\
                 'Final value of objective f: {f}\n'\
-                'Final Max current potential (dipole density): {max_cp} (A)\n'\
-                'Final Avg current potential (dipole density): {avg_cp} (A)\n'\
-                '* Total L-BFGS iteration number: {niter}\n'\
-                '    Phi scaling constant:  {x_unit_init}(A)\n'\
-                '    Inner convergence rate in x (scaled): {inner_dx}, {inner_du}\n'\
-                '    Inner convergence rate in f: {df}\n',
-                f=val_l_k,
-                niter=niter_inner_k,
-                x_unit_init=phi_unit,
-                inner_dx=block_until_ready(solve_results['inner_fin_dx_scaled']),
-                inner_du=block_until_ready(solve_results['inner_fin_du']),
-                df=block_until_ready(solve_results['inner_fin_df']),
-                max_cp=jnp.max(jnp.abs(dofs_opt['phi'])),
-                avg_cp=jnp.average(jnp.abs(dofs_opt['phi'])),
+                'Total iteration number: {niter}\n'\
+                'Solve results:\n'\
+                '{solve_results}',
+                f=solve_results['fin_f'],
+                niter=solve_results['niter'],
+                solve_results=solve_results
             )
     else:
-        solve_results = solve_constrained(
-            x_init=x_flat_init,
-            f_obj=f_scaled,
-            lam_init=lam_init,
-            mu_init=mu_init,
-            h_eq=h_scaled,
-            g_ineq=g_scaled,
-            c_init=c_init,
-            c_growth_rate=c_growth_rate,
-            ctol_outer=ctol_outer,
-            xstop_outer=xstop_outer,
-            fstop_inner=fstop_inner,
-            xstop_inner=xstop_inner,
-            gtol_inner=gtol_inner,
-            fstop_inner_last=fstop_inner_last,
-            xstop_inner_last=xstop_inner_last,
-            gtol_inner_last=gtol_inner_last,
-            maxiter_tot=maxiter_tot,
-            maxiter_inner=maxiter_inner,
-            max_linesearch_steps=max_linesearch_steps,
-            verbose=verbose,
-        )
+        if solver == 'auglag-lbfgs':
+            solve_results = solve_constrained_auglag_lbfgs(
+                x_init=x_flat_init,
+                f_obj=f_precond,
+                h_eq=h_precond,
+                g_ineq=g_precond,
+                maxiter=maxiter,
+                maxiter_inner=maxiter_inner,
+                solver_options={**solver_options, 'lam_init': lam_init, 'mu_init': mu_init},
+                verbose=verbose,
+                lbfgs_memory=lbfgs_memory,
+            )
+        elif solver == 'ipm':
+            solve_results = solve_constrained_ipm(
+                x_init=x_flat_init,
+                f_obj=f_precond,
+                h_eq=h_precond,
+                g_ineq=g_precond,
+                convex=convex,
+                maxiter=maxiter,
+                solver_options=solver_options,
+                verbose=verbose,
+            )
+        elif solver == 'slsqp':
+            solve_results = solve_constrained_slsqp(
+                x_init=x_flat_init,
+                f_obj=f_precond,
+                h_eq=h_precond,
+                g_ineq=g_precond,
+                convex=convex,
+                maxiter=maxiter,
+                solver_options=solver_options,
+                verbose=verbose,
+                lbfgs_memory=lbfgs_memory,
+            )
+        else:
+            raise ValueError(f"Unknown solver: {solver}")
         # The optimum, unit-less.
-        x_flat_opt = solve_results['inner_fin_x']
-        dofs_opt = unravel_unscale_x(x_flat_opt)
+        x_flat_opt = solve_results['fin_x']
+        dofs_opt = flat_x_to_dofs(x_flat_opt)
         if verbose>0:       
             debug.print(
                 '----- Solver status summary -----\n'\
-                'Final value of f(scaled): {fs}\n'\
-                'Final Max current potential (dipole density): {max_cp} (A)\n'\
-                'Final Avg current potential (dipole density): {avg_cp} (A)\n'\
-                '* Total L-BFGS iteration number: {niter}\n'\
-                '    Phi scaling constant:  {x_unit_init}(A)\n'\
-                '    Final max constraint g violation(scaled): {g}\n'\
-                '    Final max constraint h violation(scaled): {h}\n'\
-                '    Outer convergence rate in x (scaled): {dx}\n'\
-                '* Last inner L_BFGS iteration number: {inner_niter}\n'\
-                '    Inner convergence rate in x (scaled): {inner_dx}, {inner_du}\n'\
-                '    Inner convergence rate in l: {dl}\n',
-                fs=block_until_ready(solve_results['inner_fin_f']),
-                niter=block_until_ready(solve_results['tot_niter']),
-                g=block_until_ready(_print_max_blank(solve_results['inner_fin_g'])),
-                h=block_until_ready(_print_max_blank(jnp.abs(solve_results['inner_fin_h']))),
-                x_unit_init=phi_unit,
-                dx=block_until_ready(solve_results['outer_dx']),
-                inner_niter=block_until_ready(solve_results['inner_fin_niter']),
-                inner_dx=block_until_ready(solve_results['inner_fin_dx_scaled']),
-                inner_du=block_until_ready(solve_results['inner_fin_du']),
-                dl=block_until_ready(solve_results['inner_fin_dl']),
-                max_cp=jnp.max(jnp.abs(dofs_opt['phi'])),
-                avg_cp=jnp.average(jnp.abs(dofs_opt['phi'])),
+                'Final value of objective f: {f}\n'\
+                'Total iteration number: {niter}\n'\
+                'Solve results:\n'\
+                '{solve_results}',
+                f=solve_results['fin_f'],
+                niter=solve_results['niter'],
+                solve_results=solve_results
             )
-    # ----- Calculating metrics and gradients
+            
+    # ----- Calculating metrics and gradients -----
+    
     if value_only: 
         out_dict = {}
         for metric_name_i in metric_name:
@@ -753,308 +898,90 @@ def quadcoil(
         return out_dict, qp, dofs_opt, solve_results
     # flatten the y dictionary. This will simplify the code structure a bit
     y_flat, unravel_y = flatten_util.ravel_pytree(y_dict_current)
-    out_dict = {}
-    
+
     # ----- Stationarity conditions -----
-    # It will be prohibitively expensive to solve the KKT condition. 
-    # Therefore, we use the Jacobian of the unconstrained objective instead.
-    if unconstrained:
-        def l_k(x, y): 
-            f_obj, _, _, _, _, _ = f_g_ineq_h_eq_from_y(unravel_y(y))
-            return f_obj(unravel_unscale_x(x)) 
-        # No need in preconditioning x.
-        # for more detail, see Step-1 preconditioning.
-        x_flat_precond = x_flat_opt
-        xp_to_x = lambda xp: xp
-        # 
-        grad_x_l_k = jacrev(l_k, argnums=0)
-        # When the problem is unconstrained, 
-        # we can avoid materializing the full Hessian.
-        if convex:
-            vihp_hess = lx.JacobianLinearOperator(
-                grad_x_l_k, 
-                x_flat_opt, args=y_flat, 
-                tags=(lx.symmetric_tag, lx.positive_semidefinite_tag)
-            )
-        else:
-            vihp_hess = lx.JacobianLinearOperator(
-                grad_x_l_k, 
-                x_flat_opt, args=y_flat,
-                tags=(lx.symmetric_tag)
-            )
-        if verbose>0:
-            hess_l_k = jacrev(grad_x_l_k)(x_flat_opt, y_flat)
-            hess_cond = jnp.linalg.cond(hess_l_k)
-            out_dict['hess_cond'] = hess_cond
-            debug.print('Unconstrained Hessian condition number: {x}', x=hess_cond)
-    else:  
-        # When solving a constrained optimization problem, an important source of 
-        # ill-conditioning is that the three terms in l_k can have drastically different
-        # orders of magnitudes. This block of code performs the pre-conditioning.
-        c_k = solve_results['inner_fin_c']
-        mu_k = solve_results['inner_fin_mu']
-        lam_k = solve_results['inner_fin_lam']
-        # The pre-conditioning requires that us treat the three 
-        # terms in l_k separately.
-        def l_k_terms(x, y=y_flat, mu=mu_k, lam=lam_k, c=c_k): 
-        # def l_k_terms_raw(x, y=y_flat, mu=mu_k, lam=lam_k, c=c_k): 
-            f_obj_temp, g_ineq_temp, h_eq_temp, _, _, _ = f_g_ineq_h_eq_from_y(unravel_y(y))
-            f_scaled_temp = lambda x_flat: f_obj_temp(unravel_unscale_x(x_flat))
-            g_scaled_temp = lambda x_flat: g_ineq_temp(unravel_unscale_x(x_flat))
-            h_scaled_temp = lambda x_flat: h_eq_temp(unravel_unscale_x(x_flat))
-            gplus_temp = partial(gplus_mask, g_ineq=g_scaled_temp)
-            # gplus_temp = lambda x, mu, c: jnp.max(jnp.array([g_scaled_temp(x), -mu/c]), axis=0)
-            # gplus = lambda x, mu, c: g_scaled_temp(x)
-            return jnp.array([
-                f_scaled_temp(x),
-                lam@h_scaled_temp(x) + mu@gplus_temp(x, mu, c),
-                c/2 * (
-                    jnp.sum(h_scaled_temp(x)**2) 
-                    + jnp.sum(gplus_temp(x, mu, c)**2)
-                )
-            ])
-        # For calculating grad_y_l_k
-        l_k = lambda x, y=y_flat, mu=mu_k, lam=lam_k, c=c_k: jnp.sum(l_k_terms(x=x, y=y, mu=mu, lam=lam, c=c))
-        # hess_l_k = hessian(l_k)(x_flat_opt)
-        x_flat_precond = x_flat_opt
-        xp_to_x = lambda xp: xp
-        # # ----- Step-1 preconditioning -----
-        # l_k_raw = lambda x, y=y_flat, mu=mu_k, lam=lam_k, c=c_k: jnp.sum(l_k_terms_raw(x=x, y=y, mu=mu_k, lam=lam_k, c=c_k))
-        # hess_l_k_raw = hessian(l_k_raw)(x_flat_opt)
-        # # As the first step of the pre-conditioning, we re-define 
-        # # l_k and l_k_terms under a changed coordinate based 
-        # # on the SVD of l_k's hessian. This reduce rounding error 
-        # # during the autodiff process, and improve the conditioning of 
-        # # all three terms in l_k. 
-        # # First, we generate the coordinate transform.
-        # x_to_xp, xp_to_x = _precondition_coordinate_by_matrix(hess_l_k_raw)
-        # # We replace x_flat with its new definition after pre-conditioning.
-        # # We've already unraveled it before this point, so it's okay to replace
-        # # the variable.
-        # x_flat_precond = x_to_xp(x_flat_opt)
-        # # Redefining l_k and l_k_terms. All autodiff will be done 
-        # # with these instead.
-        # l_k_terms = lambda xp, y=y_flat: l_k_terms_raw(xp_to_x(xp), y=y)
-        # l_k = lambda xp, y: jnp.sum(l_k_terms(xp=xp, y=y))
-        # ----- Step-2 preconditioning -----
-        # An important source of ill-conditioning in Hess(l_k)
-        # is the difference in the three terms' orders of magnitude.
-        # Often, each of these terms are singular by themselves, 
-        # but adds up to a non-singular Hess(l_k).
-        # The goal of pre-conditioning is to 
-        # 1. Sort the three Hessians based on the magnitude of their 
-        # SV's, in ascending order as A, B and C.
-        # 2. Stretch B in directions where it's linearly indep from C.
-        # 3. Stretch A in directions where it's linearly indep from B and C.
-        # Because these are symmetric matrices, 
-        hess_l_k_terms_val = hessian(l_k_terms)(x_flat_precond)
-        hess_l_k = jnp.sum(hess_l_k_terms_val, axis=0)
-        hess_l_k = jnp.nan_to_num(hess_l_k, nan=0.0, posinf=0.0, neginf=0.0)
-        # Symmetrizing
-        hess_l_k_terms_val = 0.5 * (
-            hess_l_k_terms_val
-            + jnp.swapaxes(hess_l_k_terms_val, 1, 2)
+    
+    # Each solver has slightly different stationarity condition.
+    x_opt = solve_results['fin_x']
+    if solver == 'auglag-lbfgs':
+        z_ineq, z_eq = recover_multipliers(
+            x_opt, y_flat, f_g_ineq_h_eq_from_y, unravel_y, flat_x_to_dofs,
         )
-        # U_i = V_i.
-        # (or U - VH.T = 0)
-        U, s, VH = jnp.linalg.svd(hess_l_k_terms_val)
-        # We use the maximum SV as an estimate of the 
-        # order of magnitude of a matrix
-        s_max = jnp.max(s, axis=1)
-        # A 3 x ndofs boolean array that 
-        # selects singular values bigger than machine 
-        # precision * s_max.
-        s_selection = s >= svtol * s_max[:, None]
-        # We now sort the matrices by their orders of magnitude
-        # We'll refer to the matrices in ascending order as 
-        # A, B, C
-        hess_order = jnp.argsort(s_max)
-        # We first project B's basis' onto C's basis and then remove the projection
-        # from B's basis'. This gives us the "component" of B that are impossible 
-        # to represent with C's basis.
-        A = hess_l_k_terms_val[hess_order[0]]
-        B = hess_l_k_terms_val[hess_order[1]]
-        C = hess_l_k_terms_val[hess_order[2]]
-        VH_A = VH[hess_order[0]]
-        VH_B = VH[hess_order[1]]
-        VH_C = VH[hess_order[2]]
-        s_selection_B = s_selection[hess_order[1]]
-        s_selection_C = s_selection[hess_order[2]]
-        proj_C  = VH_C.T @ (   s_selection_C[:, None] * VH_C)
-        proj_B  = VH_B.T @ (   s_selection_B[:, None] * VH_B)
-        annil_C = VH_C.T @ ((~s_selection_C)[:, None] * VH_C)
-        # annil_C = jnp.identity(len(x_flat_precond)) - proj_C
-        # We now calculate the basis spanned by B abd C combined
-        U_BC, s_BC, VH_BC = jnp.linalg.svd(jnp.concatenate([proj_B, proj_C]))
-        s_BC_selection = s_BC >= svtol * jnp.max(s_BC)
-        # annil_BC and annil_C removes the components spanned by BC and C's basis
-        # proj_BC and proj_C projects a vector in BC and C's basis
-        proj_BC  = VH_BC.T @ (  s_BC_selection [:, None] * VH_BC)
-        annil_BC = VH_BC.T @ ((~s_BC_selection)[:, None] * VH_BC)
-        # This where statement is here in case A (or A and B)'s Hessian is rank-0
-        scale_AC = jnp.where(s_max[hess_order[0]]>0, s_max[hess_order[2]] / s_max[hess_order[0]], 0)
-        scale_BC = jnp.where(s_max[hess_order[1]]>0, s_max[hess_order[2]] / s_max[hess_order[1]], 0)
-        # The appropriate pre-conditioner is:
-        # O \equiv \[\epsilon^-2 (I-P_{BC}) + \epsilon^-1 P_{BC}\](I-P_C) +P_C
-        OC = C
-        OB = scale_BC * proj_BC @ annil_C @ B + proj_C @ B 
-        OA = (
-            scale_AC * annil_BC @ annil_C @ A
-            + scale_BC * proj_BC @ annil_C @ A
-            + proj_C @ A
-        )
-        Ohess = OA + OB + OC
-        Ohess = jnp.nan_to_num(Ohess, nan=0.0, posinf=0.0, neginf=0.0)
-        vihp_A_raw = lx.MatrixLinearOperator(hess_l_k)
-        vihp_A_precond = lx.MatrixLinearOperator(Ohess)
-        if verbose>0:
-            hess_rank = jnp.linalg.matrix_rank(A + B + C)
-            Ohess_rank = jnp.linalg.matrix_rank(OA + OB + OC)
-            hess_cond = jnp.linalg.cond(A + B + C)
-            Ohess_cond = jnp.linalg.cond(OA + OB + OC)
-            # out_dict['hess_cond'] = hess_cond
-            # out_dict['hess_cond_preconditioned'] = Ohess_cond
-            debug.print(
-                'Info on Hessian terms (unsorted)\n'\
-                '    Rank of term 1, 2 and 3: {a1}\n'\
-                '    Max sv of 1, 2 and 3: {a2}\n'\
-                'Info on Hessian terms (sorted)\n'\
-                '    Rank of A, B and C: {a}\n'\
-                '    Max sv of A, B and C: {aa}\n'\
-                '    Rank of OA, OB and OC: {b}\n'\
-                '    scale_AC and scale_BC: {bb}\n'\
-                '    Rank of proj_BC and annil_BC: {c}\n'\
-                '    Rank of proj_C  and annil_C:  {d}\n'\
-                '    Constrained Hessian rank and condition number, before pre-conditioning: {x}, {x1}\n'\
-                '    Constrained Hessian rank and condition number, after pre-conditioning:  {y}, {y1}', 
-                a1=jnp.linalg.matrix_rank(hess_l_k_terms_val),
-                a2=s_max,
-                a=jnp.sum(s_selection[hess_order], axis=1),
-                aa=s_max[hess_order],
-                b=(jnp.linalg.matrix_rank(OA), jnp.linalg.matrix_rank(OB), jnp.linalg.matrix_rank(OC)),
-                bb=(scale_AC, scale_BC),
-                c=(jnp.linalg.matrix_rank(proj_BC), jnp.linalg.matrix_rank(annil_BC)),
-                d=(jnp.linalg.matrix_rank(proj_C), jnp.linalg.matrix_rank(annil_C)),
-                x=hess_rank,
-                y=Ohess_rank,
-                x1=hess_cond,
-                y1=Ohess_cond
-            )
-    grad_y_l_k = jacrev(l_k, argnums=1)
-    grad_y_l_k_for_hess = lambda x, y_flat=y_flat: grad_y_l_k(x, y_flat)
+        z_opt = jnp.concatenate([z_ineq, z_eq])
+
+        def f_g_combined_from_y(y_dict):
+            f_obj_i, g_ineq_i, h_eq_i, n_g_i, n_h_i, aux = f_g_ineq_h_eq_from_y(y_dict)
+            g_combined = lambda dofs: jnp.concatenate([g_ineq_i(dofs), h_eq_i(dofs)])
+            h_empty = lambda dofs: jnp.zeros(0)
+            return f_obj_i, g_combined, h_empty, n_g_i + n_h_i, 0, aux
+
+        f_g_for_kkt = f_g_combined_from_y
+    elif solver in ('ipm', 'slsqp'):
+        z_opt = solve_results.get('fin_z', jnp.zeros(0, dtype=x_opt.dtype))
+        f_g_for_kkt = f_g_ineq_h_eq_from_y
+    else:
+        raise ValueError(f"Unknown solver: {solver}")
+
+    if not constrained:
+        z_opt = jnp.zeros(0, dtype=x_opt.dtype)
+
+    stationarity_data = stationarity_kkt(
+        constrained=constrained,
+        convex=convex,
+        x_opt=x_opt,
+        z_opt=z_opt,
+        y_flat=y_flat,
+        f_g_ineq_h_eq_from_y=f_g_for_kkt,
+        unravel_y=unravel_y,
+        flat_x_to_dofs=flat_x_to_dofs,
+        verbose=verbose,
+    )
+
+    out_dict = {}
+
+    # If nescoil initial conditions are used, output it
+    # solution too.
+    if phi_init_with_nescoil:
+        out_dict['dofs_nescoil'] = {'phi': phi_init}
+
     for metric_name_i in metric_name:
         if metric_name_i == 'f_obj':
             f_metric = lambda xp, y: f_obj(
-                qp_temp=y_to_qp(unravel_y(y)), 
-                x=unravel_unscale_x(xp_to_x(xp))
+                qp_temp=y_to_qp(unravel_y(y)),
+                x=flat_x_to_dofs(xp)
             )
         else:
             f_metric = lambda xp, y: get_quantity(metric_name_i)(
-                y_to_qp(unravel_y(y)), 
-                unravel_unscale_x(xp_to_x(xp))
+                y_to_qp(unravel_y(y)),
+                flat_x_to_dofs(xp)
             )
-        grad_x_f = jacrev(f_metric, argnums=0)(x_flat_precond, y_flat)
-        grad_y_f = jacrev(f_metric, argnums=1)(x_flat_precond, y_flat)
-        if unconstrained:
-            vihp = lx.linear_solve(
-                vihp_hess, # should be .T but hessian is symmetric 
-                grad_x_f,
-            ).value
-        else:
-            vihp_b = (
-                scale_AC * annil_BC @ annil_C @ grad_x_f
-                + scale_BC * proj_BC @ annil_C @ grad_x_f
-                + proj_C @ grad_x_f
-            )
-            grad_x_f = jnp.nan_to_num(grad_x_f, nan=0.0, posinf=0.0, neginf=0.0)
-            vihp_b = jnp.nan_to_num(vihp_b, nan=0.0, posinf=0.0, neginf=0.0)
-            # It is somewhat hard to tell whether pre-conditioning 
-            # improves accuracy or introduces additional error 
-            # just from A and b. Therefore, we compute both with
-            # and without pre-conditioning, and pick the option with 
-            # the less error. Is there a way to improve this?
-            vihp_precond = lx.linear_solve(
-                vihp_A_precond, # should be .T but hessian is symmetric 
-                vihp_b,
-                solver=implicit_linear_solver
-            ).value
-            vihp_raw = lx.linear_solve(
-                vihp_A_raw, # should be .T but hessian is symmetric 
-                grad_x_f,
-                solver=implicit_linear_solver
-            ).value
-            # Calculating the overall error of two vihp's ans 
-            # choosing the better one. (The where statement is not point
-            # wise. It's only there because JAX can't trace through if.)
-            hess_err = jnp.linalg.norm(hess_l_k @ vihp_raw - grad_x_f)
-            Ohess_err = jnp.linalg.norm(hess_l_k @ vihp_precond - grad_x_f)
-            if verbose>0:
-                debug.print('Solve error (raw vs precond): {x}, {y}', x=hess_err, y=Ohess_err)
-            vihp = jnp.where(hess_err < Ohess_err, vihp_raw, vihp_precond)
-            
-        # Now we calculate df/dy using vjp
-        # \grad_{x_k} f [-H(l_k, x_k)^-1 \grad_{x_k}\grad_{y} l_k]
-        # Primal and tangent must be the same shape
-        _, dfdy1 = jvp(grad_y_l_k_for_hess, primals=[x_flat_precond], tangents=[vihp])
-        # \grad_{y} f
-        dfdy2 = grad_y_f
-        dfdy_arr = -dfdy1 + dfdy2
+        metric_result_i, dfdy_arr, debug_info_i = adjoint_kkt(
+            f_metric=f_metric,
+            stationarity_data=stationarity_data,
+            y_flat=y_flat,
+            implicit_linear_solver=implicit_linear_solver,
+            verbose=verbose,
+        )
         dfdy_dict = {f"df_d{key}": value for key, value in unravel_y(dfdy_arr).items()}
-        metric_result_i = f_metric(x_flat_precond, y_flat)
-        if verbose>0:
-            grad_y_l_k_val = grad_y_l_k(x_flat_precond, y_flat)
-            # grad_x_grad_y_l_k = jacfwd(grad_y_l_k_for_hess, argnums=0)(x_flat_precond, y_flat)
-            grad_keys = dfdy_dict.keys()
+        if verbose > 0:
             grad_avgs = {}
-            for k in grad_keys:
+            for k in dfdy_dict:
                 item_k = jnp.atleast_1d(dfdy_dict[k])
-                grad_avgs[k] = (
-                    jnp.min(item_k),
-                    jnp.max(item_k)
-                )
+                grad_avgs[k] = (jnp.min(item_k), jnp.max(item_k))
             debug.print(
                 '* Metric evaluated.\n'
                 '    {x} = {y}\n'
-                '    VIHP        min max: {v1}, {v2}\n'
-                '    df/dy       min max: {gy1}, {gy2}\n'
-                '    df/dx       min max: {gx1}, {gx2}\n'
-                '    df/dx dx/dy min max: {gxy1}, {gxy2}\n'
-                '    dLk/dy min max: {a1}, {a2}\n'
-                # '    d2Lk/dxdy min max: {b1}, {b2}\n'
-                # '    VIHP error without pre-conditioning: {a}\n'
-                # '    VIHP error with pre-conditioning:    {b}\n'
                 '    Gradient min, max: {g}',
-                v1=jnp.min(vihp),
-                v2=jnp.max(vihp),
-                gy1=jnp.min(grad_y_f),
-                gy2=jnp.max(grad_y_f),
-                gx1=jnp.min(grad_x_f),
-                gx2=jnp.max(grad_x_f),
-                gxy1=jnp.min(dfdy1),
-                gxy2=jnp.max(dfdy1),
-                a1=jnp.min(grad_y_l_k_val),
-                a2=jnp.max(grad_y_l_k_val),
-                # b1=jnp.min(grad_x_grad_y_l_k),
-                # b2=jnp.max(grad_x_grad_y_l_k),
-                x=metric_name_i, 
+                x=metric_name_i,
                 y=metric_result_i,
-                # a=hess_err,
-                # b=Ohess_err,
                 g=grad_avgs,
             )
         out_dict[metric_name_i] = {
-            'value': metric_result_i, 
+            'value': metric_result_i,
             'grad': dfdy_dict,
-        }     
-        if verbose>0:
-            out_dict[metric_name_i]['vihp'] = vihp
-            if not unconstrained:
-                out_dict[metric_name_i]['hess_rank'] = hess_rank
-                out_dict[metric_name_i]['Ohess_rank'] = Ohess_rank
-                out_dict[metric_name_i]['hess_cond'] = hess_cond
-                out_dict[metric_name_i]['Ohess_cond'] = Ohess_cond
-                out_dict[metric_name_i]['hess_err'] = hess_err
-                out_dict[metric_name_i]['Ohess_err'] = Ohess_err
+        }
+        if verbose > 0:
+            out_dict[metric_name_i].update(debug_info_i)
     return(out_dict, qp, dofs_opt, solve_results)
 
 def _choose_fwd_rev(func, n_in, n_out, argnums):

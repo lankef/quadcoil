@@ -238,6 +238,110 @@ class QuadcoilParams(_Params):
             m = jnp.append(m_first, m)
             n = jnp.append(n_first, n)
         return m, n
+
+    def change_phi_resolution(self, dofs, mpol, ntor):
+        r'''
+        Convert a stream-function coefficient array ``phi_mn`` that is
+        compatible with *this* ``QuadcoilParams`` (i.e. has ``self.ndofs``
+        elements) into a new array that is compatible with a ``QuadcoilParams``
+        with the given ``mpol`` and ``ntor``.
+
+        Modes present in both bases are copied; modes that exist in the new
+        basis but not in the old are set to zero.  All other fields of the
+        returned ``QuadcoilParams`` (surfaces, currents, quad-points,
+        ``stellsym``) are inherited from ``self``.
+
+        This method is intentionally implemented with plain NumPy so that it
+        can be called in the eager Python layer between solver steps without
+        entering a JAX trace.
+
+        Parameters
+        ----------
+        phi_mn : array-like, shape (self.ndofs,)
+            Stream-function coefficients in the current basis.
+        mpol : int
+            Poloidal Fourier resolution for the new basis.
+        ntor : int
+            Toroidal Fourier resolution for the new basis.
+
+        Returns
+        -------
+        phi_new : jax.Array, shape (qp_new.ndofs,)
+            Coefficients in the new basis.
+        qp_new : QuadcoilParams
+            A new ``QuadcoilParams`` with ``mpol`` / ``ntor`` replaced but
+            everything else copied from ``self``.
+        '''
+        import numpy as _np
+        rest = dofs.copy()
+        phi_mn = rest.pop('phi')
+        qp_new = QuadcoilParams(
+            plasma_surface=self.plasma_surface,
+            winding_surface=self.winding_surface,
+            net_poloidal_current_amperes=self.net_poloidal_current_amperes,
+            net_toroidal_current_amperes=self.net_toroidal_current_amperes,
+            Bnormal_plasma=self.Bnormal_plasma,
+            mpol=mpol,
+            ntor=ntor,
+            quadpoints_phi=self.quadpoints_phi,
+            quadpoints_theta=self.quadpoints_theta,
+            stellsym=self.stellsym,
+        )
+
+        phi_np = _np.array(phi_mn, dtype=float)
+        phi_new = _np.zeros(qp_new.ndofs, dtype=float)
+
+        m_old = _np.array(self.make_mn()[0], dtype=int)
+        n_old = _np.array(self.make_mn()[1], dtype=int)
+        m_new = _np.array(qp_new.make_mn()[0], dtype=int)
+        n_new = _np.array(qp_new.make_mn()[1], dtype=int)
+
+        if self.stellsym:
+            # Single sin block; (m, n) uniquely identifies each mode.
+            old_lookup = {
+                (int(m_old[i]), int(n_old[i])): i
+                for i in range(len(m_old))
+            }
+            for j in range(len(m_new)):
+                key = (int(m_new[j]), int(n_new[j]))
+                if key in old_lookup:
+                    phi_new[j] = phi_np[old_lookup[key]]
+        else:
+            # Layout: [sin (ndofs_half)] | [(0,0) cos (1)] | [cos (ndofs_half)]
+            # make_mn returns m_all = [sin_m, 0, sin_m] so mode (m,n) appears
+            # twice; we distinguish by which block the index falls in.
+            nh_old = self.ndofs_half
+            nh_new = qp_new.ndofs_half
+
+            # Lookups for old sin and cos blocks
+            # sin modes: indices 0 .. nh_old-1
+            old_sin_lookup = {
+                (int(m_old[i]), int(n_old[i])): i
+                for i in range(nh_old)
+            }
+            # cos modes: index nh_old is (0,0); indices nh_old+1 .. ndofs_old-1
+            # share (m,n) with sin modes 0 .. nh_old-1 respectively.
+            old_cos_lookup = {
+                (int(m_old[i]), int(n_old[i])): nh_old + 1 + i
+                for i in range(nh_old)
+            }
+
+            # Populate sin modes
+            for j in range(nh_new):
+                key = (int(m_new[j]), int(n_new[j]))
+                if key in old_sin_lookup:
+                    phi_new[j] = phi_np[old_sin_lookup[key]]
+
+            # Copy (0,0) cos coefficient directly
+            phi_new[nh_new] = phi_np[nh_old]
+
+            # Populate cos modes
+            for j in range(nh_new + 1, qp_new.ndofs):
+                key = (int(m_new[j]), int(n_new[j]))
+                if key in old_cos_lookup:
+                    phi_new[j] = phi_np[old_cos_lookup[key]]
+        rest['phi'] = jnp.asarray(phi_new)
+        return qp_new, rest
     
     # @lru_cache()
     @partial(jit, static_argnames=[

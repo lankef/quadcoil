@@ -3,7 +3,7 @@ from jax import jit
 from functools import partial
 import lineax as lx
 from quadcoil.quantity.magnetic_field import _Bnormal
-from quadcoil import SurfaceRZFourierJAX, QuadcoilParams, gen_winding_surface_arc
+from quadcoil import SurfaceRZFourierJAX, QuadcoilParams
 from quadcoil.wrapper import _resolve_quadpoints
 
 
@@ -42,7 +42,9 @@ NESCOIL_STATIC_ARGNAMES = [
     'plasma_mpol',
     'plasma_ntor',
     'plasma_stellsym',
-    'winding_surface_generator',
+    'surface_type',
+    'winding_surface_mode',
+    'winding_theta_mode',
     'winding_mpol',
     'winding_ntor',
     'winding_stellsym',
@@ -71,7 +73,7 @@ def nescoil(
     Bnormal_plasma=None,
 
     plasma_coil_distance: float = None,
-    winding_surface_generator=gen_winding_surface_arc,
+    surface_type: str = 'SurfaceRZFourier',
 
     winding_dofs=None,
     winding_mpol: int = 6,
@@ -79,6 +81,12 @@ def nescoil(
     winding_quadpoints_phi=None,
     winding_quadpoints_theta=None,
     winding_stellsym: bool = True,
+    winding_phi_interp: int = 2,
+    winding_theta_interp: int = 5,
+    winding_theta_rule_subsample: int = None,
+    winding_lam_tikhonov: float = 1e-5,
+    winding_surface_mode: str = 'self-intersection',
+    winding_theta_mode: str = 'arclen',
 ):
     r'''
     Solves a NESCOIL problem: finds the current potential :math:`\Phi_{sv}`
@@ -123,11 +131,10 @@ def nescoil(
         The external normal magnetic field on the plasma surface (e.g. from a fixed toroidal current).
         Will be treated as zero if not provided.
     plasma_coil_distance : float, optional, default=None
-        The coil-plasma distance used to auto-generate the winding surface via
-        ``winding_surface_generator``. Must be provided if ``winding_dofs`` is not.
-    winding_surface_generator : callable, optional, default=gen_winding_surface_arc
-        (Static) The winding surface generator callable. Called when ``plasma_coil_distance``
-        is provided instead of ``winding_dofs``.
+        The coil-plasma distance used to auto-generate the winding surface.
+        Must be provided if ``winding_dofs`` is not.
+    surface_type : str, optional, default='SurfaceRZFourier'
+        (Static) The surface type string (reserved for future use).
     winding_dofs : ndarray, shape (ndof_winding,), optional, default=None
         The winding surface degrees of freedom. Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()``
         convention. Will be generated from ``plasma_coil_distance`` if not provided.
@@ -184,24 +191,20 @@ def nescoil(
             quadpoints_theta=winding_quadpoints_theta,
             dofs=winding_dofs
         )
-    # winding surface is not provided. 
-    # Its dofs will not be among x.
+    # winding surface is not provided; auto-generate from plasma_coil_distance.
     else:
-        winding_dofs_temp = winding_surface_generator(
-            plasma_gamma=plasma_surface.gamma(), 
-            d_expand=plasma_coil_distance, 
-            nfp=plasma_surface.nfp, stellsym=plasma_surface.stellsym,
+        winding_surface = plasma_surface.gen_winding_surface(
+            d_expand=plasma_coil_distance,
             mpol=winding_mpol,
             ntor=winding_ntor,
-        )
-        winding_surface = SurfaceRZFourierJAX(
-            nfp=nfp,
-            stellsym=stellsym,
-            mpol=winding_mpol,
-            ntor=winding_ntor,
+            phi_interp=winding_phi_interp,
+            theta_interp=winding_theta_interp,
+            theta_rule_subsample=winding_theta_rule_subsample,
             quadpoints_phi=winding_quadpoints_phi,
             quadpoints_theta=winding_quadpoints_theta,
-            dofs=winding_dofs_temp
+            lam_tikhonov=winding_lam_tikhonov,
+            winding_surface_mode=winding_surface_mode,
+            theta_mode=winding_theta_mode,
         )
     if Bnormal_plasma is None:
         Bnormal_plasma_temp = jnp.zeros((

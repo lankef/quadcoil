@@ -1,8 +1,19 @@
 
 # Import packages.
 import numpy as np
-import matplotlib.pyplot as plt
-from scipy.fft import rfft
+
+try:
+    import matplotlib.pyplot as plt
+    _HAS_MATPLOTLIB = True
+except ImportError:
+    _HAS_MATPLOTLIB = False
+
+try:
+    from scipy.fft import rfft
+    _HAS_SCIPY = True
+except ImportError:
+    _HAS_SCIPY = False
+
 # Importing simsopt 
 from quadcoil import QuadcoilParams
 from quadcoil.quantity import Phi_with_net_current
@@ -11,7 +22,23 @@ def coil_zeta_theta_from_qp(
     qp:QuadcoilParams,
     dofs,
     coils_per_half_period=5,
-    theta_shift=0): 
+    theta_shift=0):
+    """
+    Extract coil contours from quadcoil solution.
+    
+    Requires matplotlib for contour extraction.
+    
+    Raises
+    ------
+    ImportError
+        If matplotlib is not installed.
+    """
+    if not _HAS_MATPLOTLIB:
+        raise ImportError(
+            "matplotlib is required for coil cutting. "
+            "Install with: pip install matplotlib or pip install quadcoil[coil-cutting]"
+        )
+    
     stellsym = qp.stellsym
     nzeta_coil = len(qp.quadpoints_phi)
     nfp = qp.nfp 
@@ -81,6 +108,22 @@ def coil_zeta_theta_from_qp(
 
 # IFFT a array in real space to a sin/cos series used by sinsopt.geo.curve
 def ifft_simsopt(x, order):
+    """
+    Convert real-space array to sin/cos series using FFT.
+    
+    Requires scipy for FFT operations.
+    
+    Raises
+    ------
+    ImportError
+        If scipy is not installed.
+    """
+    if not _HAS_SCIPY:
+        raise ImportError(
+            "scipy is required for Fourier analysis in coil cutting. "
+            "Install with: pip install scipy or pip install quadcoil[coil-cutting]"
+        )
+    
     assert len(x) >= 2*order  # the order of the fft is limited by the number of samples
     xf = rfft(x) / len(x)
 

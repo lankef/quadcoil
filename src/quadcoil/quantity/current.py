@@ -1,31 +1,38 @@
 import jax.numpy as jnp
 from jax import jit
 from functools import partial
-from scipy.constants import mu_0
+from quadcoil.math_utils import mu_0, project_arr_cylindrical
 from .quantity import _Quantity
 
 # ----- Implementations -----
-@partial(jit, static_argnames=('winding_surface_mode'))
-def _K(qp, dofs, winding_surface_mode=False):
+@partial(jit, static_argnames=('winding_surface_mode', 'cyl_mode'))
+def _K(qp, dofs, winding_surface_mode=False, cyl_mode=False):
     # winding_surface_mode is for using 
     # one or more field periods.
     phi_mn = dofs['phi']
+    # When winding_surface_mode is set to "divide", 
+    # K is only calculated on one field period of the
+    # winding surface. NOTE thaat this isn't always the 
+    # same as the eval surface, because the winding 
+    # and eval surfaces are allowed to have different
+    # resolutions! Used for force integrals.
+    if winding_surface_mode=='divide':
+        n_phi_1fp = len(qp.winding_surface.quadpoints_phi)//qp.winding_surface.nfp
+        quadpoints_phi_new = qp.winding_surface.quadpoints_phi[:n_phi_1fp]
+        surface_choice = qp.winding_surface.copy_and_set_quadpoints(
+            quadpoints_phi=quadpoints_phi_new,
+            quadpoints_theta=qp.winding_surface.quadpoints_theta
+        )
     # When winding_surface_mode is set to true, 
     # The evaluation will be done over the full winding surface 
     # instead. This is used when calculating B.
-    if winding_surface_mode=='divide':
-        n_phi_1fp = len(qp.winding_surface.quadpoints_phi)//qp.winding_surface.nfp
-        normal = qp.winding_surface.normal()[:n_phi_1fp, :, :]
-        dg1 = qp.winding_surface.gammadash1()[:n_phi_1fp, :, :]
-        dg2 = qp.winding_surface.gammadash2()[:n_phi_1fp, :, :]
     elif winding_surface_mode:
-        normal = qp.winding_surface.normal()
-        dg1 = qp.winding_surface.gammadash1()
-        dg2 = qp.winding_surface.gammadash2()
+        surface_choice = qp.winding_surface
     else:
-        normal = qp.eval_surface.normal()
-        dg1 = qp.eval_surface.gammadash1()
-        dg2 = qp.eval_surface.gammadash2()
+        surface_choice = qp.eval_surface
+    normal = surface_choice.normal()
+    dg1 = surface_choice.gammadash1()
+    dg2 = surface_choice.gammadash2()
     net_poloidal_current_amperes = qp.net_poloidal_current_amperes
     net_toroidal_current_amperes = qp.net_toroidal_current_amperes
     inv_normN_prime_2d = 1/jnp.linalg.norm(normal, axis=-1)
@@ -51,7 +58,12 @@ def _K(qp, dofs, winding_surface_mode=False):
         dg2 * G
         - dg1 * I
     )
-    return b_K@phi_mn + c_K
+    K_xyz = b_K@phi_mn + c_K
+    if cyl_mode:
+        gamma = surface_choice.gamma()
+        K_cyl = project_arr_cylindrical(gamma, K_xyz)
+        return K_cyl
+    return K_xyz
 _K_desc_unit = lambda scales: scales["B"] / mu_0 # based on infinite solenoid: B = mu_0 K_pol.
 
 # @jit # Not needed because _K is jitted and this can make compile time excessive
@@ -116,6 +128,14 @@ _f_huber_K_desc_unit = lambda scales: _K_desc_unit(scales) * scales["R0"] * scal
 # a private function.
 K = _Quantity.generate_c2(
     func=_K, 
+    compatibility=['<=', '>='], 
+    desc_unit=_K_desc_unit,
+)
+
+_K_cyl = lambda qp, dofs: _K(qp, dofs, cyl_mode=True)
+
+K_cyl = _Quantity.generate_c2(
+    func=_K_cyl, 
     compatibility=['<=', '>='], 
     desc_unit=_K_desc_unit,
 )

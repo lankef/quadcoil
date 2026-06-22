@@ -1,6 +1,6 @@
 from quadcoil import quadcoil, SurfaceRZFourierJAX, get_quantity
 import jax.numpy as jnp
-from scipy.constants import mu_0
+from quadcoil.math_utils import mu_0
 
 
 def generate_desc_scaling(objective_name, constraint_name, scales):

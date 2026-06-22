@@ -8,3 +8,6 @@ __pycache__/
 *checkpoint.py
 *checkpoint.ipynb
 .claude/
+*-cache
+*.npy
+

@@ -38,7 +38,7 @@ Tests use the stdlib `unittest` framework. Some tests skip automatically if opti
 quadcoil()
   → creates QuadcoilParams (plasma + winding surface + quadrature)
   → parses objectives/constraints via wrapper.py
-  → calls solve_constrained() or run_opt_lbfgs() in solver.py
+  → calls solve_constrained() or run_opt_lbfgs() in solver/
   → returns solution + metrics
 ```
 
@@ -48,7 +48,7 @@ quadcoil()
 |--------|------|
 | `quadcoil.py` | Main entry; JIT-compiled optimizer (~1300 lines) |
 | `quadcoil_params.py` | `QuadcoilParams` pytree class (surfaces, currents, quadrature points) |
-| `solver.py` | `run_opt_lbfgs`, `run_opt_optax`, `solve_constrained` |
+| `solver/` | Optimization solvers: `auglag.py` (augmented Lagrangian), `ipm.py` (interior point), `slsqp.py` (sequential quadratic programming), `kkt_adjoint.py` (KKT stationarity & adjoint) |
 | `wrapper.py` | String-based objective/constraint parsing; `merge_callables()` |
 | `surface.py` | `SurfaceRZFourierJAX` — JAX-native Fourier surface; converts to/from simsopt and DESC |
 | `winding_surface.py` | Winding surface generators (`gen_winding_surface_offset`, `_arc`, `_atan`) |

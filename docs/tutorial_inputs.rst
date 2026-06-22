@@ -424,7 +424,18 @@ We still choose these metrics by giving a ``tuple`` containing their names:
 8. (Optional) Tweaking the augmented Lagrangian solver
 -------------------------------------------------------------------------
 
-The augmented Lagrangian solver can be fine-tuned for a specific problem if the default parameters do not yield sufficiently accurate results.
+The augmented Lagrangian solver can be fine-tuned by passing a ``solver_options`` dict.
+Any keys omitted from the dict fall back to the values in ``SOLVER_OPTIONS_DEFAULT``.
+
+Example usage::
+
+    out_dict, qp, cp_mn, solve_results = quadcoil(
+        ...,
+        solver_options={
+            'maxiter_inner': 1500,
+            'maxiter_tot':   10000,
+        },
+    )
 
 .. list-table::
    :header-rows: 1
@@ -433,49 +444,53 @@ The augmented Lagrangian solver can be fine-tuned for a specific problem if the 
      - Type
      - Default
      - Definition
-   * - ``c_init``
-     - ``float``, traced
+   * - ``solver_options``
+     - ``dict`` or ``None``, traced
+     - ``None`` (uses ``SOLVER_OPTIONS_DEFAULT``)
+     - Dict of augmented-Lagrangian and inner-solver options (see keys below).
+   * - ``lbfgs_memory``
+     - ``int``, static
+     - ``10``
+     - L-BFGS history length for the inner solver (must be static for JIT).
+   * - ``solver_options['c_init']``
+     - ``float``
      - ``1.``
-     - The *c* factor. Please see *Constrained Optimization and Lagrange* *Multiplier Methods*, Chapter 3.
-   * - ``c_growth_rate``
-     - ``float``, traced
+     - The initial *c* factor. Please see *Constrained Optimization and Lagrange* *Multiplier Methods*, Chapter 3.
+   * - ``solver_options['c_growth_rate']``
+     - ``float``
      - ``2.``
      - The growth rate of the *c* factor.
-   * - ``xstop_outer``
-     - ``float``, traced
+   * - ``solver_options['xstop_outer']``
+     - ``float``
      - ``1e-6``
-     - :math:`\Phi_{sv}` stopping criterion of the outer augmented Lagrangian loop. Terminates the convergence rate falls below this number.
-   * - ``ctol_outer``
-     - ``float``, traced
+     - :math:`\Phi_{sv}` stopping criterion of the outer augmented Lagrangian loop. Terminates when the convergence rate falls below this number.
+   * - ``solver_options['ctol_outer']``
+     - ``float``
      - ``1e-6``
      - Constraint tolerance of the outer augmented Lagrangian loop. Terminates when both tolerances are satisfied.
-   * - ``fstop_inner, fstop_inner_last``
-     - ``float``, traced
-     - ``1e-6, 0``
-     - :math:`f_{obj}(\Phi_{sv})` stopping criterion of the inner LBFGS iteration. Terminates the convergence rate falls below this number.
-   * - ``xstop_inner, xstop_inner_last``
-     - ``float``, traced
-     - ``1e-6, 1e-10``
-     - :math:`\Phi_{sv}` stopping criterion of the inner LBFGS iteration. Terminates the convergence rate falls below this number.
-   * - ``gtol_inner, gtol_inner_last``
-     - ``float``, traced
-     - ``1e-6, 1e-10``
+   * - ``solver_options['fstop_inner']``, ``solver_options['fstop_inner_last']``
+     - ``float``
+     - ``1e-6``, ``0.``
+     - :math:`f_{obj}(\Phi_{sv})` stopping criterion of the inner LBFGS iteration. Terminates when the convergence rate falls below this number.
+   * - ``solver_options['xstop_inner']``, ``solver_options['xstop_inner_last']``
+     - ``float``
+     - ``1e-6``, ``1e-10``
+     - :math:`\Phi_{sv}` stopping criterion of the inner LBFGS iteration. Terminates when the convergence rate falls below this number.
+   * - ``solver_options['gtol_inner']``, ``solver_options['gtol_inner_last']``
+     - ``float``
+     - ``1e-6``, ``1e-10``
      - Gradient tolerance of the inner LBFGS iteration.
-   * - ``maxiter_tot``
-     - ``int``, static
+   * - ``solver_options['maxiter_tot']``
+     - ``int``
      - ``10000``
      - The maximum number of total LBFGS iterations permitted, summed across all outer iterations.
-   * - ``maxiter_inner``
-     - ``int``, static
+   * - ``solver_options['maxiter_inner']``
+     - ``int``
      - ``1000``
      - The maximum number of inner iterations permitted.
-   * - ``max_linesearch_steps``
-     - ``int``, static
-     - ``20``
-     - The maximum number of steps in the LBFGS line search.
-   * - ``svtol``
-     - ``float``, traced
-     - ``1e-7``
+   * - ``solver_options['svtol']``
+     - ``float``
+     - ``1e-6``
      - Singular-value cut-off threshold during preconditioning.
    * - ``merge_constraints``
      - ``bool``, static

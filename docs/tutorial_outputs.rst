@@ -29,8 +29,7 @@ We illustrate this with the example in ``example/topology.ipynb``:
         constraint_unit=(None,),
         # Set the output metrics to f_B and f_K
         metric_name=('f_B', 'f_K'),
-        maxiter_inner=1500,
-        maxiter_tot=10000,
+        solver_options={'maxiter_inner': 1500, 'maxiter_tot': 10000},
     )
 
 This produces a low-field-error coil set consisting of purely poloidal coils by
