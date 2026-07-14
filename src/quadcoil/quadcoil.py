@@ -115,7 +115,7 @@ QUADCOIL_STATIC_ARGNAMES=[
     'smoothing',
 ]
 @partial(jit, static_argnames=QUADCOIL_STATIC_ARGNAMES)
-def quadcoil(
+def _quadcoil_pure(
     # Now, the regular arguments.
     nfp:int, # Documented
     stellsym:bool, # Documented
@@ -210,122 +210,7 @@ def quadcoil(
     # - Experimental
     implicit_linear_solver=None,
 ):
-    r'''
-    Solves a QUADCOIL problem.
-
-    Parameters
-    ----------
-    nfp : int
-        (Static) The number of field periods.
-    stellsym : bool
-        (Static) Whether the coils have stellarator symmetry.
-    plasma_mpol : int
-        (Static) The number of poloidal Fourier harmonics in the plasma boundary.
-    plasma_ntor : int
-        (Static) The number of toroidal Fourier harmonics in the plasma boundary.
-    plasma_dofs : ndarray
-        (Static) The plasma surface degrees of freedom. Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()`` convention.
-    net_poloidal_current_amperes : float
-        (Traced) The net poloidal current :math:`G`.
-    net_toroidal_current_amperes : float, optional, default=0
-        (Traced) The net toroidal current :math:`I`.
-    mpol : int, optional, default=6
-        (Static) The number of poloidal Fourier harmonics in the current potential :math:`\Phi_{sv}`.
-    ntor : int, optional, default=4
-        (Static) The number of toroidal Fourier harmonics in :math:`\Phi_{sv}`.
-    quadpoints_phi : ndarray, shape (nphi,), optional, default=None
-        (Traced) The poloidal quadrature points on the winding surface to evaluate the objectives at.
-        Uses one period from the winding surface by default.
-    quadpoints_theta : ndarray, shape (ntheta,), optional, default=None
-        (Traced) The toroidal quadrature points on the winding surface to evaluate the objectives at.
-        Uses one period from the winding surface by default.
-    phi_init : ndarray, optional, default=None
-        (Traced) The initial guess. All zeros by default.
-    phi_unit : float, optional, default=None
-        (Traced) Current potential's normalization constant. Only applies when ``precond!='svd'``
-        By default will be generated from total net current.
-    plasma_stellsym : bool, default=True
-        (Static) Whether the plasma has stellarator symmetry.
-    plasma_quadpoints_phi : ndarray, shape (nphi_plasma,), optional, default=None
-        (Traced) Will be set based on the shape of ``Bnormal_plasma`` if it's provided, 
-        or default to ``jnp.linspace(0, 1/nfp, 32, endpoint=False)`` otherwise.
-    plasma_quadpoints_theta : ndarray, shape (ntheta_plasma,), optional, default=None
-        (Traced) Will be set based on the shape of ``Bnormal_plasma`` if it's provided, 
-        or default to ``jnp.linspace(0, 1, 34, endpoint=False)`` otherwise.
-    Bnormal_plasma : ndarray, shape (nphi, ntheta), optional, default=None
-        (Traced) The magnetic field distribution on the plasma surface. Will be filled with zeros by default.
-    plasma_coil_distance : float, optional, default=None
-        (Traced) The coil-plasma distance. Is set to ``None`` by default, but a value must be provided if ``winding_dofs`` is not provided.
-    surface_type : str, optional, default='SurfaceRZFourier'
-        (Static) The surface parametrization. One of ``'SurfaceRZFourier'``,
-        ``'SurfaceXYZTensorFourier'``, ``'SurfaceXYZFourier'``.
-        Auto-offset (``plasma_coil_distance``) only works with ``'SurfaceRZFourier'``.
-    winding_surface_mode : str, optional, default='intersection'
-        (Static) Self-intersection removal strategy when auto-generating the winding surface.
-        One of ``'none'``, ``'intersection'``, or ``'hull'``.
-    winding_dofs : ndarray, shape (ndof_winding,)
-        (Traced) The winding surface degrees of freedom. Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()`` convention.
-        Will be generated using ``winding_surface_mode`` if ``plasma_coil_distance`` is provided. Must be provided otherwise.
-    winding_mpol : int, optional, default=6
-        (Static) The number of poloidal Fourier harmonics in the winding surface.
-    winding_ntor : int, optional, default=5
-        (Static) The number of toroidal Fourier harmonics in the winding surface.
-    winding_quadpoints_phi : ndarray, shape (nphi_winding,), optional, default=None
-        (Traced) Will be set to ``jnp.linspace(0, 1, 32*nfp, endpoint=False)`` by default.
-    winding_quadpoints_theta : ndarray, shape (ntheta_winding,), optional, default=None
-        (Traced) Will be set to ``jnp.linspace(0, 1, 34, endpoint=False)`` by default.
-    winding_stellsym : bool, default=True
-        (Static) Whether the winding surface has stellarator symmetry.
-    objective_name : tuple, optional, default='f_B_normalized_by_Bnormal_IG'
-        (Static) The names of the objective functions. Must be a member of ``quadcoil.objective`` that outputs a scalar.
-    objective_weight : ndarray, optional, default=None
-        (Traced) The weights of the objective functions. Derivatives will be calculated w.r.t. this quantity.
-    objective_unit : ndarray, optional, default=None
-        (Traced) The normalization constants of the objective terms, so that ``f/objective_unit`` is :math:`O(1)`. May contain ``None``
-    constraint_name : tuple, optional, default=()
-        (Static) The names of the constraint functions. Must be a member of ``quadcoil.objective`` that outputs a scalar.
-    constraint_type : tuple, optional, default=()
-        (Static) The types of the constraints. Must consist of ``'>='``, ``'<='``, ``'=='`` only.
-    constraint_unit : ndarray, optional, default=()
-        (Traced) The normalization constants of the constraints, so that ``f/constraint_unit`` is :math:`O(1)` May contain ``None``.
-    constraint_value : ndarray, optional, default=()
-        (Traced) The constraint thresholds. Derivatives will be calculated w.r.t. this quantity.
-    metric_name : tuple, optional, default=('f_B', 'f_K')
-        (Static) The names of the functions to diagnose the coil configurations with. Will be differentiated w.r.t. other input quantities.
-    convex : bool, optional, default=False
-        (Static) Whether to assume the problem is convex. When ``True``, QUADCOIL will apply some limited simplifications.
-    solver_options : dict, optional, default=None
-        (Traced) Augmented-Lagrangian and inner-solver options. Merged with
-        ``SOLVER_OPTIONS_DEFAULT``; unspecified keys take their defaults.
-        Recognised keys and defaults:
-        - ``'c_init'`` (``1.``) — initial penalty :math:`c` factor.
-        - ``'c_growth_rate'`` (``2.``) — multiplicative growth of :math:`c` each outer step.
-        - ``'xstop_outer'`` (``1e-6``) — outer-loop ``x`` convergence rate tolerance.
-        - ``'ctol_outer'`` (``1e-6``) — outer-loop constraint-violation tolerance.
-        - ``'atol_inner'`` (``1e-6``) — absolute gradient tolerance for inner L-BFGS solves.
-        - ``'rtol_inner'`` (``1e-6``) — relative gradient tolerance for inner L-BFGS solves.
-        - ``'atol_inner_last'`` (``1e-10``) — absolute gradient tolerance for the final inner solve.
-        - ``'rtol_inner_last'`` (``1e-10``) — relative gradient tolerance for the final inner solve.
-        - ``'svtol'`` (``1e-6``) — singular-value cut-off for pre-conditioning.
-        - ``'maxiter_tot'`` (``10000``) — maximum outer-loop iterations.
-        - ``'maxiter_inner'`` (``1000``) — maximum inner L-BFGS iterations per outer step.
-    lbfgs_memory : int, optional, default=10
-        (Static) L-BFGS history length for the inner solver.
-    maxiter : int, optional, default=None
-        (Static) Maximum solver iterations. Defaults to 10000 for
-        ``'auglag-lbfgs'``, 100 for ``'ipm'``, and 200 for ``'slsqp'``.
-        For ``'auglag-lbfgs'`` this is the outer-loop iteration limit;
-        for ``'ipm'`` and ``'slsqp'`` it is the total iteration limit.
-    maxiter_inner : int, optional, default=None
-        (Static) Maximum inner L-BFGS iterations per outer step (default 500).
-        Only used by ``'auglag-lbfgs'``.
-    implicit_linear_solver : lineax.AbstractLinearSolver, optional, default=lineax.AutoLinearSolver(well_posed=True)
-        (Static) The lineax linear solver choice for implicit differentiation.
-    value_only : bool, optional, default=False
-        (Static) When ``True``, skip gradient calculations.
-    verbose : int, optional, default=False
-        (Static) Print general info when ``verbose==1``. 
-        Print inside the outer iteration loop, too, when ``verbose==2``.
+    r'''The jitted part of quadcoil().
     '''
     # ----- Solver options unpacking -----
     if solver_options is None:
@@ -982,7 +867,155 @@ def quadcoil(
         }
         if verbose > 0:
             out_dict[metric_name_i].update(debug_info_i)
-    return(out_dict, qp, dofs_opt, solve_results)
+    return out_dict, qp, dofs_opt, solve_results
+
+
+def quadcoil(**kwargs):
+    r'''
+    Solves a QUADCOIL problem.
+
+    Parameters
+    ----------
+    nfp : int
+        (Static) The number of field periods.
+    stellsym : bool
+        (Static) Whether the coils have stellarator symmetry.
+    plasma_mpol : int
+        (Static) The number of poloidal Fourier harmonics in the plasma boundary.
+    plasma_ntor : int
+        (Static) The number of toroidal Fourier harmonics in the plasma boundary.
+    plasma_dofs : ndarray
+        (Static) The plasma surface degrees of freedom. Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()`` convention.
+    net_poloidal_current_amperes : float
+        (Traced) The net poloidal current :math:`G`.
+    net_toroidal_current_amperes : float, optional, default=0
+        (Traced) The net toroidal current :math:`I`.
+    mpol : int, optional, default=6
+        (Static) The number of poloidal Fourier harmonics in the current potential :math:`\Phi_{sv}`.
+    ntor : int, optional, default=4
+        (Static) The number of toroidal Fourier harmonics in :math:`\Phi_{sv}`.
+    quadpoints_phi : ndarray, shape (nphi,), optional, default=None
+        (Traced) The poloidal quadrature points on the winding surface to evaluate the objectives at.
+        Uses one period from the winding surface by default.
+    quadpoints_theta : ndarray, shape (ntheta,), optional, default=None
+        (Traced) The toroidal quadrature points on the winding surface to evaluate the objectives at.
+        Uses one period from the winding surface by default.
+    phi_init : ndarray, optional, default=None
+        (Traced) The initial guess. All zeros by default.
+    phi_unit : float, optional, default=None
+        (Traced) Current potential's normalization constant. Only applies when ``precond!='svd'``
+        By default will be generated from total net current.
+    plasma_stellsym : bool, default=True
+        (Static) Whether the plasma has stellarator symmetry.
+    plasma_quadpoints_phi : ndarray, shape (nphi_plasma,), optional, default=None
+        (Traced) Will be set based on the shape of ``Bnormal_plasma`` if it's provided, 
+        or default to ``jnp.linspace(0, 1/nfp, 32, endpoint=False)`` otherwise.
+    plasma_quadpoints_theta : ndarray, shape (ntheta_plasma,), optional, default=None
+        (Traced) Will be set based on the shape of ``Bnormal_plasma`` if it's provided, 
+        or default to ``jnp.linspace(0, 1, 34, endpoint=False)`` otherwise.
+    Bnormal_plasma : ndarray, shape (nphi, ntheta), optional, default=None
+        (Traced) The magnetic field distribution on the plasma surface. Will be filled with zeros by default.
+    plasma_coil_distance : float, optional, default=None
+        (Traced) The coil-plasma distance. Is set to ``None`` by default, but a value must be provided if ``winding_dofs`` is not provided.
+    surface_type : str, optional, default='SurfaceRZFourier'
+        (Static) The surface parametrization. One of ``'SurfaceRZFourier'``,
+        ``'SurfaceXYZTensorFourier'``, ``'SurfaceXYZFourier'``.
+        Auto-offset (``plasma_coil_distance``) only works with ``'SurfaceRZFourier'``.
+    winding_surface_mode : str, optional, default='intersection'
+        (Static) Self-intersection removal strategy when auto-generating the winding surface.
+        One of ``'none'``, ``'intersection'``, or ``'hull'``.
+    winding_dofs : ndarray, shape (ndof_winding,)
+        (Traced) The winding surface degrees of freedom. Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()`` convention.
+        Will be generated using ``winding_surface_mode`` if ``plasma_coil_distance`` is provided. Must be provided otherwise.
+    winding_mpol : int, optional, default=6
+        (Static) The number of poloidal Fourier harmonics in the winding surface.
+    winding_ntor : int, optional, default=5
+        (Static) The number of toroidal Fourier harmonics in the winding surface.
+    winding_quadpoints_phi : ndarray, shape (nphi_winding,), optional, default=None
+        (Traced) Will be set to ``jnp.linspace(0, 1, 32*nfp, endpoint=False)`` by default.
+    winding_quadpoints_theta : ndarray, shape (ntheta_winding,), optional, default=None
+        (Traced) Will be set to ``jnp.linspace(0, 1, 34, endpoint=False)`` by default.
+    winding_stellsym : bool, default=True
+        (Static) Whether the winding surface has stellarator symmetry.
+    objective_name : tuple, optional, default='f_B_normalized_by_Bnormal_IG'
+        (Static) The names of the objective functions. Must be a member of ``quadcoil.objective`` that outputs a scalar.
+    objective_weight : ndarray, optional, default=None
+        (Traced) The weights of the objective functions. Derivatives will be calculated w.r.t. this quantity.
+    objective_unit : ndarray, optional, default=None
+        (Traced) The normalization constants of the objective terms, so that ``f/objective_unit`` is :math:`O(1)`. May contain ``None``
+    constraint_name : tuple, optional, default=()
+        (Static) The names of the constraint functions. Must be a member of ``quadcoil.objective`` that outputs a scalar.
+    constraint_type : tuple, optional, default=()
+        (Static) The types of the constraints. Must consist of ``'>='``, ``'<='``, ``'=='`` only.
+    constraint_unit : ndarray, optional, default=()
+        (Traced) The normalization constants of the constraints, so that ``f/constraint_unit`` is :math:`O(1)` May contain ``None``.
+    constraint_value : ndarray, optional, default=()
+        (Traced) The constraint thresholds. Derivatives will be calculated w.r.t. this quantity.
+    metric_name : tuple, optional, default=('f_B', 'f_K')
+        (Static) The names of the functions to diagnose the coil configurations with. Will be differentiated w.r.t. other input quantities.
+    convex : bool, optional, default=False
+        (Static) Whether to assume the problem is convex. When ``True``, QUADCOIL will apply some limited simplifications.
+    solver_options : dict, optional, default=None
+        (Traced) Augmented-Lagrangian and inner-solver options. Merged with
+        ``SOLVER_OPTIONS_DEFAULT``; unspecified keys take their defaults.
+        Recognised keys and defaults:
+        - ``'c_init'`` (``1.``) — initial penalty :math:`c` factor.
+        - ``'c_growth_rate'`` (``2.``) — multiplicative growth of :math:`c` each outer step.
+        - ``'xstop_outer'`` (``1e-6``) — outer-loop ``x`` convergence rate tolerance.
+        - ``'ctol_outer'`` (``1e-6``) — outer-loop constraint-violation tolerance.
+        - ``'atol_inner'`` (``1e-6``) — absolute gradient tolerance for inner L-BFGS solves.
+        - ``'rtol_inner'`` (``1e-6``) — relative gradient tolerance for inner L-BFGS solves.
+        - ``'atol_inner_last'`` (``1e-10``) — absolute gradient tolerance for the final inner solve.
+        - ``'rtol_inner_last'`` (``1e-10``) — relative gradient tolerance for the final inner solve.
+        - ``'svtol'`` (``1e-6``) — singular-value cut-off for pre-conditioning.
+        - ``'maxiter_tot'`` (``10000``) — maximum outer-loop iterations.
+        - ``'maxiter_inner'`` (``1000``) — maximum inner L-BFGS iterations per outer step.
+    lbfgs_memory : int, optional, default=10
+        (Static) L-BFGS history length for the inner solver.
+    maxiter : int, optional, default=None
+        (Static) Maximum solver iterations. Defaults to 10000 for
+        ``'auglag-lbfgs'``, 100 for ``'ipm'``, and 200 for ``'slsqp'``.
+        For ``'auglag-lbfgs'`` this is the outer-loop iteration limit;
+        for ``'ipm'`` and ``'slsqp'`` it is the total iteration limit.
+    maxiter_inner : int, optional, default=None
+        (Static) Maximum inner L-BFGS iterations per outer step (default 500).
+        Only used by ``'auglag-lbfgs'``.
+    implicit_linear_solver : lineax.AbstractLinearSolver, optional, default=lineax.AutoLinearSolver(well_posed=True)
+        (Static) The lineax linear solver choice for implicit differentiation.
+    value_only : bool, optional, default=False
+        (Static) When ``True``, skip gradient calculations.
+    verbose : int, optional, default=False
+        (Static) Print general info when ``verbose==1``. 
+        Print inside the outer iteration loop, too, when ``verbose==2``.
+    '''
+    try:
+        out_dict, qp, dofs_opt, solve_results = _quadcoil_pure(**kwargs)
+    except RuntimeError as e:
+        # Catch some common Equinox errors due to improper 
+        # parameter choices.
+        # More to be added. 
+        if "_EquinoxRuntimeError: The root is not contained in [lower, upper]" in str(e):
+            raise ValueError(
+                'Equinox rootfinder failed during winding surface '
+                'generation (`SurfaceJAX.gen_winding_surface_dofs`). '
+                'Your plasma_coil_distance may have the wrong sign or be too large. '
+                'It can also be caused by a self-intersecting plasma surface.'
+                'As a visual check, please create a `SurfaceJAX` object for your '
+                'plasma surface and call '
+                '`SurfaceJAX.uniform_offset(plasma_coil_distance).plot()`.'
+                'If this is not caused by improper parameter choices, '
+                'please contact the developers.'
+            )
+        elif "_EquinoxRuntimeError: The root is not contained in [lower, upper]" in str(e):
+            raise NotImplementedError(
+                'You have encountered an undocumented Equinox error. '
+                'These errors are commonly caused by imporper parameter '
+                'choices. Please report this error to the developers '
+                'so that we can add a troubleshooting guide.'
+            )
+        else:
+            raise e
+    return out_dict, qp, dofs_opt, solve_results
 
 def _choose_fwd_rev(func, n_in, n_out, argnums):
     '''
@@ -1007,7 +1040,6 @@ def _precondition_coordinate_by_matrix(hess):
     x_to_xp = lambda x: (basis @ x) * scale
     xp_to_x = lambda xp: basis.T @ (xp / scale)
     return x_to_xp, xp_to_x
-
 
 def _print_min_blank(a):
     return jnp.min(a) if a.size > 0 else jnp.nan

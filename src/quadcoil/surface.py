@@ -2649,11 +2649,28 @@ class SurfaceOffsetJAX(SurfaceJAX):
         )
     
     def plot(self, **kwargs):
-        raise NotImplementedError(
-            "plot() is not supported for SurfaceOffsetJAX. "
-            "To visualize, evaluate gamma() and plot the point cloud, "
-            "or fit to a new surface and plot that."
-        )
+        # raise NotImplementedError(
+        #     "plot() is not supported for SurfaceOffsetJAX. "
+        #     "To visualize, evaluate gamma() and plot the point cloud, "
+        #     "or fit to a new surface and plot that."
+        # )
+        try:
+            import matplotlib.pyplot as plt
+        except:
+            raise ModuleNotFoundError("Matplotlib is required to run SurfaceOffsetJAX.plot().")
+        fig = plt.figure()
+        ax = fig.add_subplot(projection='3d')
+        
+        # Make data
+        gamma = self.gamma()
+        
+        # Plot the surface
+        ax.plot_surface(gamma[:, :, 0], gamma[:, :, 1], gamma[:, :, 2])
+        
+        # Set an equal aspect ratio
+        ax.set_aspect('equal')
+        
+        plt.show()
     
     # ------------------------------------------------------------------
     # JAX pytree protocol
