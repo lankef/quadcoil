@@ -1,6 +1,6 @@
 from jax import custom_jvp
 from functools import partial
-from quadcoil import quadcoil
+from quadcoil.quadcoil import _quadcoil_pure
 import jax.numpy as jnp
 import warnings
 import jax
@@ -41,7 +41,7 @@ def gen_quadcoil_for_diff(**kwargs):
     # differentiable arguments, and does not 
     # output derivatives
     quadcoil_values = partial(
-        quadcoil, 
+        _quadcoil_pure, 
         value_only=True,
         **partial_kwargs
     )    
@@ -49,7 +49,7 @@ def gen_quadcoil_for_diff(**kwargs):
     # differentiable arguments, and preserves
     # the full output.
     quadcoil_full = partial(
-        quadcoil, 
+        _quadcoil_pure, 
         value_only=False,
         **partial_kwargs
     )
