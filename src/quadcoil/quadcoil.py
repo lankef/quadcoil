@@ -906,7 +906,7 @@ def quadcoil(**kwargs):
     plasma_ntor : int
         (Static) The number of toroidal Fourier harmonics in the plasma boundary.
     plasma_dofs : ndarray
-        (Static) The plasma surface degrees of freedom. Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()`` convention.
+        (Traced) The plasma surface degrees of freedom. Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()`` convention.
     net_poloidal_current_amperes : float
         (Traced) The net poloidal current :math:`G`.
     net_toroidal_current_amperes : float, optional, default=0
@@ -922,9 +922,12 @@ def quadcoil(**kwargs):
         (Traced) The toroidal quadrature points on the winding surface to evaluate the objectives at.
         Uses one period from the winding surface by default.
     phi_init : ndarray, optional, default=None
-        (Traced) The initial guess. All zeros by default.
+        (Traced) The initial guess. All zeros by default (unless ``phi_init_with_nescoil`` is ``True``).
+    phi_init_with_nescoil : bool, optional, default=True
+        (Static) When ``True``, initialize :math:`\Phi_{sv}` from a NESCOIL solve
+        (overrides ``phi_init`` / ``phi_unit``).
     phi_unit : float, optional, default=None
-        (Traced) Current potential's normalization constant. Only applies when ``precond!='svd'``
+        (Traced) Current potential's normalization constant. Only applies when ``precond!='svd'``.
         By default will be generated from total net current.
     plasma_stellsym : bool, default=True
         (Static) Whether the plasma has stellarator symmetry.
@@ -942,10 +945,22 @@ def quadcoil(**kwargs):
         (Static) The surface parametrization. One of ``'SurfaceRZFourier'``,
         ``'SurfaceXYZTensorFourier'``, ``'SurfaceXYZFourier'``.
         Auto-offset (``plasma_coil_distance``) only works with ``'SurfaceRZFourier'``.
-    winding_surface_mode : str, optional, default='intersection'
-        (Static) Self-intersection removal strategy when auto-generating the winding surface.
-        One of ``'none'``, ``'intersection'``, or ``'hull'``.
-    winding_dofs : ndarray, shape (ndof_winding,)
+    winding_surface_mode : str, optional, default='self-intersection'
+        (Static) Winding-surface generation mode when auto-generating from
+        ``plasma_coil_distance``. One of ``'self-intersection'``, ``'hull'``,
+        or ``'uniform'``.
+    winding_theta_mode : str, optional, default='arclen'
+        (Static) Poloidal reparameterization for the offset-surface fit.
+        One of ``'arclen'`` or ``'arctan'``.
+    winding_phi_interp : int, optional, default=2
+        (Static) Toroidal oversampling factor during the Fourier fit.
+    winding_theta_interp : int, optional, default=2
+        (Static) Poloidal oversampling factor during the Fourier fit.
+    winding_theta_rule_subsample : int, optional, default=2
+        (Static) Poloidal subsampling stride for the self-intersection check.
+    winding_lam_tikhonov : float, optional, default=1e-5
+        (Traced) Tikhonov regularization weight for the least-squares surface fit.
+    winding_dofs : ndarray, shape (ndof_winding,), optional, default=None
         (Traced) The winding surface degrees of freedom. Uses the ``simsopt.geo.SurfaceRZFourier.get_dofs()`` convention.
         Will be generated using ``winding_surface_mode`` if ``plasma_coil_distance`` is provided. Must be provided otherwise.
     winding_mpol : int, optional, default=6
@@ -958,14 +973,14 @@ def quadcoil(**kwargs):
         (Traced) Will be set to ``jnp.linspace(0, 1, 34, endpoint=False)`` by default.
     winding_stellsym : bool, default=True
         (Static) Whether the winding surface has stellarator symmetry.
-    objective_name : tuple, optional, default='f_B_normalized_by_Bnormal_IG'
-        (Static) The names of the objective functions. Must be a member of ``quadcoil.objective`` that outputs a scalar.
-    objective_weight : ndarray, optional, default=None
+    objective_name : str or tuple, optional, default='f_B'
+        (Static) The names of the objective functions. Must be a member of ``quadcoil.quantity`` that outputs a scalar.
+    objective_weight : ndarray, optional, default=1.
         (Traced) The weights of the objective functions. Derivatives will be calculated w.r.t. this quantity.
     objective_unit : ndarray, optional, default=None
         (Traced) The normalization constants of the objective terms, so that ``f/objective_unit`` is :math:`O(1)`. May contain ``None``
     constraint_name : tuple, optional, default=()
-        (Static) The names of the constraint functions. Must be a member of ``quadcoil.objective`` that outputs a scalar.
+        (Static) The names of the constraint functions. Must be a member of ``quadcoil.quantity`` that outputs a scalar.
     constraint_type : tuple, optional, default=()
         (Static) The types of the constraints. Must consist of ``'>='``, ``'<='``, ``'=='`` only.
     constraint_unit : ndarray, optional, default=()
@@ -978,12 +993,25 @@ def quadcoil(**kwargs):
         ``None`` or ``()`` skips metric evaluation (and KKT adjoint work).
         A single ``str`` is treated as a one-element tuple. Lists are converted
         to tuples before JIT (static args must be hashable).
+        Include ``'phi_dofs'`` to obtain the solution DOFs and their Jacobians.
+    precond : str or None, optional, default='svd'
+        (Static) Current-potential preconditioner. One of ``'svd'``, ``'ess'``,
+        ``'svd_K'``, or ``None``.
+    precond_dims : tuple or None, optional, default=None
+        (Static) Optional dimensions used by some preconditioners.
+    precond_options : dict, optional
+        (Traced) Preconditioner hyperparameters. Defaults to
+        ``{'svd_safe_thres': 0., 'ess_alpha': 1., 'ess_p': 2.}``.
     convex : bool, optional, default=False
-        (Static) Whether to assume the problem is convex. When ``True``, QUADCOIL will apply some limited simplifications.
+        (Static) Whether to assume the problem is convex for supported solvers
+        (``'ipm'``, ``'slsqp'``). The KKT adjoint path does not use this flag.
+    solver : str, optional, default='auglag-lbfgs'
+        (Static) Optimizer backend. One of ``'auglag-lbfgs'``, ``'ipm'``, ``'slsqp'``.
     solver_options : dict, optional, default=None
-        (Traced) Augmented-Lagrangian and inner-solver options. Merged with
-        ``SOLVER_OPTIONS_DEFAULT``; unspecified keys take their defaults.
-        Recognised keys and defaults:
+        (Traced) Solver-specific options. Merged with
+        ``SOLVER_OPTIONS_DEFAULT_DICT[solver]``; unspecified keys take their defaults.
+
+        For ``'auglag-lbfgs'``:
         - ``'c_init'`` (``1.``) — initial penalty :math:`c` factor.
         - ``'c_growth_rate'`` (``2.``) — multiplicative growth of :math:`c` each outer step.
         - ``'xstop_outer'`` (``1e-6``) — outer-loop ``x`` convergence rate tolerance.
@@ -993,22 +1021,26 @@ def quadcoil(**kwargs):
         - ``'atol_inner_last'`` (``1e-10``) — absolute gradient tolerance for the final inner solve.
         - ``'rtol_inner_last'`` (``1e-10``) — relative gradient tolerance for the final inner solve.
         - ``'svtol'`` (``1e-6``) — singular-value cut-off for pre-conditioning.
-        - ``'maxiter_tot'`` (``10000``) — maximum outer-loop iterations.
-        - ``'maxiter_inner'`` (``1000``) — maximum inner L-BFGS iterations per outer step.
+
+        For ``'ipm'``: ``'tol_kkt'``, ``'tau'``, ``'delta_init'``, ``'delta_min'``, ``'delta_max'``.
+
+        For ``'slsqp'``: ``'atol'``, ``'rtol'``.
     lbfgs_memory : int, optional, default=10
-        (Static) L-BFGS history length for the inner solver.
+        (Static) L-BFGS history length for solvers that use L-BFGS.
     maxiter : int, optional, default=None
         (Static) Maximum solver iterations. Defaults to 10000 for
-        ``'auglag-lbfgs'``, 100 for ``'ipm'``, and 200 for ``'slsqp'``.
+        ``'auglag-lbfgs'``, 100 for ``'ipm'``, and 500 for ``'slsqp'``.
         For ``'auglag-lbfgs'`` this is the outer-loop iteration limit;
         for ``'ipm'`` and ``'slsqp'`` it is the total iteration limit.
     maxiter_inner : int, optional, default=None
         (Static) Maximum inner L-BFGS iterations per outer step (default 500).
         Only used by ``'auglag-lbfgs'``.
+    merge_constraints : bool, optional, default=False
+        (Static) When ``True``, combines compatible constraint evaluations before solving.
     value_only : bool, optional, default=False
         (Static) When ``True``, skip gradient calculations.
-    verbose : int, optional, default=False
-        (Static) Print general info when ``verbose==1``. 
+    verbose : int, optional, default=0
+        (Static) Print general info when ``verbose==1``.
         Print inside the outer iteration loop, too, when ``verbose==2``.
     '''
     # Normalize metric_name before JIT: lists are unhashable static args.

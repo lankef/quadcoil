@@ -60,7 +60,7 @@ Here, we solved the NESCOIL problem (minimizing field error with no additional c
 5. Constraints for coil optimization. Encodes engineering requirements.
 6. Important numerical settings.
 7. Metrics for evaluating the coil set satisfying these requirements.
-8. (Optional) Augmented Lagrangial options.
+8. (Optional) Solver options.
 
 For readability, we label:
 
@@ -174,7 +174,7 @@ The winding surface can either be generated automatically or specified.
 Auto-generate
 ~~~~~~~~~~~~~
 
-QUADCOIL can automatically generate winding surfaces when used as an equilibrium-stage coil complexity proxy. To auto generate the winding surface, set:
+QUADCOIL can automatically generate winding surfaces when used as an equilibrium-stage coil complexity proxy. To auto-generate the winding surface, provide ``plasma_coil_distance`` (and leave ``winding_dofs`` as ``None``). 
 
 .. list-table::
    :header-rows: 1
@@ -185,8 +185,12 @@ QUADCOIL can automatically generate winding surfaces when used as an equilibrium
      - Definition
    * - ❗ ``plasma_coil_distance``
      - ``float``, traced
-     - ``None``, but **must be specified** to auto-generate winding surface.
+     - ``None``, but **must be specified** to auto-generate the winding surface.
      - The coil-plasma distance :math:`d_{cs}`.
+   * - ``surface_type``
+     - ``str``, static
+     - ``'SurfaceRZFourier'``
+     - Surface parametrization. One of ``'SurfaceRZFourier'``, ``'SurfaceXYZTensorFourier'``, ``'SurfaceXYZFourier'``. 
    * - ``winding_mpol``
      - ``int``, static
      - 6
@@ -195,19 +199,39 @@ QUADCOIL can automatically generate winding surfaces when used as an equilibrium
      - ``int``, static
      - 5
      - The number of toroidal harmonics in the winding surface.
-   * - ``winding_surface_generator``
-     - ``callable``, static. Must have the correct signatures
-     - ``gen_winding_surface_arc``
-     - The winding surface generator.
+   * - ``winding_surface_mode``
+     - ``str``, static
+     - ``'self-intersection'``
+     - Winding-surface generation mode. ``'self-intersection'`` removes toroidal self-intersections; ``'hull'`` uses a convex-hull rule; ``'uniform'`` keeps a pure normal offset with no post-processing.
+   * - ``winding_theta_mode``
+     - ``str``, static
+     - ``'arclen'``
+     - Poloidal reparameterization for the fit. ``'arclen'`` uses arc length on poloidal cross-sections (robust for concave surfaces); ``'arctan'`` uses angle about the cross-section center of mass (smoother, but can misbehave when the surface is concave).
+   * - ``winding_phi_interp``
+     - ``int``, static
+     - ``2``
+     - Toroidal oversampling factor during the Fourier fit of the offset surface.
+   * - ``winding_theta_interp``
+     - ``int``, static
+     - ``2``
+     - Poloidal oversampling factor during the Fourier fit of the offset surface.
+   * - ``winding_theta_rule_subsample``
+     - ``int``, static
+     - ``2``
+     - Poloidal subsampling stride for the self-intersection check (keeps that step from becoming :math:`O(n_\theta^2)` expensive).
+   * - ``winding_lam_tikhonov``
+     - ``float``, traced
+     - ``1e-5``
+     - Tikhonov regularization weight for the least-squares surface fit.
    * - ⭐ ``winding_stellsym``
      - ``bool``, static
      - ``True``
-     - Whether the winding surface have stellarator symmetry. Equivalent to ``SurfaceRZFourier.stellsym``.
+     - Whether the winding surface has stellarator symmetry. Equivalent to ``SurfaceRZFourier.stellsym``.
 
 Known winding surface
 ~~~~~~~~~~~~~~~~~~~~~
 
-QUADCOIL can also run on a known winding surface for tasks such as blanket optimization. To specify a winding surface, set:
+QUADCOIL can also run on a known winding surface for tasks such as blanket optimization. To specify a winding surface, set ``winding_dofs`` and omit ``plasma_coil_distance``:
 
 .. list-table::
    :header-rows: 1
@@ -218,20 +242,20 @@ QUADCOIL can also run on a known winding surface for tasks such as blanket optim
      - Definition
    * - ❗ ``winding_dofs``
      - ``ndarray``, traced
-     - ``None``, but **must be specified** to auto-generate winding surface.
-     - The winding surface degrees of freedom.
+     - ``None``, but **must be specified** when not auto-generating the winding surface.
+     - The winding surface degrees of freedom (``simsopt.geo.Surface.get_dofs()`` convention).
    * - ❗ ``winding_mpol``
      - ``int``, static
-     - ``6``, but **must change match** ``winding_dofs``.
+     - ``6``, but **must match** ``winding_dofs``.
      - The winding surface poloidal harmonic numbers.
    * - ❗ ``winding_ntor``
      - ``int``, static
-     - ``5``, but **must change match** ``winding_dofs``.
+     - ``5``, but **must match** ``winding_dofs``.
      - The winding surface toroidal harmonic numbers.
    * - ``winding_quadpoints_phi``
      - ``ndarray``, traced
      - ``jnp.linspace(0, 1, 32*nfp, endpoint=False)``
-     - Toroidal quadrature points on the winding surface for evaluating surface integrals. Must be an 1D array that goes from 0 to 1, without the endpoint. Equivalent to SurfaceRZFourier.quadpoints_phi
+     - Toroidal quadrature points on the winding surface for evaluating surface integrals. Must be an 1D array that goes from 0 to 1, without the endpoint. Equivalent to ``simsopt.geo.Surface.quadpoints_phi``.
    * - ``winding_quadpoints_theta``
      - ``ndarray``, traced
      - ``jnp.linspace(0, 1, 34, endpoint=False)``
@@ -239,7 +263,7 @@ QUADCOIL can also run on a known winding surface for tasks such as blanket optim
    * - ⭐ ``winding_stellsym``
      - ``bool``, static
      - ``True``
-     - Whether the winding surface have stellarator symmetry. Equivalent to ``SurfaceRZFourier.stellsym``.
+     - Whether the winding surface has stellarator symmetry. Equivalent to ``simsopt.geo.Surface.stellsym``.
 
 4. Choosing the objective function(s)
 ----------------------------------------
@@ -364,15 +388,43 @@ The following are important numerical settings.
    * - ⭐ ``value_only``
      - ``bool``, static
      - ``False``
-     - When ``True``, skips adjoint gradient calculation and greatly increases speed. 
+     - When ``True``, skips adjoint gradient calculation and greatly increases speed.
+   * - ``solver``
+     - ``str``, static
+     - ``'auglag-lbfgs'``
+     - Optimizer backend. One of ``'auglag-lbfgs'``, ``'ipm'``, ``'slsqp'``. See Section 8 for solver-specific options.
+   * - ``maxiter``
+     - ``int``, static
+     - ``None`` (``10000`` / ``100`` / ``500`` by solver)
+     - Maximum solver iterations. Defaults to ``10000`` for ``'auglag-lbfgs'`` (outer loop), ``100`` for ``'ipm'``, and ``500`` for ``'slsqp'``.
+   * - ``maxiter_inner``
+     - ``int``, static
+     - ``None`` (``500``)
+     - Maximum inner L-BFGS iterations per outer step. Only used by ``'auglag-lbfgs'``.
+   * - ``phi_init_with_nescoil``
+     - ``bool``, static
+     - ``True``
+     - When ``True``, initialize :math:`\Phi_{sv}` from a NESCOIL solve (overrides ``phi_init`` / ``phi_unit``).
+   * - ``precond``
+     - ``str`` or ``None``, static
+     - ``'svd'``
+     - Current-potential preconditioner. One of ``'svd'``, ``'ess'``, ``'svd_K'``, or ``None``.
+   * - ``precond_dims``
+     - ``tuple`` or ``None``, static
+     - ``None``
+     - Optional dimensions used by some preconditioners.
+   * - ``precond_options``
+     - ``dict``, traced
+     - ``{'svd_safe_thres': 0., 'ess_alpha': 1., 'ess_p': 2.}``
+     - Preconditioner hyperparameters.
    * - ``convex``
      - ``bool``, static
      - ``False``
-     - When ``True``, adds positive-semidefinite flags to certain matrix solves to improve speed and accuracy.
+     - When ``True``, tells supported solvers (``'ipm'``, ``'slsqp'``) to treat the problem as convex in their linear algebra. The KKT adjoint path always uses dense least-squares and does not use this flag.
    * - ``verbose``
      - ``int``, static
      - ``0``
-     - Takes int from 0 to 3. 1 prints important info only. 2 prints outer Auglag loops. 3 prints inner Auglag loops.
+     - ``0`` is silent. ``1`` prints important info. ``2`` also prints outer-loop progress. Higher values may print more solver detail.
 
 QUADCOIL performs optimization on non-smooth objectives. For the optimizer to converge well, it has to
 convert the non-smooth problem to a smooth problem. The currently supported values for ``'smoothing'`` are:
@@ -393,7 +445,9 @@ convert the non-smooth problem to a smooth problem. The currently supported valu
      - Accurate adjoint gradients. Faster, lower memory usage, and low constraint count.
      - Less accurate optimum.
 
-We advise using ``'slack'`` for generating coil solutions and ``'approx'`` for quasi-single-stage optimization.
+We advise using ``'approx'`` for most uses. ``'slack'`` may lead to better coil 
+solutions but can significantly increase adjoint cost. ``'slack'`` is recommended
+only with ``solver='auglag-lbfgs'`` and ``value_only=True``.
 
 7. Setting coil metrics
 ---------------------------
@@ -407,7 +461,7 @@ We are almost there. After an optimum coil set :math:`\Phi^*_{sv}` is found, QUA
 - ``objective_weight`` (if enabled)
 - ``constraint_value`` (if enabled)
 
-We still choose these metrics by giving a ``tuple`` containing their names:
+Metrics are selected with ``metric_name``:
 
 .. list-table::
    :header-rows: 1
@@ -417,39 +471,44 @@ We still choose these metrics by giving a ``tuple`` containing their names:
      - Default
      - Definition
    * - ⭐ ``metric_name``
-     - ``tuple`` of ``str``, static
+     - ``None``, ``str``, ``list``, or ``tuple`` of ``str``, static
      - ``('f_B', 'f_K')``
-     - A tuple of metric names.
+     - Metric names from :ref:`available_quantities`. A single ``str`` is treated as a one-element tuple. Lists are converted to tuples before JIT. ``None`` or ``()`` skips metric evaluation and KKT adjoint work.
 
-**Adjoint differentiation:** When ``value_only==False``, QUADCOIL will perform 
-adjoint differentiation for all metrics with respect to plasma DOFs, winding 
-surface parameters, constraints, and weights. Please check the shape 
-of your metrics before running. Although QUADCOIL supports the adjoint
-differentiation for array metrics, doing so can be expensive. 
+**Adjoint differentiation:** When ``value_only=False`` (default), QUADCOIL performs
+ KKT adjoint differentiation for all listed metrics with respect to plasma DOFs,
+winding-surface parameters, constraints, and weights. Array-valued metrics are supported:
+``'value'`` keeps the metric shape, and each gradient leaf has shape
+``(*metric_shape, *param_shape)``. Large fields (for example ``'Bnormal'``) can be
+expensive.
 
-**Skipping adjoint:** When ``value_only==True`` QUADCOIL will skip adjoint 
-differentation for all metrics. This will make QUADCOIL run much faster. 
-We highly recommended this if you don't need gradients. 
+**Skipping adjoint:** When ``value_only=True``, QUADCOIL skips adjoint differentiation
+for all metrics. This makes QUADCOIL much faster. Use this if you do not need gradients.
 
-**Full Jacobian:** To calculate the full Jacobian of the winding surface DOFs 
-w.r.t. plasma DOFs, constraint thresholds, etc., please set ``value_only==True``
-and add ``'phi_dofs'`` to ``metric_name``.
+**Jacobian of** :math:`\Phi_{sv}`: To obtain the solution DOFs and their derivatives
+w.r.t. plasma DOFs, constraint thresholds, etc., include ``'phi_dofs'`` in
+``metric_name`` with ``value_only=False`` (default). Then ``out_dict['phi_dofs']``
+contains ``'value'`` (a copy of ``dofs_opt['phi']``) and ``'grad'``.
 
-8. (Optional) Tweaking the augmented Lagrangian solver
--------------------------------------------------------------------------
+8. (Optional) Tweaking the solver
+---------------------------------
 
-The augmented Lagrangian solver can be fine-tuned by passing a ``solver_options`` dict.
-Any keys omitted from the dict fall back to the values in ``SOLVER_OPTIONS_DEFAULT``.
+Choose the optimizer, iteration limits and solver options.
 
 Example usage::
 
-    out_dict, qp, cp_mn, solve_results = quadcoil(
+    out_dict, qp, dofs_opt, solve_results = quadcoil(
         ...,
+        solver='auglag-lbfgs',
+        maxiter=10000,
+        maxiter_inner=1500,
         solver_options={
-            'maxiter_inner': 1500,
-            'maxiter_tot':   10000,
+            'atol_inner': 1e-6,
+            'rtol_inner': 1e-6,
         },
     )
+
+Shared / top-level options:
 
 .. list-table::
    :header-rows: 1
@@ -458,57 +517,107 @@ Example usage::
      - Type
      - Default
      - Definition
-   * - ``solver_options``
-     - ``dict`` or ``None``, traced
-     - ``None`` (uses ``SOLVER_OPTIONS_DEFAULT``)
-     - Dict of augmented-Lagrangian and inner-solver options (see keys below).
+   * - ``solver``
+     - ``str``, static
+     - ``'auglag-lbfgs'``
+     - Optimizer backend. One of ``'auglag-lbfgs'``, ``'ipm'``, ``'slsqp'``.
+   * - ``maxiter``
+     - ``int``, static
+     - ``None`` (solver-dependent)
+     - Maximum iterations (outer loop for AugLag; total for IPM/SLSQP).
+   * - ``maxiter_inner``
+     - ``int``, static
+     - ``None`` (``500``)
+     - Maximum inner L-BFGS iterations per outer step (``'auglag-lbfgs'`` only).
    * - ``lbfgs_memory``
      - ``int``, static
      - ``10``
-     - L-BFGS history length for the inner solver (must be static for JIT).
-   * - ``solver_options['c_init']``
-     - ``float``
-     - ``1.``
-     - The initial *c* factor. Please see *Constrained Optimization and Lagrange* *Multiplier Methods*, Chapter 3.
-   * - ``solver_options['c_growth_rate']``
-     - ``float``
-     - ``2.``
-     - The growth rate of the *c* factor.
-   * - ``solver_options['xstop_outer']``
-     - ``float``
-     - ``1e-6``
-     - :math:`\Phi_{sv}` stopping criterion of the outer augmented Lagrangian loop. Terminates when the convergence rate falls below this number.
-   * - ``solver_options['ctol_outer']``
-     - ``float``
-     - ``1e-6``
-     - Constraint tolerance of the outer augmented Lagrangian loop. Terminates when both tolerances are satisfied.
-   * - ``solver_options['fstop_inner']``, ``solver_options['fstop_inner_last']``
-     - ``float``
-     - ``1e-6``, ``0.``
-     - :math:`f_{obj}(\Phi_{sv})` stopping criterion of the inner LBFGS iteration. Terminates when the convergence rate falls below this number.
-   * - ``solver_options['xstop_inner']``, ``solver_options['xstop_inner_last']``
-     - ``float``
-     - ``1e-6``, ``1e-10``
-     - :math:`\Phi_{sv}` stopping criterion of the inner LBFGS iteration. Terminates when the convergence rate falls below this number.
-   * - ``solver_options['gtol_inner']``, ``solver_options['gtol_inner_last']``
-     - ``float``
-     - ``1e-6``, ``1e-10``
-     - Gradient tolerance of the inner LBFGS iteration.
-   * - ``solver_options['maxiter_tot']``
-     - ``int``
-     - ``10000``
-     - The maximum number of total LBFGS iterations permitted, summed across all outer iterations.
-   * - ``solver_options['maxiter_inner']``
-     - ``int``
-     - ``1000``
-     - The maximum number of inner iterations permitted.
-   * - ``solver_options['svtol']``
-     - ``float``
-     - ``1e-6``
-     - Singular-value cut-off threshold during preconditioning.
+     - L-BFGS history length for solvers that use L-BFGS.
    * - ``merge_constraints``
      - ``bool``, static
      - ``False``
      - When ``True``, combines compatible constraint evaluations before solving.
+   * - ``solver_options``
+     - ``dict`` or ``None``, traced
+     - ``None`` (uses ``SOLVER_OPTIONS_DEFAULT_DICT[solver]``)
+     - Solver-specific options (see tables below).
+
+``solver='auglag-lbfgs'`` options:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Parameter
+     - Type
+     - Default
+     - Definition
+   * - ``solver_options['c_init']``
+     - ``float``
+     - ``1.``
+     - The initial penalty *c* factor. See *Constrained Optimization and Lagrange Multiplier Methods*, Chapter 3.
+   * - ``solver_options['c_growth_rate']``
+     - ``float``
+     - ``2.``
+     - Multiplicative growth of *c* each outer step.
+   * - ``solver_options['xstop_outer']``
+     - ``float``
+     - ``1e-6``
+     - Outer-loop :math:`x` convergence-rate tolerance.
+   * - ``solver_options['ctol_outer']``
+     - ``float``
+     - ``1e-6``
+     - Outer-loop constraint-violation tolerance.
+   * - ``solver_options['atol_inner']``, ``solver_options['atol_inner_last']``
+     - ``float``
+     - ``1e-6``, ``1e-10``
+     - Absolute gradient tolerance for ordinary / final inner L-BFGS solves.
+   * - ``solver_options['rtol_inner']``, ``solver_options['rtol_inner_last']``
+     - ``float``
+     - ``1e-6``, ``1e-10``
+     - Relative gradient tolerance for ordinary / final inner L-BFGS solves.
+   * - ``solver_options['svtol']``
+     - ``float``
+     - ``1e-6``
+     - Singular-value cut-off used by some preconditioning paths.
+
+``solver='ipm'`` options:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Parameter
+     - Type
+     - Default
+     - Definition
+   * - ``solver_options['tol_kkt']``
+     - ``float``
+     - ``1e-6``
+     - KKT residual tolerance.
+   * - ``solver_options['tau']``
+     - ``float``
+     - ``0.995``
+     - Fraction-to-boundary step-size parameter.
+   * - ``solver_options['delta_init']``, ``['delta_min']``, ``['delta_max']``
+     - ``float``
+     - ``1e-6``, ``1e-10``, ``1e-2``
+     - Initial / min / max barrier or regularization parameters.
+
+``solver='slsqp'`` options:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Parameter
+     - Type
+     - Default
+     - Definition
+   * - ``solver_options['atol']``
+     - ``float``
+     - ``1e-7``
+     - Absolute convergence tolerance.
+   * - ``solver_options['rtol']``
+     - ``float``
+     - ``1e-7``
+     - Relative convergence tolerance.
 
 Thus far, we have successfully run an instance of QUADCOIL. The next section will explain how to interpret the outputs.
