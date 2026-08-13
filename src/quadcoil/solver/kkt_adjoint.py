@@ -18,22 +18,20 @@ The Jacobian of the KKT residual w.r.t. (x, z) is:
     J_KKT = [[H_xx,       A^T     ],
              [diag(z)*A,  diag(g) ]]
 
-For the adjoint, we solve  J_KKT^T v = [grad_x m, 0]  and then
-
-    dm/dy = partial_y m  -  v^T @ (partial_y R)
+``adjoint_kkt`` takes a single batched metric callable that returns a
+flattened concatenation of all metrics. Gradients are obtained with one
+jacrev pass and one dense multi-RHS ``lstsq`` solve. Forward vs adjoint
+mode is selected statically from ``metric_K`` vs ``n_y``.
 """
 
-import jax
 import jax.numpy as jnp
-from jax import grad, jacrev, hessian, jvp, debug
-import lineax as lx
+from jax import grad, jacrev, hessian, debug
 from jax import config as config_jax
 config_jax.update('jax_enable_x64', True)
 
 
 def stationarity_kkt(
     constrained,
-    convex,
     x_opt,
     z_opt,
     y_flat,
@@ -51,7 +49,6 @@ def stationarity_kkt(
     Parameters
     ----------
     constrained : bool
-    convex : bool
     x_opt : ndarray, shape (n,)
         Primal solution.
     z_opt : ndarray, shape (m,) or None
@@ -70,6 +67,8 @@ def stationarity_kkt(
     Returns
     -------
     stationarity_data : dict
+        Unconstrained keys: ``H_mat``, ``H_xy``.
+        Constrained keys: ``J_KKT_mat``, ``dRdy``, ``z_opt``, ``n_x``, ``m_g``.
     '''
     stationarity_data = {
         'constrained': constrained,
@@ -81,20 +80,12 @@ def stationarity_kkt(
             f_obj, _, _, _, _, _ = f_g_ineq_h_eq_from_y(unravel_y(y))
             return f_obj(flat_x_to_dofs(x))
 
-        grad_x_f = jacrev(f_xy, argnums=0)
-        tags = (lx.symmetric_tag, lx.positive_semidefinite_tag) if convex \
-            else (lx.symmetric_tag,)
-        vihp_hess = lx.JacobianLinearOperator(
-            grad_x_f, x_opt, args=y_flat, tags=tags,
-        )
-        stationarity_data['vihp_hess'] = vihp_hess
-        stationarity_data['grad_y_stationarity'] = jacrev(f_xy, argnums=1)
-
-        if verbose > 0:
-            hess_mat = jacrev(grad_x_f)(x_opt, y_flat)
-            hess_cond = jnp.linalg.cond(hess_mat)
-            stationarity_data['hess_cond'] = hess_cond
-            debug.print('KKT unconstrained Hessian cond: {x}', x=hess_cond)
+        H_mat = hessian(lambda x: f_xy(x, y_flat))(x_opt)  # (n_x, n_x)
+        H_xy = jacrev(
+            lambda y: grad(lambda x: f_xy(x, y))(x_opt)
+        )(y_flat)  # (n_x, n_y)
+        stationarity_data['H_mat'] = H_mat
+        stationarity_data['H_xy'] = H_xy
 
     else:
         n_x = x_opt.shape[0]
@@ -137,100 +128,98 @@ def stationarity_kkt(
             g_v = g_sc(x)
             return jnp.concatenate([grad_x_L, z * g_v])
 
-        stationarity_data['R_y'] = R_y
-
-        if verbose > 0:
-            J_cond = jnp.linalg.cond(J_KKT_mat)
-            J_rank = jnp.linalg.matrix_rank(J_KKT_mat)
-            stationarity_data['J_KKT_cond'] = J_cond
-            stationarity_data['J_KKT_rank'] = J_rank
-            debug.print(
-                'KKT Jacobian — rank: {r}, cond: {c}',
-                r=J_rank, c=J_cond,
-            )
+        dRdy = jacrev(R_y)(y_flat)  # (n_w, n_y)
+        stationarity_data['dRdy'] = dRdy
 
     return stationarity_data
 
 
 def adjoint_kkt(
-    f_metric,
+    f_metrics_flat,
+    metric_K,
     stationarity_data,
     y_flat,
-    implicit_linear_solver,
     verbose,
 ):
     r'''
-    Compute dm/dy via the KKT adjoint system.
+    Compute dm/dy for a batch of flattened metrics via the KKT system.
 
     Unconstrained:
-        H v = grad_x m,  then  dm/dy = grad_y m - v^T (d/dy grad_x f)
+        H V^T = J_x^T,  then  dm/dy = J_y - V @ H_xy
+        (or the forward form when ``metric_K > n_y``).
 
     Constrained:
-        J_KKT^T v = [grad_x m, 0],  then  dm/dy = grad_y m - v^T (dR/dy)
+        J_KKT^T V^T = [J_x, 0]^T,  then  dm/dy = J_y - V @ dRdy
+        (or the forward form when ``metric_K > n_y``).
 
     Parameters
     ----------
-    f_metric : Callable
-        ``(x_flat, y_flat) -> scalar``
+    f_metrics_flat : Callable
+        ``(x_flat, y_flat) -> (K_tot,)`` — all metrics flattened and
+        concatenated into one vector.
+    metric_K : int
+        ``K_tot``. Must be a concrete Python int (static under JIT).
     stationarity_data : dict
         Output of :func:`stationarity_kkt`.
     y_flat : ndarray
-    implicit_linear_solver : lineax.AbstractLinearSolver
     verbose : int
 
     Returns
     -------
-    metric_value : scalar
-    dfdy_arr : ndarray, shape (ny,)
+    all_values : ndarray, shape (K_tot,)
+    dfdy : ndarray, shape (K_tot, n_y)
     debug_info : dict
     '''
     constrained = stationarity_data['constrained']
     x_opt = stationarity_data['x_flat_precond']
+    n_y = y_flat.shape[0]
 
-    grad_x_m = jacrev(f_metric, argnums=0)(x_opt, y_flat)
-    grad_y_m = jacrev(f_metric, argnums=1)(x_opt, y_flat)
-    metric_value = f_metric(x_opt, y_flat)
+    all_values = f_metrics_flat(x_opt, y_flat)  # (K_tot,)
+    J_x = jacrev(f_metrics_flat, argnums=0)(x_opt, y_flat)  # (K_tot, n_x)
+    J_y = jacrev(f_metrics_flat, argnums=1)(x_opt, y_flat)  # (K_tot, n_y)
 
     debug_info = {}
 
     if not constrained:
-        vihp_hess = stationarity_data['vihp_hess']
-        vihp = lx.linear_solve(
-            vihp_hess, grad_x_m, solver=implicit_linear_solver,
-        ).value
-
-        grad_y_stat = stationarity_data['grad_y_stationarity']
-        grad_y_stat_at_y = lambda x, y_flat=y_flat: grad_y_stat(x, y_flat)
-        _, dfdy1 = jvp(grad_y_stat_at_y, primals=[x_opt], tangents=[vihp])
-        dfdy_arr = -dfdy1 + grad_y_m
-
-        if verbose > 0:
-            debug_info['vihp'] = vihp
+        H_mat = stationarity_data['H_mat']  # (n_x, n_x)
+        H_xy = stationarity_data['H_xy']    # (n_x, n_y)
+        if metric_K <= n_y:
+            # Adjoint: factor once, K_tot RHS
+            V = jnp.linalg.lstsq(H_mat, J_x.T)[0].T  # (K_tot, n_x)
+            dfdy = J_y - V @ H_xy                     # (K_tot, n_y)
+            if verbose > 0:
+                debug_info['vihp'] = V
+        else:
+            # Forward: factor once, n_y RHS
+            S = jnp.linalg.lstsq(H_mat, -H_xy)[0]  # (n_x, n_y)
+            dfdy = J_y + J_x @ S                    # (K_tot, n_y)
+            if verbose > 0:
+                debug_info['S'] = S
 
     else:
-        J_KKT_mat = stationarity_data['J_KKT_mat']
+        J_KKT_mat = stationarity_data['J_KKT_mat']  # (n_w, n_w)
+        dRdy = stationarity_data['dRdy']            # (n_w, n_y)
         n_x = stationarity_data['n_x']
         m_g = stationarity_data['m_g']
-        R_y = stationarity_data['R_y']
+        if metric_K <= n_y:
+            # Adjoint: J_KKT^T V^T = [J_x, 0]^T
+            rhs = jnp.concatenate(
+                [J_x, jnp.zeros((metric_K, m_g))], axis=1,
+            ).T  # (n_w, K_tot)
+            V = jnp.linalg.lstsq(J_KKT_mat.T, rhs)[0].T  # (K_tot, n_w)
+            dfdy = J_y - V @ dRdy                         # (K_tot, n_y)
+            if verbose > 0:
+                solve_err = jnp.linalg.norm(J_KKT_mat.T @ V.T - rhs)
+                debug_info['v'] = V
+                debug_info['J_KKT_solve_err'] = solve_err
+                debug.print(
+                    'KKT adjoint solve error: {e}', e=solve_err,
+                )
+        else:
+            # Forward: J_KKT S = -dRdy
+            S = jnp.linalg.lstsq(J_KKT_mat, -dRdy)[0]  # (n_w, n_y)
+            dfdy = J_y + J_x @ S[:n_x]                  # (K_tot, n_y)
+            if verbose > 0:
+                debug_info['S'] = S
 
-        rhs = jnp.concatenate([grad_x_m, jnp.zeros(m_g)])
-        J_KKT_T_op = lx.MatrixLinearOperator(J_KKT_mat.T)
-        v = lx.linear_solve(
-            J_KKT_T_op, rhs, solver=implicit_linear_solver,
-        ).value
-
-        _, vjp_fn = jax.vjp(R_y, y_flat)
-        dRdy_T_v = vjp_fn(v)[0]
-        dfdy_arr = grad_y_m - dRdy_T_v
-
-        if verbose > 0:
-            solve_err = jnp.linalg.norm(J_KKT_mat.T @ v - rhs)
-            debug_info['v'] = v
-            debug_info['J_KKT_solve_err'] = solve_err
-            debug_info['J_KKT_cond'] = stationarity_data.get('J_KKT_cond', jnp.nan)
-            debug_info['J_KKT_rank'] = stationarity_data.get('J_KKT_rank', jnp.nan)
-            debug.print(
-                'KKT adjoint solve error: {e}', e=solve_err,
-            )
-
-    return metric_value, dfdy_arr, debug_info
+    return all_values, dfdy, debug_info

@@ -355,7 +355,7 @@ The following are important numerical settings.
      - Definition
    * - ⭐ ``smoothing``
      - ``str``, static
-     - ``'slack'``
+     - ``'approx'``
      - Smoothing method for non-smooth problems.
    * - ``smoothing_params``
      - ``dict``, traced
@@ -420,6 +420,20 @@ We still choose these metrics by giving a ``tuple`` containing their names:
      - ``tuple`` of ``str``, static
      - ``('f_B', 'f_K')``
      - A tuple of metric names.
+
+**Adjoint differentiation:** When ``value_only==False``, QUADCOIL will perform 
+adjoint differentiation for all metrics with respect to plasma DOFs, winding 
+surface parameters, constraints, and weights. Please check the shape 
+of your metrics before running. Although QUADCOIL supports the adjoint
+differentiation for array metrics, doing so can be expensive. 
+
+**Skipping adjoint:** When ``value_only==True`` QUADCOIL will skip adjoint 
+differentation for all metrics. This will make QUADCOIL run much faster. 
+We highly recommended this if you don't need gradients. 
+
+**Full Jacobian:** To calculate the full Jacobian of the winding surface DOFs 
+w.r.t. plasma DOFs, constraint thresholds, etc., please set ``value_only==True``
+and add ``'phi_dofs'`` to ``metric_name``.
 
 8. (Optional) Tweaking the augmented Lagrangian solver
 -------------------------------------------------------------------------
@@ -496,9 +510,5 @@ Example usage::
      - ``bool``, static
      - ``False``
      - When ``True``, combines compatible constraint evaluations before solving.
-   * - ``implicit_linear_solver``
-     - ``lineax.AbstractLinearSolver`` or ``None``, static
-     - ``None``
-     - Linear solver used for implicit differentiation.
 
 Thus far, we have successfully run an instance of QUADCOIL. The next section will explain how to interpret the outputs.

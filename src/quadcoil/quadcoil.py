@@ -21,7 +21,7 @@ from quadcoil.solver import (
 from quadcoil.wrapper import _parse_objectives, _parse_constraints, _resolve_quadpoints
 from functools import partial
 from quadcoil.quantity import Bnormal, K_cyl
-from jax import jacfwd, jacrev, jit, block_until_ready, debug, flatten_util, eval_shape, grad
+from jax import jacfwd, jacrev, jit, block_until_ready, debug, flatten_util, eval_shape, grad, vmap, tree_util
 from jax import config as config_jax
 import jax.numpy as jnp
 import lineax as lx
@@ -103,7 +103,6 @@ QUADCOIL_STATIC_ARGNAMES=[
     'value_only',
     'convex',
     'merge_constraints',
-    'implicit_linear_solver',
     # - Solver options
     'solver',
     'lbfgs_memory',
@@ -206,9 +205,6 @@ def _quadcoil_pure(
     lbfgs_memory:int=10, # applicable for 'slsqp' only
     maxiter:int=None,
     maxiter_inner:int=None, # applicable for 'auglag-lbfgs' only
-
-    # - Experimental
-    implicit_linear_solver=None,
 ):
     r'''The jitted part of quadcoil().
     '''
@@ -252,13 +248,12 @@ def _quadcoil_pure(
         plasma_coil_distance=plasma_coil_distance,
         winding_dofs=winding_dofs,
     )
-    if isinstance(metric_name, str):
+    if metric_name is None:
+        metric_name = ()
+    elif isinstance(metric_name, str):
         metric_name = (metric_name,)
-    if implicit_linear_solver is None:
-        # The bool conversion here is to make sure that stellsym is bool instead 
-        # of numpy bools. This is because desc.Equilibrium.sym is a numpy.bool
-        # and can cause issues with lineax.
-        implicit_linear_solver = lx.AutoLinearSolver(well_posed=False) # bool(stellsym))
+    else:
+        metric_name = tuple(metric_name)
     # Type checking and error throwing
     _input_checking(
         objective_name=objective_name,
@@ -767,17 +762,22 @@ def _quadcoil_pure(
             )
             
     # ----- Calculating metrics and gradients -----
-    
-    if value_only: 
+    # If nescoil initial conditions are used, output it
+    # solution too.
+    if phi_init_with_nescoil:
+        solve_results['dofs_nescoil'] = {'phi': phi_init}
+
+    # value_only or empty metric_name: skip KKT / adjoint work.
+    if value_only or len(metric_name) == 0:
         out_dict = {}
         for metric_name_i in metric_name:
             if metric_name_i == 'f_obj':
                 metric_result_i = f_obj(qp_temp=qp, x=dofs_opt)
             else:
                 metric_result_i = get_quantity(metric_name_i)(qp, dofs_opt)
-                out_dict[metric_name_i] = {
-                    'value': metric_result_i
-                }
+            out_dict[metric_name_i] = {
+                'value': metric_result_i
+            }
             if verbose>0:
                 debug.print('Metric evaluated. {x} = {y}', x=metric_name_i, y=metric_result_i)
         return out_dict, qp, dofs_opt, solve_results
@@ -812,7 +812,6 @@ def _quadcoil_pure(
 
     stationarity_data = stationarity_kkt(
         constrained=constrained,
-        convex=convex,
         x_opt=x_opt,
         z_opt=z_opt,
         y_flat=y_flat,
@@ -822,37 +821,58 @@ def _quadcoil_pure(
         verbose=verbose,
     )
 
-    out_dict = {}
-
-    # If nescoil initial conditions are used, output it
-    # solution too.
-    if phi_init_with_nescoil:
-        out_dict['dofs_nescoil'] = {'phi': phi_init}
-
+    # Evaluate metrics once for shapes / sizes, then batch into one adjoint.
+    metric_shapes = []
+    metric_K_list = []
     for metric_name_i in metric_name:
         if metric_name_i == 'f_obj':
-            f_metric = lambda xp, y: f_obj(
-                qp_temp=y_to_qp(unravel_y(y)),
-                x=flat_x_to_dofs(xp)
-            )
+            v = f_obj(qp_temp=qp, x=dofs_opt)
         else:
-            f_metric = lambda xp, y: get_quantity(metric_name_i)(
-                y_to_qp(unravel_y(y)),
-                flat_x_to_dofs(xp)
+            v = get_quantity(metric_name_i)(qp, dofs_opt)
+        metric_shapes.append(jnp.shape(v))
+        metric_K_list.append(int(jnp.size(v)))
+    K_tot = sum(metric_K_list)
+
+    def f_metrics_flat(xp, y):
+        qp_temp = y_to_qp(unravel_y(y))
+        dofs_temp = flat_x_to_dofs(xp)
+        parts = []
+        for n in metric_name:
+            if n == 'f_obj':
+                v = f_obj(qp_temp=qp_temp, x=dofs_temp)
+            else:
+                v = get_quantity(n)(qp_temp, dofs_temp)
+            parts.append(jnp.atleast_1d(v).ravel())
+        return jnp.concatenate(parts)
+
+    all_values, dfdy, debug_info = adjoint_kkt(
+        f_metrics_flat, K_tot, stationarity_data, y_flat, verbose,
+    )
+
+    out_dict = {}
+    offset = 0
+    for i, metric_name_i in enumerate(metric_name):
+        k = metric_K_list[i]
+        shape_i = metric_shapes[i]
+        val_flat = all_values[offset:offset + k]
+        dfdy_rows = dfdy[offset:offset + k]  # (k, n_y)
+        if k == 1 and shape_i == ():
+            metric_result_i = val_flat[0]
+            dfdy_pytree = unravel_y(dfdy_rows[0])
+        else:
+            metric_result_i = val_flat.reshape(shape_i)
+            dfdy_pytree = vmap(unravel_y)(dfdy_rows)
+            # Leading axis k -> original metric shape.
+            dfdy_pytree = tree_util.tree_map(
+                lambda g, s=shape_i: g.reshape(s + g.shape[1:]),
+                dfdy_pytree,
             )
-        metric_result_i, dfdy_arr, debug_info_i = adjoint_kkt(
-            f_metric=f_metric,
-            stationarity_data=stationarity_data,
-            y_flat=y_flat,
-            implicit_linear_solver=implicit_linear_solver,
-            verbose=verbose,
-        )
-        dfdy_dict = {f"df_d{key}": value for key, value in unravel_y(dfdy_arr).items()}
+        dfdy_dict = {f"df_d{key}": value for key, value in dfdy_pytree.items()}
         if verbose > 0:
             grad_avgs = {}
-            for k in dfdy_dict:
-                item_k = jnp.atleast_1d(dfdy_dict[k])
-                grad_avgs[k] = (jnp.min(item_k), jnp.max(item_k))
+            for key_g in dfdy_dict:
+                item_k = jnp.atleast_1d(dfdy_dict[key_g])
+                grad_avgs[key_g] = (jnp.min(item_k), jnp.max(item_k))
             debug.print(
                 '* Metric evaluated.\n'
                 '    {x} = {y}\n'
@@ -866,7 +886,8 @@ def _quadcoil_pure(
             'grad': dfdy_dict,
         }
         if verbose > 0:
-            out_dict[metric_name_i].update(debug_info_i)
+            out_dict[metric_name_i].update(debug_info)
+        offset += k
     return out_dict, qp, dofs_opt, solve_results
 
 
@@ -951,8 +972,12 @@ def quadcoil(**kwargs):
         (Traced) The normalization constants of the constraints, so that ``f/constraint_unit`` is :math:`O(1)` May contain ``None``.
     constraint_value : ndarray, optional, default=()
         (Traced) The constraint thresholds. Derivatives will be calculated w.r.t. this quantity.
-    metric_name : tuple, optional, default=('f_B', 'f_K')
-        (Static) The names of the functions to diagnose the coil configurations with. Will be differentiated w.r.t. other input quantities.
+    metric_name : None, str, list, or tuple, optional, default=('f_B', 'f_K')
+        (Static) The names of the functions to diagnose the coil configurations
+        with. Will be differentiated w.r.t. other input quantities.
+        ``None`` or ``()`` skips metric evaluation (and KKT adjoint work).
+        A single ``str`` is treated as a one-element tuple. Lists are converted
+        to tuples before JIT (static args must be hashable).
     convex : bool, optional, default=False
         (Static) Whether to assume the problem is convex. When ``True``, QUADCOIL will apply some limited simplifications.
     solver_options : dict, optional, default=None
@@ -980,14 +1005,21 @@ def quadcoil(**kwargs):
     maxiter_inner : int, optional, default=None
         (Static) Maximum inner L-BFGS iterations per outer step (default 500).
         Only used by ``'auglag-lbfgs'``.
-    implicit_linear_solver : lineax.AbstractLinearSolver, optional, default=lineax.AutoLinearSolver(well_posed=True)
-        (Static) The lineax linear solver choice for implicit differentiation.
     value_only : bool, optional, default=False
         (Static) When ``True``, skip gradient calculations.
     verbose : int, optional, default=False
         (Static) Print general info when ``verbose==1``. 
         Print inside the outer iteration loop, too, when ``verbose==2``.
     '''
+    # Normalize metric_name before JIT: lists are unhashable static args.
+    if 'metric_name' in kwargs:
+        metric_name = kwargs['metric_name']
+        if metric_name is None:
+            kwargs['metric_name'] = ()
+        elif isinstance(metric_name, str):
+            kwargs['metric_name'] = (metric_name,)
+        else:
+            kwargs['metric_name'] = tuple(metric_name)
     try:
         out_dict, qp, dofs_opt, solve_results = _quadcoil_pure(**kwargs)
     except RuntimeError as e:
@@ -1016,17 +1048,6 @@ def quadcoil(**kwargs):
         else:
             raise e
     return out_dict, qp, dofs_opt, solve_results
-
-def _choose_fwd_rev(func, n_in, n_out, argnums):
-    '''
-    Choosing forward or reverse-mode AD based on the input and 
-    output size of a function.
-    '''
-    if n_out > n_in:
-        out = jacfwd(func, argnums=argnums)
-    else:
-        out = jacrev(func, argnums=argnums)
-    return out
 
 def _precondition_coordinate_by_matrix(hess):
     '''

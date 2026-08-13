@@ -5,4 +5,5 @@ from .force import *
 from .current import *
 from .helpers import *
 from .dipole import *
+from .misc import *
 from .quantity import *
