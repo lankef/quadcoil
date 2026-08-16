@@ -9,6 +9,7 @@ sheet current using the Robin & Volpe (2022) formula. This module evaluates the
 '''
 import jax.numpy as jnp
 import numpy as np
+from jax import jit
 from .current import _K
 from .quantity import _Quantity
 from quadcoil import project_arr_cylindrical
@@ -316,6 +317,7 @@ def _integrate_B_self(
     )
     return single_results, double_results
 
+@jit 
 def _B_self(qp, dofs):
     r'''
     Calculates the regularized sheet-current self-field's x, y, z components on
@@ -340,6 +342,7 @@ def _B_self(qp, dofs):
     )
     return single_results + double_results
 
+@jit 
 def _B_self_cyl(qp, dofs):
     r'''
     Calculates the regularized sheet-current self-field's R, Phi, Z components
@@ -366,8 +369,18 @@ def _B_self_cyl(qp, dofs):
         qp.eval_surface.gamma(),
         _B_self(qp, dofs),
     )
-
 _B_self_desc_unit = lambda scales: scales["B"]
+
+@jit 
+def _B2_self(qp, dofs):
+    return(jnp.sum(_B_self(qp, dofs)**2, axis=-1))
+_B2_self_desc_unit = lambda scales: _B_self_desc_unit(scales)**2
+
+@jit 
+def _f_B_self(qp, dofs):
+    B2_val = _B2_self(qp, dofs)
+    return qp.eval_surface.integrate(B2_val/2)*qp.nfp
+_f_B_self_desc_unit = lambda scales: _B_self_desc_unit(scales)**2 * scales["R0"] * scales["a"]
 
 # ----- Wrappers -----
 # Linear 3d vector fields. Like winding_surface_B, setting their components
@@ -384,9 +397,23 @@ B_self_cyl = _Quantity.generate_c2(
     desc_unit=_B_self_desc_unit,
 )
 
-f_max_B_self_cyl = _Quantity.generate_linf_norm(
-    func=_B_self_cyl,
-    aux_argname='max_B_self_cyl',
-    desc_unit=_B_self_desc_unit,
+B2_self = _Quantity.generate_c2(
+    func=_B2_self, 
+    compatibility=['<='], 
+    desc_unit=_B2_self_desc_unit,
+)
+
+# This is a positive definite quadratic scalar. 
+f_B_self = _Quantity.generate_c2(
+    func=_f_B_self, 
+    compatibility=['f', '<='], 
+    desc_unit=_f_B_self_desc_unit,
+)
+
+f_max_B2_self = _Quantity.generate_linf_norm(
+    func=_B2_self, 
+    aux_argname='scaled_max_B2_self', 
+    desc_unit=_B2_self_desc_unit,
+    square=False,
     auto_stellsym=True,
 )
