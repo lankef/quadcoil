@@ -112,6 +112,8 @@ QUADCOIL_STATIC_ARGNAMES=[
     'verbose',
     # Smoothing parameters:
     'smoothing',
+    # Sidecar outputs:
+    'export_winding_dofs',
 ]
 @partial(jit, static_argnames=QUADCOIL_STATIC_ARGNAMES)
 def _quadcoil_pure(
@@ -196,6 +198,7 @@ def _quadcoil_pure(
     smoothing='approx',
     smoothing_params={'lse_epsilon': 1e-3},
     convex:bool=False,
+    export_winding_dofs:bool=False,
 
     # - Solver options
     verbose:int=0,
@@ -780,6 +783,8 @@ def _quadcoil_pure(
             }
             if verbose>0:
                 debug.print('Metric evaluated. {x} = {y}', x=metric_name_i, y=metric_result_i)
+        if export_winding_dofs:
+            out_dict['winding_surface_dofs'] = {'value': qp.winding_surface.dofs}
         return out_dict, qp, dofs_opt, solve_results
     # flatten the y dictionary. This will simplify the code structure a bit
     y_flat, unravel_y = flatten_util.ravel_pytree(y_dict_current)
@@ -888,6 +893,36 @@ def _quadcoil_pure(
         if verbose > 0:
             out_dict[metric_name_i].update(debug_info)
         offset += k
+    if export_winding_dofs:
+        w_val = qp.winding_surface.dofs
+        n_winding = len(w_val)
+        zero_dfdy = unravel_y(jnp.zeros_like(y_flat))
+        zero_grad = {
+            f"df_d{k}": jnp.zeros((n_winding,) + jnp.shape(v))
+            for k, v in zero_dfdy.items()
+        }
+        if plasma_coil_distance is not None:
+            dw_dplasma = jacrev(
+                lambda pdofs: y_to_qp(
+                    {**y_dict_current, 'plasma_dofs': pdofs}
+                ).winding_surface.dofs
+            )(plasma_dofs)
+            dw_dd = jacrev(
+                lambda d: y_to_qp(
+                    {**y_dict_current, 'plasma_coil_distance': d}
+                ).winding_surface.dofs
+            )(plasma_coil_distance)
+            w_grad = {
+                **zero_grad,
+                'df_dplasma_dofs': dw_dplasma,
+                'df_dplasma_coil_distance': dw_dd,
+            }
+        else:
+            w_grad = {
+                **zero_grad,
+                'df_dwinding_dofs': jnp.eye(n_winding),
+            }
+        out_dict['winding_surface_dofs'] = {'value': w_val, 'grad': w_grad}
     return out_dict, qp, dofs_opt, solve_results
 
 
