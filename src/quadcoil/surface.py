@@ -607,14 +607,6 @@ class SurfaceJAX:
         theta_grid_tw = theta_grid_tw.T
 
         phi_grid_bisect_tw = bisect_phi(offset_surface_tw, plane_data_tw)
-
-        # try:
-        #     phi_grid_bisect_tw = bisect_phi(offset_surface_tw, plane_data_tw)
-        # except Exception as e:
-        #     raise ValueError(
-        #         'Winding surface smoothing failed. '
-        #         'There may be toroidal self-intersection.'
-        #     ) from e
         gamma_pol_bisect_tw = offset_surface_tw.gamma_at_point(phi_grid_bisect_tw, theta_grid_tw)
 
         # Shapes: [n_phi_target+1, n_theta_target]
@@ -731,7 +723,6 @@ class SurfaceJAX:
 
         # Remove the toroidal wrapping to get the actual least-squares fit points.
         gamma_pol_bisect = gamma_pol_bisect_tw[:-1, :]
-
         return cls._fit_dofs_from_gamma(
             phi_target=phi_target,
             theta_target=theta_target,

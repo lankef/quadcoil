@@ -294,15 +294,20 @@ def _integrate_B_self(
     dist_reshaped = dist.reshape(shape_integral)
     denom_reshaped = double_layer_denom.reshape(shape_integral)
 
+    # Replace the self-interaction distances (which are ~0) with 1.0 before
+    # dividing. The outer jnp.where already zeros these entries in the primal,
+    # but jnp.where alone does not stop NaNs from the discarded branch
+    # polluting the gradient; dividing by 1.0 here keeps the derivative finite.
+    safe_dist = jnp.where(self_mask, 1.0, dist_reshaped)
     single_kernel_da = jnp.where(
         self_mask,
         0.0,
-        da_x[None, None, None, :, :] / dist_reshaped
+        da_x[None, None, None, :, :] / safe_dist
     )
     double_kernel_da = jnp.where(
         self_mask,
         0.0,
-        da_x[None, None, None, :, :] * denom_reshaped / (dist_reshaped**3)
+        da_x[None, None, None, :, :] * denom_reshaped / (safe_dist**3)
     )
 
     single_results = jnp.einsum(
