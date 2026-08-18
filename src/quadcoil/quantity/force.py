@@ -7,7 +7,7 @@ from .quantity import _Quantity
 from quadcoil import project_arr_cylindrical
 
 def _force_cyl(qp, dofs):
-    jnp.cross(K_cyl(qp, dofs), _B_self_cyl(qp, dofs), axis=-1)
+    return jnp.cross(K_cyl(qp, dofs), _B_self_cyl(qp, dofs), axis=-1)
 
 # N = T * A * m = T * A/m * m^2
 _force_desc_unit = lambda scales: scales["B"] * _K_desc_unit(scales) * scales["a"]**2
@@ -252,16 +252,27 @@ def _integrate_force(
     dist_reshaped = dist.reshape(shape_integral)
     denom_reshaped = double_layer_denom.reshape(shape_integral)
 
+    # Points to drop from the singular quadrature: the index-diagonal
+    # self-interaction, plus any *other* source point that coincides with the
+    # evaluation point (dist == 0). The latter is not caught by the index-based
+    # self_mask and occurs, e.g., when the winding surface pinches or grazes
+    # itself, so that two distinct grid points map to the same location.
+    # Without this guard those points give 0/0 -> NaN in the kernels.
+    singular_mask = self_mask | (dist_reshaped == 0.0)
+    # safe_dist is never zero, so the discarded branch of jnp.where stays finite
+    # in both the primal and the gradient; the entries are masked out anyway.
+    safe_dist = jnp.where(singular_mask, 1.0, dist_reshaped)
+
     # Computing the kernels with masks.
     single_kernel_da = jnp.where(
-        self_mask,
+        singular_mask,
         0.0,
-        da_x[None, None, None, :, :] / dist_reshaped
+        da_x[None, None, None, :, :] / safe_dist
     )
     double_kernel_da = jnp.where(
-        self_mask,
+        singular_mask,
         0.0,
-        da_x[None, None, None, :, :] * denom_reshaped / (dist_reshaped**3)
+        da_x[None, None, None, :, :] * denom_reshaped / (safe_dist**3)
     )
     
     # Original contractions

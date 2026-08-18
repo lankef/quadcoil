@@ -294,18 +294,25 @@ def _integrate_B_self(
     dist_reshaped = dist.reshape(shape_integral)
     denom_reshaped = double_layer_denom.reshape(shape_integral)
 
-    # Replace the self-interaction distances (which are ~0) with 1.0 before
-    # dividing. The outer jnp.where already zeros these entries in the primal,
-    # but jnp.where alone does not stop NaNs from the discarded branch
-    # polluting the gradient; dividing by 1.0 here keeps the derivative finite.
-    safe_dist = jnp.where(self_mask, 1.0, dist_reshaped)
+    # Points to drop from the singular quadrature: the index-diagonal
+    # self-interaction, plus any *other* source point that happens to coincide
+    # with the evaluation point (dist == 0). The latter is not caught by the
+    # index-based self_mask and occurs, e.g., when the winding surface pinches
+    # or grazes itself, so that two distinct grid points map to the same
+    # location. Without this guard those points give 0/0 -> NaN in the kernels.
+    singular_mask = self_mask | (dist_reshaped == 0.0)
+    # Replace the singular distances (which are ~0) with 1.0 before dividing.
+    # The outer jnp.where already zeros these entries in the primal, but
+    # jnp.where alone does not stop NaNs from the discarded branch polluting
+    # the gradient; dividing by 1.0 here keeps the derivative finite.
+    safe_dist = jnp.where(singular_mask, 1.0, dist_reshaped)
     single_kernel_da = jnp.where(
-        self_mask,
+        singular_mask,
         0.0,
         da_x[None, None, None, :, :] / safe_dist
     )
     double_kernel_da = jnp.where(
-        self_mask,
+        singular_mask,
         0.0,
         da_x[None, None, None, :, :] * denom_reshaped / (safe_dist**3)
     )
