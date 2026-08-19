@@ -243,6 +243,89 @@ def _B_self_integrands_xyz(qp, dofs, winding_surface_mode=False):
     integrand_double = 1e-7 * K_cross_n_x
     return integrand_single, integrand_double
 
+def _singular_layer_kernels(gamma_y, gamma_x, unitnormal_x, da_x, nfp):
+    r'''
+    Returns the quadrature-weighted single- and double-layer kernels for a
+    regularized sheet-current singular integral:
+
+    .. math::
+
+        \text{single\_kernel\_da}_{ij,k,lm}
+            = \frac{da(\mathbf r''_{klm})}{|\mathbf r'_{ij} - \mathbf r''_{klm}|},
+        \quad
+        \text{double\_kernel\_da}_{ij,k,lm}
+            = \frac{da(\mathbf r''_{klm})\,
+              (\mathbf r'_{ij}-\mathbf r''_{klm})\cdot\mathbf n''_{klm}}
+              {|\mathbf r'_{ij}-\mathbf r''_{klm}|^3}.
+
+    Self-interaction pairs (index-diagonal with ``fp == 0``) and coincident
+    off-diagonal pairs (``dist_sq == 0``, e.g. when the eval grid shares a
+    point with the winding surface) are both masked to zero.  The safe-sqrt
+    approach (``sqrt(where(mask, 1, dist_sq))``) keeps the JAX-computed
+    derivative finite at the masked entries without any ``1e-10`` fudge.
+
+    Parameters
+    ----------
+    gamma_y : ndarray, shape ``(n_phiy, n_thetay, 3)``
+        Evaluation points in xyz.
+    gamma_x : ndarray, shape ``(n_phix_1fp * nfp, n_thetax, 3)``
+        Source points in xyz spanning ``nfp`` field periods.
+    unitnormal_x : ndarray, shape ``(n_phix_1fp * nfp, n_thetax, 3)``
+        Unit normal at every source point.
+    da_x : ndarray, shape ``(n_phix_1fp, n_thetax)``
+        Surface-area element on the **one-field-period** source grid.
+        ``gamma_x.shape[0]`` must equal ``da_x.shape[0] * nfp``.
+    nfp : int
+        Number of field periods spanned by ``gamma_x``.
+
+    Returns
+    -------
+    single_kernel_da : ndarray, shape ``(n_phiy, n_thetay, nfp, n_phix_1fp, n_thetax)``
+    double_kernel_da : ndarray, shape ``(n_phiy, n_thetay, nfp, n_phix_1fp, n_thetax)``
+    '''
+    diff = gamma_y[:, :, None, None, :] - gamma_x[None, None, :, :, :]
+
+    shapey = list(diff.shape[:2])
+    n_phix_1fp, n_thetax = da_x.shape[0], da_x.shape[1]
+    shape_integral = shapey + [nfp, n_phix_1fp, n_thetax]
+
+    n_phiy, n_thetay = shapey
+    fp_idx   = np.arange(nfp)[None, None, :, None, None]
+    phi_xidx = np.arange(n_phix_1fp)[None, None, None, :, None]
+    th_xidx  = np.arange(n_thetax)[None, None, None, None, :]
+    phi_yidx = np.arange(n_phiy)[:, None, None, None, None]
+    th_yidx  = np.arange(n_thetay)[None, :, None, None, None]
+    self_mask = (
+        (fp_idx == 0)
+        & (phi_xidx == phi_yidx)
+        & (th_xidx == th_yidx)
+    )
+
+    dist_sq = jnp.sum(diff**2, axis=-1).reshape(shape_integral)
+    double_layer_denom = jnp.sum(
+        diff * unitnormal_x[None, None, :, :, :], axis=-1
+    ).reshape(shape_integral)
+
+    # Also mask coincident off-diagonal pairs (dist_sq == 0) that arise when
+    # eval_surface shares a grid point with the winding surface or when the
+    # winding surface pinches.  The index-based self_mask alone does not catch
+    # these when gamma_y is not a slice of gamma_x.
+    singular_mask = self_mask | (dist_sq == 0.0)
+    safe_dist = jnp.sqrt(jnp.where(singular_mask, 1.0, dist_sq))
+
+    single_kernel_da = jnp.where(
+        singular_mask,
+        0.0,
+        da_x[None, None, None, :, :] / safe_dist,
+    )
+    double_kernel_da = jnp.where(
+        singular_mask,
+        0.0,
+        da_x[None, None, None, :, :] * double_layer_denom / (safe_dist**3),
+    )
+    return single_kernel_da, double_kernel_da
+
+
 def _integrate_B_self(
     gamma_y,
     gamma_x,
@@ -253,70 +336,29 @@ def _integrate_B_self(
     nfp,
 ):
     r'''
-    Performs the singular integration of the self-field. This is
-    ``_integrate_force`` with the rank-2 integrands replaced by vectors and the
-    contraction against :math:`\mathbf K(\mathbf r')` removed. Self-interaction
-    is removed structurally (index-based), with the same masking and the same
-    ``1e-10 * mask`` autodiff guard, so that the quadrature weights are
-    bit-for-bit identical to those of the force.
+    Performs the singular integration of the self-field using
+    :func:`_singular_layer_kernels`.
 
-    ``nfp`` is the number of field periods that ``single_integrand`` /
-    ``double_integrand`` are repeated over. It is 1 here, because x, y, z
-    components are not field-period periodic.
+    The integrands ``single_integrand`` and ``double_integrand`` are vectors of
+    shape ``(n_phix_1fp, n_thetax, 3)``; the function returns their weighted
+    sums over all source points.
+
+    Note: when called from :func:`_B_self`, ``gamma_y`` is
+    ``gamma_x[:n_phi_1fp]`` (a leading slice of the same JAX array), which
+    guarantees that the index-diagonal entries of ``diff`` are bitwise zero and
+    the index-based self-mask in :func:`_singular_layer_kernels` is exact.
+    When called from the force path, ``gamma_y`` may be an independent
+    ``eval_surface``; the extra ``dist_sq == 0`` guard in
+    :func:`_singular_layer_kernels` covers that case.
+
+    ``nfp`` is the number of field periods that ``gamma_x`` (and hence the
+    kernels) span.  Pass ``nfp=1`` when the integrands are in xyz (not
+    field-period periodic) and the full winding surface is given as ``gamma_x``
+    and ``da_x``.
     '''
-    # Shape: (n_phiy, n_thetay, n_phix*nfp, n_thetax, 3(xyz))
-    diff = gamma_y[:, :, None, None, :] - gamma_x[None, None, :, :, :]
-
-    shapey = list(diff.shape[:2])
-    shapex_1fp = list(single_integrand.shape[:2])
-    shape_integral = shapey + [nfp] + shapex_1fp
-
-    n_phiy, n_thetay = shapey
-    n_phix, n_thetax = shapex_1fp
-    fp_idx    = np.arange(nfp)[None, None, :, None, None]
-    phi_xidx  = np.arange(n_phix)[None, None, None, :, None]
-    th_xidx   = np.arange(n_thetax)[None, None, None, None, :]
-    phi_yidx  = np.arange(n_phiy)[:, None, None, None, None]
-    th_yidx   = np.arange(n_thetay)[None, :, None, None, None]
-    self_mask = (
-        (fp_idx == 0)
-        & (phi_xidx == phi_yidx)
-        & (th_xidx == th_yidx)
+    single_kernel_da, double_kernel_da = _singular_layer_kernels(
+        gamma_y, gamma_x, unitnormal_x, da_x, nfp,
     )
-
-    # See _integrate_force: the 1e-10 * mask keeps sqrt() differentiable at the
-    # self-intersecting points, which are masked out of the result anyway.
-    dist = jnp.sqrt(jnp.sum(diff**2, axis=-1) + 1e-10 * self_mask.reshape(diff.shape[:-1]))
-    double_layer_denom = jnp.sum(
-        diff * unitnormal_x[None, None, :, :, :], axis=-1
-    )
-
-    dist_reshaped = dist.reshape(shape_integral)
-    denom_reshaped = double_layer_denom.reshape(shape_integral)
-
-    # Points to drop from the singular quadrature: the index-diagonal
-    # self-interaction, plus any *other* source point that happens to coincide
-    # with the evaluation point (dist == 0). The latter is not caught by the
-    # index-based self_mask and occurs, e.g., when the winding surface pinches
-    # or grazes itself, so that two distinct grid points map to the same
-    # location. Without this guard those points give 0/0 -> NaN in the kernels.
-    singular_mask = self_mask | (dist_reshaped == 0.0)
-    # Replace the singular distances (which are ~0) with 1.0 before dividing.
-    # The outer jnp.where already zeros these entries in the primal, but
-    # jnp.where alone does not stop NaNs from the discarded branch polluting
-    # the gradient; dividing by 1.0 here keeps the derivative finite.
-    safe_dist = jnp.where(singular_mask, 1.0, dist_reshaped)
-    single_kernel_da = jnp.where(
-        singular_mask,
-        0.0,
-        da_x[None, None, None, :, :] / safe_dist
-    )
-    double_kernel_da = jnp.where(
-        singular_mask,
-        0.0,
-        da_x[None, None, None, :, :] * denom_reshaped / (safe_dist**3)
-    )
-
     single_results = jnp.einsum(
         'ijklm,lmn->ijn',
         single_kernel_da,
@@ -332,10 +374,16 @@ def _integrate_B_self(
 @jit 
 def _B_self(qp, dofs):
     r'''
-    Calculates the regularized sheet-current self-field's x, y, z components on
-    ``qp.eval_surface``. Linear in ``dofs['phi']`` and matrix-free: the
-    integrands are evaluated at the given ``phi_mn`` rather than assembled into
-    an (n_phi, n_theta, 3, n_dof) operator.
+    Calculates the regularized sheet-current self-field's x, y, z components
+    on the first field period of ``qp.winding_surface``. Linear in
+    ``dofs['phi']`` and matrix-free.
+
+    The evaluation grid is ``gamma_x[:n_phi_1fp]``, a leading slice of the
+    full winding-surface array ``gamma_x``.  Using a slice of the same array
+    (rather than an independent surface evaluated on a 1-fp grid) guarantees
+    that the diagonal entries of the difference tensor ``gamma_y - gamma_x``
+    are bitwise zero, which makes the index-based self-interaction mask in
+    :func:`_integrate_B_self` exact for any winding-surface quadrature choice.
 
     See :func:`_B_self_integrands_xyz` for the derivation.
     '''
@@ -343,9 +391,11 @@ def _B_self(qp, dofs):
         single_integrand_xyz,
         double_integrand_xyz
     ) = _B_self_integrands_xyz(qp, dofs, winding_surface_mode=True)
+    gamma_x = qp.winding_surface.gamma()          # (n_phix*nfp, n_thetax, 3)
+    n_phi_1fp = gamma_x.shape[0] // qp.nfp
     single_results, double_results = _integrate_B_self(
-        qp.eval_surface.gamma(),           # (n_phiy, n_thetay, 3)
-        qp.winding_surface.gamma(),        # (n_phix*nfp, n_thetax, 3)
+        gamma_x[:n_phi_1fp],               # (n_phi_1fp, n_thetax, 3) — slice of gamma_x
+        gamma_x,                           # (n_phix*nfp, n_thetax, 3)
         qp.winding_surface.unitnormal(),   # (n_phix*nfp, n_thetax, 3)
         qp.winding_surface.da(),           # (n_phix*nfp, n_thetax)
         single_integrand_xyz,              # (n_phix*nfp, n_thetax, 3)
@@ -358,27 +408,30 @@ def _B_self(qp, dofs):
 def _B_self_cyl(qp, dofs):
     r'''
     Calculates the regularized sheet-current self-field's R, Phi, Z components
-    on ``qp.eval_surface``, satisfying
+    on the first field period of ``qp.winding_surface``, satisfying
 
     .. math::
 
         \mathbf K_{cyl} \times \mathbf B_{self, cyl} = \mathbf L'_{cyl},
 
-    where the right hand side is ``_force_cyl``. Linear in ``dofs['phi']``
+    where :math:`\mathbf K_{cyl}` is evaluated on the same winding 1fp grid
+    and the right-hand side is ``_force_cyl_legacy``. Linear in ``dofs['phi']``
     and matrix-free.
 
-    Like ``_force_cyl``, the integral is taken in x, y, z over the whole
-    winding surface and the resulting vector is projected at the evaluation
-    point. Both sides of the identity above therefore use the same quadrature
-    weights, and the cross product of two vectors' components in an
-    orthonormal, right-handed basis is the components of their cross product in
-    that same basis. So the identity holds on the grid to machine precision,
-    and not merely in the continuum limit.
+    The integral is taken in x, y, z over the whole winding surface and the
+    resulting vector is projected at the evaluation points
+    (``gamma_x[:n_phi_1fp]``). Both sides of the identity above therefore use
+    the same quadrature weights, and the cross product of two vectors'
+    components in an orthonormal, right-handed basis is the components of
+    their cross product in that same basis. So the identity holds on the grid
+    to machine precision, and not merely in the continuum limit.
 
     See :func:`_B_self_integrands_xyz` for the derivation.
     '''
+    gamma_x = qp.winding_surface.gamma()
+    n_phi_1fp = gamma_x.shape[0] // qp.nfp
     return project_arr_cylindrical(
-        qp.eval_surface.gamma(),
+        gamma_x[:n_phi_1fp],
         _B_self(qp, dofs),
     )
 _B_self_desc_unit = lambda scales: scales["B"]
@@ -390,8 +443,11 @@ _B2_self_desc_unit = lambda scales: _B_self_desc_unit(scales)**2
 
 @jit 
 def _f_B_self(qp, dofs):
+    gamma_x = qp.winding_surface.gamma()
+    n_phi_1fp = gamma_x.shape[0] // qp.nfp
+    da_1fp = qp.winding_surface.da()[:n_phi_1fp]
     B2_val = _B2_self(qp, dofs)
-    return qp.eval_surface.integrate(B2_val/2)*qp.nfp
+    return jnp.sum(B2_val / 2 * da_1fp) * qp.nfp
 _f_B_self_desc_unit = lambda scales: _B_self_desc_unit(scales)**2 * scales["R0"] * scales["a"]
 
 # ----- Wrappers -----
