@@ -29,7 +29,8 @@ We illustrate this with the example in ``example/topology.ipynb``:
         constraint_unit=(None,),
         # Set the output metrics to f_B and f_K
         metric_name=('f_B', 'f_K'),
-        solver_options={'maxiter_inner': 1500, 'maxiter_tot': 10000},
+        maxiter=10000,
+        maxiter_inner=1500,
     )
 
 This produces a low-field-error coil set consisting of purely poloidal coils by
@@ -81,6 +82,12 @@ It is organized by the name of the independent variable of each gradient.
 The keys in the third level will change based on whether 
 multi-objective optimization is enabled, constraints are present, 
 and whether the winding surface is provided.
+
+For array-valued metrics (including ``'phi_dofs'``), ``'value'`` keeps the metric
+shape, and each leaf under ``'grad'`` has shape ``(*metric_shape, *param_shape)``.
+For example, if ``phi`` has shape ``(n_phi,)`` and ``plasma_dofs`` has shape
+``(n_plasma,)``, then ``out_dict['phi_dofs']['grad']['df_dplasma_dofs']`` has
+shape ``(n_phi, n_plasma)``.
 
 Setting ``value_only=True`` when running ``quadcoil.quadcoil`` will skip gradient calculations.
 In this case, ``out_dict`` will not have the ``'grad'`` layer.

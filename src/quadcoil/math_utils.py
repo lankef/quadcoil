@@ -137,8 +137,13 @@ def project_arr_cylindrical(
     # Keeping only the x, y components
     r_unit = jnp.zeros_like(gamma)
     r_unit = r_unit.at[:, :, -1].set(0)
-    # Calculating the norm and dividing the x, y components by it
-    r_unit = r_unit.at[:, :, :-1].set(gamma[:, :, :-1] / jnp.linalg.norm(gamma, axis=2)[:, :, None])
+    # Normalizing by the cylindrical radius, sqrt(x^2 + y^2), rather than by
+    # the length of gamma. The two only agree in the z=0 plane, and the basis
+    # must be orthonormal for the components of a cross product to be the cross
+    # product of the components.
+    r_unit = r_unit.at[:, :, :-1].set(
+        gamma[:, :, :-1] / jnp.linalg.norm(gamma[:, :, :-1], axis=2)[:, :, None]
+    )
 
     # Setting Z unit to 1
     z_unit = jnp.zeros_like(gamma)

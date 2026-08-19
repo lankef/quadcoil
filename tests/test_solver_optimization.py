@@ -186,7 +186,7 @@ class TestAuglagOptimization(unittest.TestCase):
             return f_obj_i, g_combined, h_empty, n_g_i + n_h_i, 0, aux
 
         stat_opt = stationarity_kkt(
-            constrained=True, convex=True,
+            constrained=True,
             x_opt=x_opt, z_opt=z_opt,
             y_flat=y_flat, f_g_ineq_h_eq_from_y=f_g_combined_from_y,
             unravel_y=unravel_y, flat_x_to_dofs=unravel_unscale_x,
@@ -200,25 +200,27 @@ class TestAuglagOptimization(unittest.TestCase):
         )
 
         f_metric = lambda x, y: f_obj(x)
+        f_metrics_flat = lambda x, y: jnp.atleast_1d(f_obj(x)).ravel()
         solver = lx.AutoLinearSolver(well_posed=False)
 
         m_opt, dfdy_opt, info_opt = adjoint_auglag_lbfgs_opt(
-            f_metric, stat_opt, y_flat, solver, verbose=1,
+            f_metrics_flat, 1, stat_opt, y_flat, verbose=1,
         )
         m_leg, dfdy_leg, info_leg = adjoint_leg(
             f_metric, stat_leg, y_flat, solver, verbose=1,
         )
 
         np.testing.assert_allclose(
-            float(m_opt), float(m_leg), rtol=1e-6,
+            float(m_opt[0]), float(m_leg), rtol=1e-6,
             err_msg="Auglag adjoint: metric value mismatch",
         )
+        # Batched adjoint returns (K, n_y); legacy returns (n_y,) for scalars.
         np.testing.assert_allclose(
-            np.array(dfdy_opt), np.array(dfdy_leg), rtol=1e-3,
+            np.array(dfdy_opt[0]), np.array(dfdy_leg), rtol=1e-3,
             err_msg="Auglag adjoint: gradient mismatch",
         )
-        print(f"  auglag adjoint: m_opt={m_opt:.8f}, m_leg={m_leg:.8f}, "
-              f"dfdy close: {np.allclose(np.array(dfdy_opt), np.array(dfdy_leg), rtol=1e-3)}")
+        print(f"  auglag adjoint: m_opt={float(m_opt[0]):.8f}, m_leg={float(m_leg):.8f}, "
+              f"dfdy close: {np.allclose(np.array(dfdy_opt[0]), np.array(dfdy_leg), rtol=1e-3)}")
 
 
 if __name__ == '__main__':

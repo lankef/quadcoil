@@ -48,6 +48,21 @@ Notation
 - :math:`n_\phi^E`: The toroidal evaluation resolution on the winding surface, ``len(quadpoints_phi)``.
 - :math:`n_\theta^E`: The poloidal evaluation resolution on the winding surface, ``len(quadpoints_theta)``.
 
+
+Basic
+-----
+.. list-table::
+   :header-rows: 1
+
+   * - Name
+     - Formula
+     - Output Shape
+     - Description
+   * - ``'phi_dofs'``
+     - :math:`\Phi_{mn}`
+     - :math:`(n_\text{dofs})`
+     - The current potential degrees of freedom. 
+
 Magnetic Field
 --------------
 

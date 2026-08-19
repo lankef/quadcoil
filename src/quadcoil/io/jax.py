@@ -3,7 +3,7 @@ from functools import partial
 from quadcoil.quadcoil import _quadcoil_pure
 import jax.numpy as jnp
 import warnings
-import jax
+
 # A list of differentiable arguments of QUADCOIL.
 # Will be ignored from the kwargs of gen_quadcoil_for_diff
 QUADCOIL_DIFF_ARGS = [
@@ -16,6 +16,19 @@ QUADCOIL_DIFF_ARGS = [
     'objective_weight',
     'constraint_value',
 ]
+
+
+def _contract_grad_tangent(grad, tangent):
+    """Contract a metric gradient leaf with a parameter tangent.
+
+    Scalar metrics: ``grad`` has the same ndim as ``tangent``; result is scalar.
+    Array metrics: ``grad`` is ``(*metric_shape, *param_shape)``; result keeps
+    ``metric_shape``.
+    """
+    g = jnp.asarray(grad)
+    t = jnp.asarray(tangent)
+    return jnp.tensordot(g, t, axes=jnp.ndim(t))
+
 
 def gen_quadcoil_for_diff(**kwargs):
     # Generate a quadcoil call taking only:
@@ -128,29 +141,51 @@ def gen_quadcoil_for_diff(**kwargs):
         # Initialize tangent outputs
         out_dict_dot = {}
         for key_i in out_dict_full.keys():
-            out_dict_primal[key_i] = out_dict_full[key_i]['value']
-            # The shape of the second layer differs depending on the inputs. 
-            # we handle them individually. 
-            jvp_i = 0
+            val_i = out_dict_full[key_i]['value']
+            out_dict_primal[key_i] = val_i
+            # Preserve metric shape for array-valued metrics.
+            jvp_i = jnp.zeros_like(val_i)
+            grad_i = out_dict_full[key_i]['grad']
             if plasma_dofs_dot is not None:
-                jvp_i += jnp.sum(out_dict_full[key_i]['grad']['df_dplasma_dofs'] * plasma_dofs_dot)
+                jvp_i = jvp_i + _contract_grad_tangent(
+                    grad_i['df_dplasma_dofs'], plasma_dofs_dot
+                )
             if net_poloidal_current_amperes_dot is not None:
-                jvp_i += jnp.sum(out_dict_full[key_i]['grad']['df_dnet_poloidal_current_amperes'] * net_poloidal_current_amperes_dot)
+                jvp_i = jvp_i + _contract_grad_tangent(
+                    grad_i['df_dnet_poloidal_current_amperes'],
+                    net_poloidal_current_amperes_dot,
+                )
             if net_toroidal_current_amperes_dot is not None:
-                jvp_i += jnp.sum(out_dict_full[key_i]['grad']['df_dnet_toroidal_current_amperes'] * net_toroidal_current_amperes_dot)
+                jvp_i = jvp_i + _contract_grad_tangent(
+                    grad_i['df_dnet_toroidal_current_amperes'],
+                    net_toroidal_current_amperes_dot,
+                )
             if Bnormal_plasma_dot is not None:
-                jvp_i += jnp.sum(out_dict_full[key_i]['grad']['df_dBnormal_plasma'] * Bnormal_plasma_dot)
+                jvp_i = jvp_i + _contract_grad_tangent(
+                    grad_i['df_dBnormal_plasma'], Bnormal_plasma_dot
+                )
             if plasma_coil_distance_dot is not None:
-                jvp_i += jnp.sum(out_dict_full[key_i]['grad']['df_dplasma_coil_distance'] * plasma_coil_distance_dot)
+                jvp_i = jvp_i + _contract_grad_tangent(
+                    grad_i['df_dplasma_coil_distance'],
+                    plasma_coil_distance_dot,
+                )
             if winding_dofs_dot is not None:
-                jvp_i += jnp.sum(out_dict_full[key_i]['grad']['df_dwinding_dofs'] * winding_dofs_dot)
+                jvp_i = jvp_i + _contract_grad_tangent(
+                    grad_i['df_dwinding_dofs'], winding_dofs_dot
+                )
             if objective_weight_dot is not None:
                 # Converting an empty list/tuple to an array will produce a NaN.
                 if not jnp.isscalar(objective_weight_dot):
-                    jvp_i += jnp.sum(out_dict_full[key_i]['grad']['df_dobjective_weight'] * jnp.array(objective_weight_dot))
+                    jvp_i = jvp_i + _contract_grad_tangent(
+                        grad_i['df_dobjective_weight'],
+                        jnp.array(objective_weight_dot),
+                    )
             if constraint_value_dot is not None:
                 if len(constraint_value_dot) > 0:
-                    jvp_i += jnp.sum(out_dict_full[key_i]['grad']['df_dconstraint_value'] * jnp.array(constraint_value_dot))
+                    jvp_i = jvp_i + _contract_grad_tangent(
+                        grad_i['df_dconstraint_value'],
+                        jnp.array(constraint_value_dot),
+                    )
             out_dict_dot[key_i] = jvp_i
         # The rest of the outputs are not differentiable
         # These outputs are currently commented out, but that may change 

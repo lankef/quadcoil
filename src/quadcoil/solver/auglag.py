@@ -13,11 +13,9 @@ Potential further optimisations
     making the SVD preconditioning optional or using a cheaper
     approximation (e.g. incomplete Cholesky).
 """
-import warnings
 import jax.numpy as jnp
 from functools import partial
-from jax import jit, vmap, grad, jacrev, jvp, hessian, debug
-import lineax as lx
+from jax import vmap, grad, jacrev
 import jax
 from jax.lax import while_loop
 from jax import config as config_jax

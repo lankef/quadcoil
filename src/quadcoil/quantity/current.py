@@ -66,7 +66,7 @@ def _K(qp, dofs, winding_surface_mode=False, cyl_mode=False):
     return K_xyz
 _K_desc_unit = lambda scales: scales["B"] / mu_0 # based on infinite solenoid: B = mu_0 K_pol.
 
-# @jit # Not needed because _K is jitted and this can make compile time excessive
+@jit
 def _K2(qp, dofs):
     return(jnp.sum(_K(qp, dofs)**2, axis=-1))
 _K2_desc_unit = lambda scales: _K_desc_unit(scales)**2
