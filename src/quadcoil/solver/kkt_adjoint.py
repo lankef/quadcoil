@@ -19,13 +19,16 @@ The Jacobian of the KKT residual w.r.t. (x, z) is:
              [diag(z)*A,  diag(g) ]]
 
 ``adjoint_kkt`` takes a single batched metric callable that returns a
-flattened concatenation of all metrics. Gradients are obtained with one
-jacrev pass and one dense multi-RHS ``lstsq`` solve. Forward vs adjoint
-mode is selected statically from ``metric_K`` vs ``n_y``.
+flattened concatenation of all metrics. Metric Jacobians are obtained
+with one ``jacrev`` pass and one dense multi-RHS ``lstsq`` solve.
+Cross-derivatives of the KKT residual / stationarity condition w.r.t.
+problem parameters (``dRdy``, ``H_xy``) are never materialized; they
+are applied via VJP against the adjoint rows. Adjoint mode is the only
+mode, with the precondition ``n_metrics_flat <= n_y``.
 """
 
 import jax.numpy as jnp
-from jax import grad, jacrev, hessian, debug
+from jax import grad, jacrev, hessian, debug, vjp, vmap
 from jax import config as config_jax
 config_jax.update('jax_enable_x64', True)
 
@@ -67,8 +70,8 @@ def stationarity_kkt(
     Returns
     -------
     stationarity_data : dict
-        Unconstrained keys: ``H_mat``, ``H_xy``.
-        Constrained keys: ``J_KKT_mat``, ``dRdy``, ``z_opt``, ``n_x``, ``m_g``.
+        Unconstrained keys: ``H_mat``, ``grad_y_stationarity``.
+        Constrained keys: ``J_KKT_mat``, ``R_y``, ``z_opt``, ``n_x``, ``m_g``.
     '''
     stationarity_data = {
         'constrained': constrained,
@@ -81,11 +84,10 @@ def stationarity_kkt(
             return f_obj(flat_x_to_dofs(x))
 
         H_mat = hessian(lambda x: f_xy(x, y_flat))(x_opt)  # (n_x, n_x)
-        H_xy = jacrev(
-            lambda y: grad(lambda x: f_xy(x, y))(x_opt)
-        )(y_flat)  # (n_x, n_y)
+        # Closure for VJP: maps y -> grad_x f(x_opt, y). Never materialize H_xy.
+        grad_y_stationarity = lambda y: grad(lambda x: f_xy(x, y))(x_opt)
         stationarity_data['H_mat'] = H_mat
-        stationarity_data['H_xy'] = H_xy
+        stationarity_data['grad_y_stationarity'] = grad_y_stationarity
 
     else:
         n_x = x_opt.shape[0]
@@ -118,7 +120,8 @@ def stationarity_kkt(
         stationarity_data['n_x'] = n_x
         stationarity_data['m_g'] = m_g
 
-        # R_y: KKT residual as a function of y (x, z frozen at optimum)
+        # R_y: KKT residual as a function of y (x, z frozen at optimum).
+        # Stored as a closure; adjoint_kkt applies it via VJP.
         def R_y(y, x=x_opt, z=z_opt):
             f_obj_y, g_ineq_y, _, _, _, _ = f_g_ineq_h_eq_from_y(unravel_y(y))
             f_sc = lambda xx: f_obj_y(flat_x_to_dofs(xx))
@@ -128,37 +131,33 @@ def stationarity_kkt(
             g_v = g_sc(x)
             return jnp.concatenate([grad_x_L, z * g_v])
 
-        dRdy = jacrev(R_y)(y_flat)  # (n_w, n_y)
-        stationarity_data['dRdy'] = dRdy
+        stationarity_data['R_y'] = R_y
 
     return stationarity_data
 
 
 def adjoint_kkt(
     f_metrics_flat,
-    metric_K,
     stationarity_data,
     y_flat,
     verbose,
 ):
     r'''
-    Compute dm/dy for a batch of flattened metrics via the KKT system.
+    Compute dm/dy for a batch of flattened metrics via the KKT adjoint.
 
     Unconstrained:
-        H V^T = J_x^T,  then  dm/dy = J_y - V @ H_xy
-        (or the forward form when ``metric_K > n_y``).
+        H V^T = J_x^T,  then  dm/dy = J_y - VJP(grad_y_stationarity, V)
 
     Constrained:
-        J_KKT^T V^T = [J_x, 0]^T,  then  dm/dy = J_y - V @ dRdy
-        (or the forward form when ``metric_K > n_y``).
+        J_KKT^T V^T = [J_x, 0]^T,  then  dm/dy = J_y - VJP(R_y, V)
+
+    Requires ``n_metrics_flat <= n_y`` (adjoint-only).
 
     Parameters
     ----------
     f_metrics_flat : Callable
-        ``(x_flat, y_flat) -> (K_tot,)`` — all metrics flattened and
+        ``(x_flat, y_flat) -> (n_metrics_flat,)`` — all metrics flattened and
         concatenated into one vector.
-    metric_K : int
-        ``K_tot``. Must be a concrete Python int (static under JIT).
     stationarity_data : dict
         Output of :func:`stationarity_kkt`.
     y_flat : ndarray
@@ -166,60 +165,55 @@ def adjoint_kkt(
 
     Returns
     -------
-    all_values : ndarray, shape (K_tot,)
-    dfdy : ndarray, shape (K_tot, n_y)
+    all_values : ndarray, shape (n_metrics_flat,)
+    dfdy : ndarray, shape (n_metrics_flat, n_y)
     debug_info : dict
     '''
     constrained = stationarity_data['constrained']
     x_opt = stationarity_data['x_flat_precond']
     n_y = y_flat.shape[0]
 
-    all_values = f_metrics_flat(x_opt, y_flat)  # (K_tot,)
-    J_x = jacrev(f_metrics_flat, argnums=0)(x_opt, y_flat)  # (K_tot, n_x)
-    J_y = jacrev(f_metrics_flat, argnums=1)(x_opt, y_flat)  # (K_tot, n_y)
+    all_values = f_metrics_flat(x_opt, y_flat)  # (n_metrics_flat,)
+    J_x = jacrev(f_metrics_flat, argnums=0)(x_opt, y_flat)  # (n_metrics_flat, n_x)
+    J_y = jacrev(f_metrics_flat, argnums=1)(x_opt, y_flat)  # (n_metrics_flat, n_y)
+
+    n_metrics_flat = J_x.shape[0]
+    if n_metrics_flat > n_y:
+        raise ValueError(
+            f'adjoint_kkt requires n_metrics_flat <= n_y, got '
+            f'{n_metrics_flat} > {n_y}. Reduce the number of array-valued '
+            'metrics or restore the forward-mode branch.'
+        )
 
     debug_info = {}
 
     if not constrained:
         H_mat = stationarity_data['H_mat']  # (n_x, n_x)
-        H_xy = stationarity_data['H_xy']    # (n_x, n_y)
-        if metric_K <= n_y:
-            # Adjoint: factor once, K_tot RHS
-            V = jnp.linalg.lstsq(H_mat, J_x.T)[0].T  # (K_tot, n_x)
-            dfdy = J_y - V @ H_xy                     # (K_tot, n_y)
-            if verbose > 0:
-                debug_info['vihp'] = V
-        else:
-            # Forward: factor once, n_y RHS
-            S = jnp.linalg.lstsq(H_mat, -H_xy)[0]  # (n_x, n_y)
-            dfdy = J_y + J_x @ S                    # (K_tot, n_y)
-            if verbose > 0:
-                debug_info['S'] = S
+        grad_y_stationarity = stationarity_data['grad_y_stationarity']
+        # Adjoint: factor once, n_metrics_flat RHS
+        V = jnp.linalg.lstsq(H_mat, J_x.T)[0].T  # (n_metrics_flat, n_x)
+        _, vjp_fn = vjp(grad_y_stationarity, y_flat)
+        dfdy = J_y - vmap(lambda v: vjp_fn(v)[0])(V)  # (n_metrics_flat, n_y)
+        if verbose > 0:
+            debug_info['vihp'] = V
 
     else:
         J_KKT_mat = stationarity_data['J_KKT_mat']  # (n_w, n_w)
-        dRdy = stationarity_data['dRdy']            # (n_w, n_y)
-        n_x = stationarity_data['n_x']
+        R_y = stationarity_data['R_y']
         m_g = stationarity_data['m_g']
-        if metric_K <= n_y:
-            # Adjoint: J_KKT^T V^T = [J_x, 0]^T
-            rhs = jnp.concatenate(
-                [J_x, jnp.zeros((metric_K, m_g))], axis=1,
-            ).T  # (n_w, K_tot)
-            V = jnp.linalg.lstsq(J_KKT_mat.T, rhs)[0].T  # (K_tot, n_w)
-            dfdy = J_y - V @ dRdy                         # (K_tot, n_y)
-            if verbose > 0:
-                solve_err = jnp.linalg.norm(J_KKT_mat.T @ V.T - rhs)
-                debug_info['v'] = V
-                debug_info['J_KKT_solve_err'] = solve_err
-                debug.print(
-                    'KKT adjoint solve error: {e}', e=solve_err,
-                )
-        else:
-            # Forward: J_KKT S = -dRdy
-            S = jnp.linalg.lstsq(J_KKT_mat, -dRdy)[0]  # (n_w, n_y)
-            dfdy = J_y + J_x @ S[:n_x]                  # (K_tot, n_y)
-            if verbose > 0:
-                debug_info['S'] = S
+        # Adjoint: J_KKT^T V^T = [J_x, 0]^T
+        rhs = jnp.concatenate(
+            [J_x, jnp.zeros((n_metrics_flat, m_g))], axis=1,
+        ).T  # (n_w, n_metrics_flat)
+        V = jnp.linalg.lstsq(J_KKT_mat.T, rhs)[0].T  # (n_metrics_flat, n_w)
+        _, vjp_fn = vjp(R_y, y_flat)
+        dfdy = J_y - vmap(lambda v: vjp_fn(v)[0])(V)  # (n_metrics_flat, n_y)
+        if verbose > 0:
+            solve_err = jnp.linalg.norm(J_KKT_mat.T @ V.T - rhs)
+            debug_info['v'] = V
+            debug_info['J_KKT_solve_err'] = solve_err
+            debug.print(
+                'KKT adjoint solve error: {e}', e=solve_err,
+            )
 
     return all_values, dfdy, debug_info

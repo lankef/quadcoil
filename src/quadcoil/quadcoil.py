@@ -836,7 +836,6 @@ def _quadcoil_pure(
             v = get_quantity(metric_name_i)(qp, dofs_opt)
         metric_shapes.append(jnp.shape(v))
         metric_K_list.append(int(jnp.size(v)))
-    K_tot = sum(metric_K_list)
 
     def f_metrics_flat(xp, y):
         qp_temp = y_to_qp(unravel_y(y))
@@ -851,7 +850,7 @@ def _quadcoil_pure(
         return jnp.concatenate(parts)
 
     all_values, dfdy, debug_info = adjoint_kkt(
-        f_metrics_flat, K_tot, stationarity_data, y_flat, verbose,
+        f_metrics_flat, stationarity_data, y_flat, verbose,
     )
 
     out_dict = {}

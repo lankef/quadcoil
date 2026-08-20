@@ -33,11 +33,11 @@ def _resolve_quadpoints(
             raise TypeError(
                 f'Bnormal_plasma must be a 2D array-like, got shape {jnp.shape(Bnormal_plasma)}.'
             )
-        if plasma_quadpoints_phi is not None or plasma_quadpoints_theta is not None:
-            warnings.warn(
-                'Bnormal_plasma provided, inputs for plasma_quadpoints_phi '
-                'and plasma_quadpoints_theta will be ignored.'
-            )
+        # if plasma_quadpoints_phi is not None or plasma_quadpoints_theta is not None:
+        #     warnings.warn(
+        #         'Bnormal_plasma provided, inputs for plasma_quadpoints_phi '
+        #         'and plasma_quadpoints_theta will be ignored.'
+        #     )
         plasma_quadpoints_phi = jnp.linspace(0, 1/nfp, Bnormal_plasma.shape[0], endpoint=False)
         plasma_quadpoints_theta = jnp.linspace(0, 1, Bnormal_plasma.shape[1], endpoint=False)
     else:

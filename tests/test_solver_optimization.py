@@ -204,7 +204,7 @@ class TestAuglagOptimization(unittest.TestCase):
         solver = lx.AutoLinearSolver(well_posed=False)
 
         m_opt, dfdy_opt, info_opt = adjoint_auglag_lbfgs_opt(
-            f_metrics_flat, 1, stat_opt, y_flat, verbose=1,
+            f_metrics_flat, stat_opt, y_flat, verbose=1,
         )
         m_leg, dfdy_leg, info_leg = adjoint_leg(
             f_metric, stat_leg, y_flat, solver, verbose=1,
