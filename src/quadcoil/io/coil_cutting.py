@@ -16,7 +16,7 @@ except ImportError:
 
 # Importing simsopt 
 from quadcoil import QuadcoilParams
-from quadcoil.quantity import Phi_with_net_current
+from quadcoil.quantities import Phi_with_net_current
 
 def coil_zeta_theta_from_qp(
     qp:QuadcoilParams,

@@ -38,7 +38,7 @@ Tests use the stdlib `unittest` framework. Some tests skip automatically if opti
 quadcoil()
   → creates QuadcoilParams (plasma + winding surface + quadrature)
   → parses objectives/constraints via wrapper.py
-  → calls solve_constrained() or run_opt_lbfgs() in solver/
+  → calls solve_constrained() or run_opt_lbfgs() in solvers/
   → returns solution + metrics
 ```
 
@@ -48,23 +48,23 @@ quadcoil()
 |--------|------|
 | `quadcoil.py` | Main entry; JIT-compiled optimizer (~1300 lines) |
 | `quadcoil_params.py` | `QuadcoilParams` pytree class (surfaces, currents, quadrature points) |
-| `solver/` | Optimization solvers: `auglag.py` (augmented Lagrangian), `ipm.py` (interior point), `slsqp.py` (sequential quadratic programming), `kkt_adjoint.py` (KKT stationarity & adjoint) |
+| `solvers/` | Optimization solvers: `auglag.py` (augmented Lagrangian), `ipm.py` (interior point), `slsqp.py` (sequential quadratic programming), `kkt_adjoint.py` (KKT stationarity & adjoint) |
 | `wrapper.py` | String-based objective/constraint parsing; `merge_callables()` |
 | `surface.py` | `SurfaceRZFourierJAX` — JAX-native Fourier surface; converts to/from simsopt and DESC |
 | `winding_surface.py` | Winding surface generators (`gen_winding_surface_offset`, `_arc`, `_atan`) |
 | `math_utils.py` | Vector ops, linear solvers, activation functions (notably `gplus`) |
-| `quantity/` | Physical quantities (see below) |
+| `quantities/` | Physical quantities (see below) |
 | `io/` | Interfaces: `desc.py`, `simsopt.py`, `jax.py`, `coil_cutting.py`, `focus.py` |
 
-### `quantity/` Module
+### `quantities/` Module
 
-Each physical quantity (B-normal, curvature K·∇K, self-force, regularization, etc.) inherits from `_Quantity` in `quantity/quantity.py`. The base class manages switching between:
+Each physical quantity (B-normal, curvature K·∇K, self-force, regularization, etc.) inherits from `_Quantity` in `quantities/quantity.py`. The base class manages switching between:
 - **C⁰ "raw" formulations** — intuitive implementations, no smoothing
 - **C¹ "scaled" formulations** — use slack variables for smooth constrained optimization
 
 Class methods `generate_c2()`, `generate_linf_norm()`, `generate_huber()` build objective/constraint callables from the base quantity.
 
-Objectives and constraints are referenced by string names (e.g., `'f_B'`) and resolved from `quadcoil.quantity` namespace in `wrapper.py`.
+Objectives and constraints are referenced by string names (e.g., `'f_B'`) and resolved from `quadcoil.quantities` namespace in `wrapper.py`. (`quadcoil.quantity` / `quadcoil.solver` remain compatibility aliases.)
 
 ### JAX Design Conventions
 

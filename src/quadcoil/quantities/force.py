@@ -16,7 +16,7 @@ def _force_integrands_xyz(qp, dofs, winding_surface_mode=False):
     Returns the rank-2 tensor integrand nominators of the Robin-Volpe (2022)
     self-force.  These are the Levi-Civita duals of the vector integrands
     :math:`\mathbf S, \mathbf D` computed by
-    :func:`~quadcoil.quantity.self_field._B_self_integrands_xyz`:
+    :func:`~quadcoil.quantities.self_field._B_self_integrands_xyz`:
 
     .. math::
 

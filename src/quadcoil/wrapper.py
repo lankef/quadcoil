@@ -1,5 +1,5 @@
-import quadcoil.quantity
-from quadcoil.quantity.quantity import _Quantity
+import quadcoil.quantities
+from quadcoil.quantities.quantity import _Quantity
 import jax.numpy as jnp
 from jax import jit
 from functools import partial
@@ -66,7 +66,7 @@ def _resolve_quadpoints(
 def get_quantity(func_name: str):
     r'''
     Takes a string as input and returns the function with the 
-    same name in ``quadcoil.quantity``.
+    same name in ``quadcoil.quantities``.
     throws an error if a function with the same name cannot be found.
     Used to parse ``str`` in ``quadcoil.quadcoil``.
 
@@ -78,19 +78,19 @@ def get_quantity(func_name: str):
     Returns
     -------
     callable
-        A callable with the same name in ``quadcoil.quantity``.
+        A callable with the same name in ``quadcoil.quantities``.
     '''
-    if hasattr(quadcoil.quantity, func_name):
-        func = getattr(quadcoil.quantity, func_name)
+    if hasattr(quadcoil.quantities, func_name):
+        func = getattr(quadcoil.quantities, func_name)
         if isinstance(func, _Quantity):
             return func
         else:
             raise ValueError(
-                f'\'{func_name}\' exists in quadcoil.quantity but is '\
+                f'\'{func_name}\' exists in quadcoil.quantities but is '\
                 'not properly implemented as an instance of _Quantity. '\
                 f'Instead, it\'s of type: {str(func)}')
     else:
-        raise ValueError(f'\'{func_name}\' not found in quadcoil.quantity.')
+        raise ValueError(f'\'{func_name}\' not found in quadcoil.quantities.')
 
 def merge_callables(
         callables, 
@@ -150,7 +150,7 @@ def merge_callables(
 
 def _add_quantity(name, unit, use_case, smoothing, smoothing_params):
     '''
-    Finds a quantity from quadcoil.quantity, unpacks and scales it. 
+    Finds a quantity from quadcoil.quantities, unpacks and scales it. 
     Also checks compatibility.
 
     Parameters

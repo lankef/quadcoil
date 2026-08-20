@@ -24,14 +24,15 @@ simply pass their names into ``quadcoil.quadcoil``.
     )
 
 If needed, these quantities can also be
-directly imported as functions from ``quadcoil.quantity``:
+directly imported as functions from ``quadcoil.quantities``
+(``quadcoil.quantity`` remains a compatibility alias):
 
 .. code-block:: python
 
-    from quadcoil.quantity import K_theta
+    from quadcoil.quantities import K_theta
     print(K_theta(qp, dofs_opt))
 
-All members of ``quadcoil.quantity`` require the same inputs:
+All members of ``quadcoil.quantities`` require the same inputs:
 
 - ``qp : QuadcoilParams`` - Stores the plasma and winding surface information.
 - ``dofs_opt : dict`` - The optimized degrees of freedom produced by ``quadcoil.quadcoil``.

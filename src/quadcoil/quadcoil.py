@@ -6,7 +6,7 @@ from quadcoil import (
     qp_nescoil,
 )
 
-from quadcoil.solver import (
+from quadcoil.solvers import (
     solve_constrained_auglag_lbfgs, 
     solve_constrained_ipm,
     solve_constrained_slsqp,
@@ -20,7 +20,7 @@ from quadcoil.solver import (
 
 from quadcoil.wrapper import _parse_objectives, _parse_constraints, _resolve_quadpoints
 from functools import partial
-from quadcoil.quantity import Bnormal, K_cyl
+from quadcoil.quantities import Bnormal, K_cyl
 from jax import jacfwd, jacrev, jit, block_until_ready, debug, flatten_util, eval_shape, grad, vmap, tree_util
 from jax import config as config_jax
 import jax.numpy as jnp
@@ -1008,13 +1008,13 @@ def quadcoil(**kwargs):
     winding_stellsym : bool, default=True
         (Static) Whether the winding surface has stellarator symmetry.
     objective_name : str or tuple, optional, default='f_B'
-        (Static) The names of the objective functions. Must be a member of ``quadcoil.quantity`` that outputs a scalar.
+        (Static) The names of the objective functions. Must be a member of ``quadcoil.quantities`` that outputs a scalar.
     objective_weight : ndarray, optional, default=1.
         (Traced) The weights of the objective functions. Derivatives will be calculated w.r.t. this quantity.
     objective_unit : ndarray, optional, default=None
         (Traced) The normalization constants of the objective terms, so that ``f/objective_unit`` is :math:`O(1)`. May contain ``None``
     constraint_name : tuple, optional, default=()
-        (Static) The names of the constraint functions. Must be a member of ``quadcoil.quantity`` that outputs a scalar.
+        (Static) The names of the constraint functions. Must be a member of ``quadcoil.quantities`` that outputs a scalar.
     constraint_type : tuple, optional, default=()
         (Static) The types of the constraints. Must consist of ``'>='``, ``'<='``, ``'=='`` only.
     constraint_unit : ndarray, optional, default=()

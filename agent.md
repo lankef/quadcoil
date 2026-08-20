@@ -43,7 +43,7 @@ Notes:
 quadcoil()
   → build QuadcoilParams (plasma + winding surface + quadrature)
   → parse objective/constraint strings via wrapper.py
-  → dispatch into src/quadcoil/solver/ (constrained or unconstrained)
+  → dispatch into src/quadcoil/solvers/ (constrained or unconstrained)
   → return solution + metrics
 ```
 
@@ -53,18 +53,18 @@ quadcoil()
   - `src/quadcoil/quadcoil.py`: main optimizer, static-vs-traced separation, objective/constraint plumbing
   - `src/quadcoil/quadcoil_params.py`: `QuadcoilParams` pytree (surfaces, currents, quadrature, dof packing)
   - `src/quadcoil/wrapper.py`: resolves string names into quantity objects/callables; merges callables; quadpoint defaults/validation
-  - `src/quadcoil/solver/__init__.py`: public solver exports
-  - `src/quadcoil/solver/auglag.py`: augmented-Lagrangian solver; unconstrained inner solve now uses `optimistix.LBFGS`
-  - `src/quadcoil/solver/slsqp.py`: SLSQP wrapper built on `slsqp-jax` and `optimistix.minimise`
-  - `src/quadcoil/solver/ipm.py`: interior-point solver
-  - `src/quadcoil/solver/kkt_adjoint.py`: shared KKT stationarity/adjoint machinery used by multiple solvers
+  - `src/quadcoil/solvers/__init__.py`: public solver exports
+  - `src/quadcoil/solvers/auglag.py`: augmented-Lagrangian solver; unconstrained inner solve now uses `optimistix.LBFGS`
+  - `src/quadcoil/solvers/slsqp.py`: SLSQP wrapper built on `slsqp-jax` and `optimistix.minimise`
+  - `src/quadcoil/solvers/ipm.py`: interior-point solver
+  - `src/quadcoil/solvers/kkt_adjoint.py`: shared KKT stationarity/adjoint machinery used by multiple solvers
 
 - **Surfaces**
   - `src/quadcoil/surface.py`: all JAX-native surface types live here (`SurfaceJAX`, `SurfaceRZFourierJAX`, `SurfaceXYZTensorFourierJAX`, `SurfaceXYZFourierJAX`)
   - `src/quadcoil/winding_surface.py`: winding surface generators (offset/arc/atan variants), fit-to-surface workflows
 
 - **Physics quantities (objectives/constraints)**
-  - `src/quadcoil/quantity/`: all physical quantities as `_Quantity` instances (see below)
+  - `src/quadcoil/quantities/`: all physical quantities as `_Quantity` instances (see below)
 
 - **Interfaces**
   - `src/quadcoil/io/`: adapters for DESC / simsopt / JAX IO and other integrations
@@ -101,22 +101,22 @@ These are the most common ways to accidentally “break the codebase” even if 
 
 QUADCOIL commonly takes objective/constraint terms as **string names** (e.g. `'f_B'`), which are resolved via `src/quadcoil/wrapper.py`:
 
-- `get_quantity(name)` looks up an attribute in `quadcoil.quantity` and requires it to be an instance of `_Quantity`.
+- `get_quantity(name)` looks up an attribute in `quadcoil.quantities` and requires it to be an instance of `_Quantity`.
 - `merge_callables(...)` combines multiple callables into a single callable by concatenating flattened outputs (and can optionally “merge” inequalities under smoothing).
 
 If you add a new objective/constraint term, you usually need to:
-- implement it as a `_Quantity` instance in `src/quadcoil/quantity/`
-- export it from `src/quadcoil/quantity/__init__.py` so `get_quantity()` can find it
+- implement it as a `_Quantity` instance in `src/quadcoil/quantities/`
+- export it from `src/quadcoil/quantities/__init__.py` so `get_quantity()` can find it
 - add/adjust tests in `tests/` (or ensure existing wrapper tests cover it)
 
 ## Adding a new physical quantity (recommended workflow)
 
-1. **Create the quantity** in `src/quadcoil/quantity/` as an instance of a class inheriting `_Quantity`.
+1. **Create the quantity** in `src/quadcoil/quantities/` as an instance of a class inheriting `_Quantity`.
 2. **Define compatibility** correctly (where it can be used): objective (`'f'`) and/or constraints (`'<='`, `'>='`, `'=='`).
 3. **Provide both “raw” and “scaled” implementations** if the base class expects them:
    - “raw” formulations are typically C⁰ and intuitive
    - “scaled” formulations are typically C¹-friendly and may introduce slack variables for smooth constrained optimization
-4. **Export it** in `src/quadcoil/quantity/__init__.py`.
+4. **Export it** in `src/quadcoil/quantities/__init__.py`.
 5. **Add tests** (or update existing ones) to cover:
    - string resolution via `get_quantity`
    - shape + dtype stability under JIT
@@ -130,19 +130,19 @@ If you add a new objective/constraint term, you usually need to:
 - **Optional dependencies**: keep DESC/simsopt integrations import-safe; tests may run without them.
 - **Namespace exports**: `src/quadcoil/__init__.py` exports many symbols via `import *`. If you add a new public API, consider whether it should be exported and ensure it doesn’t cause circular imports.
 - **Legacy solver paths**: `auglag.py` now keeps legacy implementations alongside new ones. Preserve the `_legacy` functions unless you are intentionally deleting a compatibility path.
-- **KKT differentiation**: the AugLag and SLSQP paths now recover multipliers from stationarity/KKT systems and route adjoint differentiation through `solver/kkt_adjoint.py`. Reuse that shared machinery instead of duplicating solver-specific adjoint logic.
+- **KKT differentiation**: the AugLag and SLSQP paths now recover multipliers from stationarity/KKT systems and route adjoint differentiation through `solvers/kkt_adjoint.py`. Reuse that shared machinery instead of duplicating solver-specific adjoint logic.
 - **Surface abstractions**: `SurfaceJAX` now owns the common `__init__`, `dof_to_gamma`, `gammadash`, `fit_dofs_from_gamma`, and `copy_and_set_quadpoints` behavior. Subclasses should mainly provide `dof_to_gamma_op`, `_build_surface_fit_matrices`, and their own pytree registration methods.
 
 ## Where to start when investigating a bug
 
 - **API-level behavior**: `src/quadcoil/quadcoil.py` (`quadcoil()`) and `src/quadcoil/wrapper.py` (parsing + resolution)
 - **Solver behavior**:
-  - `src/quadcoil/solver/auglag.py` for AugLag penalty updates, multiplier recovery, and inner L-BFGS behavior
-  - `src/quadcoil/solver/slsqp.py` for `slsqp-jax` configuration/plumbing
-  - `src/quadcoil/solver/ipm.py` for interior-point logic
-  - `src/quadcoil/solver/kkt_adjoint.py` for shared stationarity/adjoint differentiation
+  - `src/quadcoil/solvers/auglag.py` for AugLag penalty updates, multiplier recovery, and inner L-BFGS behavior
+  - `src/quadcoil/solvers/slsqp.py` for `slsqp-jax` configuration/plumbing
+  - `src/quadcoil/solvers/ipm.py` for interior-point logic
+  - `src/quadcoil/solvers/kkt_adjoint.py` for shared stationarity/adjoint differentiation
 - **Geometry / surface issues**: `src/quadcoil/surface.py` and `src/quadcoil/winding_surface.py`
-- **A specific objective/constraint**: locate its `_Quantity` implementation in `src/quadcoil/quantity/`
+- **A specific objective/constraint**: locate its `_Quantity` implementation in `src/quadcoil/quantities/`
 
 ## Recent changes (May 2026)
 
@@ -164,7 +164,7 @@ all = ["matplotlib", "scipy"]           # Everything
 
 **What changed**:
 - `scipy.constants.mu_0` is now hardcoded in `math_utils.py` as `mu_0 = 1.25663706127e-06`
-- `io/desc.py` and `quantity/current.py` now import `mu_0` from `math_utils`
+- `io/desc.py` and `quantities/current.py` now import `mu_0` from `math_utils`
 - `io/coil_cutting.py` checks for scipy/matplotlib availability and raises helpful errors
 - `plotting.py` checks for matplotlib availability and raises helpful errors
 

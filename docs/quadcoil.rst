@@ -7,7 +7,7 @@ Subpackages
 .. toctree::
    :maxdepth: 4
 
-   quadcoil.quantity
+   quadcoil.quantities
    quadcoil.io
 
 Submodules
@@ -37,10 +37,10 @@ quadcoil.quadcoil\_params module
    :show-inheritance:
    :undoc-members:
 
-quadcoil.solver module
-----------------------
+quadcoil.solvers module
+-----------------------
 
-.. automodule:: quadcoil.solver
+.. automodule:: quadcoil.solvers
    :members:
    :show-inheritance:
    :undoc-members:

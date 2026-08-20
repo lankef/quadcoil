@@ -2,7 +2,7 @@ import jax.numpy as jnp
 from jax import jit
 from functools import partial
 import lineax as lx
-from quadcoil.quantity.magnetic_field import _Bnormal
+from quadcoil.quantities.magnetic_field import _Bnormal
 from quadcoil import SurfaceRZFourierJAX, QuadcoilParams
 from quadcoil.wrapper import _resolve_quadpoints
 

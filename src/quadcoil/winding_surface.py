@@ -7,8 +7,8 @@ from jax.lax import scan
 from functools import partial
 from .surface import SurfaceRZFourierJAX
 from .quadcoil_params import QuadcoilParams
-from .quantity import Phi_with_net_current
-from .quantity.current import _K
+from .quantities import Phi_with_net_current
+from .quantities.current import _K
 from .math_utils import project_points_to_plane
 import optimistix as optx
 
