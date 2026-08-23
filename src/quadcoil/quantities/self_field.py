@@ -9,10 +9,72 @@ sheet current using the Robin & Volpe (2022) formula. This module evaluates the
 '''
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import jit
-from .current import _K
+from functools import partial
+from .current import _K_op
 from .quantity import _Quantity
 from quadcoil import project_arr_cylindrical
+
+_levi_civita = np.zeros((3, 3, 3), dtype=np.float64)
+for _i, _a, _m in [(0, 1, 2), (1, 2, 0), (2, 0, 1)]:
+    _levi_civita[_i, _a, _m] = 1.0
+for _i, _a, _m in [(0, 2, 1), (1, 0, 2), (2, 1, 0)]:
+    _levi_civita[_i, _a, _m] = -1.0
+
+
+@partial(jit, static_argnames=('winding_surface_mode',))
+def _B_self_integrands_affine(qp, winding_surface_mode=False):
+    r'''
+    Affine operators for the regularized self-field integrands:
+
+    ``S = b_S @ phi + c_S``, ``D = b_D @ phi + c_D``.
+
+    Does not take ``dofs``. Crosses use a Levi-Civita einsum so the ndofs
+    axis is an ordinary operand. See :func:`_B_self_integrands_xyz` for
+    the derivation of :math:`\mathbf S, \mathbf D`.
+
+    Returns
+    -------
+    b_S : ndarray, shape (n_phi, n_theta, 3, ndofs)
+    c_S : ndarray, shape (n_phi, n_theta, 3)
+    b_D : ndarray, shape (n_phi, n_theta, 3, ndofs)
+    c_D : ndarray, shape (n_phi, n_theta, 3)
+    '''
+    surface = qp.winding_surface_split(winding_surface_mode)
+    unitnormal_x = surface.unitnormal()
+    unitnormaldash1_x = surface.unitnormaldash(1, 0)
+    unitnormaldash2_x = surface.unitnormaldash(0, 1)
+    grad1_x, grad2_x = surface.grad_helper()
+    (
+        Kdash1_sv_op,
+        Kdash2_sv_op,
+        Kdash1_const,
+        Kdash2_const,
+    ) = qp.Kdash_helper(winding_surface_mode=winding_surface_mode)
+    b_K, c_K = _K_op(qp, winding_surface_mode=winding_surface_mode)
+    div_n_x = (
+        jnp.sum(grad1_x * unitnormaldash1_x, axis=-1)
+        + jnp.sum(grad2_x * unitnormaldash2_x, axis=-1)
+    )
+    eps = jnp.asarray(_levi_civita)
+    # (a × b)_i = ε_ijk a_j b_k
+    b_Kxn = jnp.einsum('ijk,...jm,...k->...im', eps, b_K, unitnormal_x)
+    c_Kxn = jnp.einsum('ijk,...j,...k->...i', eps, c_K, unitnormal_x)
+    b_S = 1e-7 * (
+        jnp.einsum('ijk,...j,...km->...im', eps, grad1_x, Kdash1_sv_op)
+        + jnp.einsum('ijk,...j,...km->...im', eps, grad2_x, Kdash2_sv_op)
+        + div_n_x[:, :, None, None] * b_Kxn
+    )
+    c_S = 1e-7 * (
+        jnp.einsum('ijk,...j,...k->...i', eps, grad1_x, Kdash1_const)
+        + jnp.einsum('ijk,...j,...k->...i', eps, grad2_x, Kdash2_const)
+        + div_n_x[:, :, None] * c_Kxn
+    )
+    b_D = 1e-7 * b_Kxn
+    c_D = 1e-7 * c_Kxn
+    return b_S, c_S, b_D, c_D
+
 
 def _B_self_integrands_xyz(qp, dofs, winding_surface_mode=False):
     r'''
@@ -193,55 +255,11 @@ def _B_self_integrands_xyz(qp, dofs, winding_surface_mode=False):
     quantities are rotated into the source point's basis and the result rotated
     back, so :func:`_B_self` integrates over the whole winding surface instead.
     '''
-    ''' Surface properties '''
-    if winding_surface_mode=='divide':
-        n_phi_1fp = len(qp.winding_surface.quadpoints_phi)//qp.winding_surface.nfp
-        surface = qp.winding_surface.copy_and_set_quadpoints(
-            quadpoints_phi=qp.winding_surface.quadpoints_phi[:n_phi_1fp],
-            quadpoints_theta=qp.winding_surface.quadpoints_theta,
-        )
-    elif winding_surface_mode:
-        surface = qp.winding_surface
-    else:
-        surface = qp.eval_surface
-    unitnormal_x = surface.unitnormal()
-    unitnormaldash1_x = surface.unitnormaldash(1, 0)
-    unitnormaldash2_x = surface.unitnormaldash(0, 1)
-    grad1_x, grad2_x = surface.grad_helper()
-
-    ''' K-related quantities '''
+    b_S, c_S, b_D, c_D = _B_self_integrands_affine(
+        qp, winding_surface_mode=winding_surface_mode,
+    )
     phi_mn = dofs['phi']
-    (
-        Kdash1_sv_op,
-        Kdash2_sv_op,
-        Kdash1_const,
-        Kdash2_const
-    ) = qp.Kdash_helper(winding_surface_mode=winding_surface_mode)
-    K_x = _K(qp, dofs, winding_surface_mode=winding_surface_mode)
-    Kdash1_x = Kdash1_sv_op @ phi_mn + Kdash1_const
-    Kdash2_x = Kdash2_sv_op @ phi_mn + Kdash2_const
-
-    # Divergence of the unit normal, -2H. Same expression as in
-    # _force_integrands_xyz.
-    # Shape: (n_phi_x, n_theta_x)
-    div_n_x = (
-        jnp.sum(grad1_x * unitnormaldash1_x, axis=-1)
-        + jnp.sum(grad2_x * unitnormaldash2_x, axis=-1)
-    )
-    # K(x) cross n(x). Shape: (n_phi_x, n_theta_x, 3(xyz))
-    K_cross_n_x = jnp.cross(K_x, unitnormal_x, axis=-1)
-
-    # S: the dual of the single-layer integrand tensor of the force.
-    # Shape: (n_phi_x, n_theta_x, 3(xyz))
-    integrand_single = 1e-7 * (
-        jnp.cross(grad1_x, Kdash1_x, axis=-1)
-        + jnp.cross(grad2_x, Kdash2_x, axis=-1)
-        + div_n_x[:, :, None] * K_cross_n_x
-    )
-    # D: the dual of the double-layer integrand tensor of the force.
-    # Shape: (n_phi_x, n_theta_x, 3(xyz))
-    integrand_double = 1e-7 * K_cross_n_x
-    return integrand_single, integrand_double
+    return b_S @ phi_mn + c_S, b_D @ phi_mn + c_D
 
 def _singular_layer_kernels(
     gamma_y, gamma_x, unitnormal_x, da_x, nfp,
@@ -347,8 +365,11 @@ def _integrate_B_self(
     gamma_x,
     unitnormal_x,
     da_x,
-    single_integrand,
-    double_integrand,
+    b_S,
+    c_S,
+    b_D,
+    c_D,
+    phi,
     nfp,
     bs_chunk_size=None,
 ):
@@ -356,9 +377,12 @@ def _integrate_B_self(
     Performs the singular integration of the self-field using
     :func:`_singular_layer_kernels`.
 
-    The integrands ``single_integrand`` and ``double_integrand`` are vectors of
-    shape ``(n_phix_1fp, n_thetax, 3)``; the function returns their weighted
-    sums over all source points.
+    ``b_S, c_S, b_D, c_D`` are the affine integrand operators from
+    :func:`_B_self_integrands_affine`, shapes ``(n_phix_1fp, n_thetax, 3, ndofs)``
+    / ``(n_phix_1fp, n_thetax, 3)``. Source axes are contracted into
+    ``A @ phi + B0`` before the mapped function returns, so nested JVPs
+    tape :math:`\partial B/\partial\Phi` of shape ``(3, ndofs)``, not the
+    unreduced source kernel.
 
     Note: when called from :func:`_B_self`, ``gamma_y`` is
     ``gamma_x[:n_phi_1fp]`` (a leading slice of the same JAX array), which
@@ -378,21 +402,19 @@ def _integrate_B_self(
     full eval grid at once.  ``None`` keeps the original fully vectorized
     path.
     '''
+    def _contract(kernel, b, c):
+        A = jnp.einsum('ijklm,lmnd->ijnd', kernel, b)
+        B0 = jnp.einsum('ijklm,lmn->ijn', kernel, c)
+        return A @ phi + B0
+
     if bs_chunk_size is None:
         single_kernel_da, double_kernel_da = _singular_layer_kernels(
             gamma_y, gamma_x, unitnormal_x, da_x, nfp,
         )
-        single_results = jnp.einsum(
-            'ijklm,lmn->ijn',
-            single_kernel_da,
-            single_integrand,
+        return (
+            _contract(single_kernel_da, b_S, c_S),
+            _contract(double_kernel_da, b_D, c_D),
         )
-        double_results = jnp.einsum(
-            'ijklm,lmn->ijn',
-            double_kernel_da,
-            double_integrand,
-        )
-        return single_results, double_results
 
     n_phiy, n_thetay = gamma_y.shape[:2]
     gamma_y_flat = gamma_y.reshape(-1, 3)
@@ -408,16 +430,8 @@ def _integrate_B_self(
             gy, gamma_x, unitnormal_x, da_x, nfp,
             phi_y_indices=phi_idx, th_y_indices=th_idx,
         )
-        single_pt = jnp.einsum(
-            'ijklm,lmn->ijn',
-            single_kernel_da,
-            single_integrand,
-        )
-        double_pt = jnp.einsum(
-            'ijklm,lmn->ijn',
-            double_kernel_da,
-            double_integrand,
-        )
+        single_pt = _contract(single_kernel_da, b_S, c_S)
+        double_pt = _contract(double_kernel_da, b_D, c_D)
         return single_pt[0, 0], double_pt[0, 0]
 
     single_flat, double_flat = jax.lax.map(
@@ -446,10 +460,9 @@ def _B_self(qp, dofs):
 
     See :func:`_B_self_integrands_xyz` for the derivation.
     '''
-    (
-        single_integrand_xyz,
-        double_integrand_xyz
-    ) = _B_self_integrands_xyz(qp, dofs, winding_surface_mode=True)
+    b_S, c_S, b_D, c_D = _B_self_integrands_affine(
+        qp, winding_surface_mode=True,
+    )
     gamma_x = qp.winding_surface.gamma()          # (n_phix*nfp, n_thetax, 3)
     n_phi_1fp = gamma_x.shape[0] // qp.nfp
     single_results, double_results = _integrate_B_self(
@@ -457,8 +470,8 @@ def _B_self(qp, dofs):
         gamma_x,                           # (n_phix*nfp, n_thetax, 3)
         qp.winding_surface.unitnormal(),   # (n_phix*nfp, n_thetax, 3)
         qp.winding_surface.da(),           # (n_phix*nfp, n_thetax)
-        single_integrand_xyz,              # (n_phix*nfp, n_thetax, 3)
-        double_integrand_xyz,              # (n_phix*nfp, n_thetax, 3)
+        b_S, c_S, b_D, c_D,
+        dofs['phi'],
         1,
         qp.bs_chunk_size,
     )

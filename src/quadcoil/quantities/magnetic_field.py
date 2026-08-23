@@ -1,8 +1,15 @@
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import jit, vmap
-from .current import _K
+from .current import _K_op
 from .quantity import _Quantity
+
+_levi_civita = np.zeros((3, 3, 3), dtype=np.float64)
+for _i, _a, _m in [(0, 1, 2), (1, 2, 0), (2, 0, 1)]:
+    _levi_civita[_i, _a, _m] = 1.0
+for _i, _a, _m in [(0, 2, 1), (1, 0, 2), (2, 1, 0)]:
+    _levi_civita[_i, _a, _m] = -1.0
 
 # ----- Implementations -----
 @jit
@@ -19,17 +26,20 @@ def _winding_surface_B(qp, dofs):
     nphi = ws_gamma.shape[0]
     ntheta = ws_gamma.shape[1]
     fak = 1e-7  # mu0 divided by 4 * pi factor
-    K_val = _K(qp, dofs, winding_surface_mode=True).reshape((-1, 3))
+    # K = b_K @ phi + c_K. Contract sources into A (3, ndofs) and B0 (3,)
+    # before the matvec so nested JVPs tape ∂B/∂Φ, not [n_eval, ndofs, n_src].
+    b_K, c_K = _K_op(qp, winding_surface_mode=True)
+    b_K = b_K.reshape((-1, 3, b_K.shape[-1]))
+    c_K = c_K.reshape((-1, 3))
+    phi_mn = dofs['phi']
+    eps = jnp.asarray(_levi_civita)
+    nmag = jnp.sqrt(jnp.sum(ws_normal**2, axis=1))
     def compute_B(point):
-        point = point.reshape(1, -1)
-        r = point - ws_points
-        rmag_2 = jnp.sum(r**2, axis=1)
-        rmag_inv = 1.0 / jnp.sqrt(rmag_2)
-        rmag_inv_3 = rmag_inv**3
-        nmag = jnp.sqrt(jnp.sum(ws_normal**2, axis=1))
-        Kcrossr = jnp.cross(K_val, r)
-        B_i = jnp.sum(nmag[:, None] * Kcrossr * rmag_inv_3[:, None], axis=0)
-        return B_i
+        r = point.reshape(1, -1) - ws_points
+        w = nmag / jnp.sqrt(jnp.sum(r**2, axis=1))**3
+        A = jnp.einsum('s,ijk,sjm,sk->im', w, eps, b_K, r)
+        B0 = jnp.einsum('s,ijk,sj,sk->i', w, eps, c_K, r)
+        return A @ phi_mn + B0
     # lax.map(..., batch_size=None) is a sequential scan, not vmap. Keep the
     # original fully vectorized path unless a finite chunk size is set.
     if qp.bs_chunk_size is None:

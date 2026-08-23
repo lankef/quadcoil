@@ -66,6 +66,26 @@ class _Params:
     def nfp(self):
         return self.winding_surface.nfp
 
+    def winding_surface_split(self, winding_surface_mode=False):
+        # When winding_surface_mode is set to "divide",
+        # K is only calculated on one field period of the
+        # winding surface. NOTE thaat this isn't always the
+        # same as the eval surface, because the winding
+        # and eval surfaces are allowed to have different
+        # resolutions! Used for force integrals.
+        if winding_surface_mode == 'divide':
+            n_phi_1fp = len(self.winding_surface.quadpoints_phi) // self.winding_surface.nfp
+            return self.winding_surface.copy_and_set_quadpoints(
+                quadpoints_phi=self.winding_surface.quadpoints_phi[:n_phi_1fp],
+                quadpoints_theta=self.winding_surface.quadpoints_theta,
+            )
+        # When winding_surface_mode is set to true,
+        # the evaluation will be done over the full winding surface
+        # instead. This is used when calculating B.
+        if winding_surface_mode:
+            return self.winding_surface
+        return self.eval_surface
+
 @tree_util.register_pytree_node_class
 class QuadcoilParams(_Params):
     r'''
@@ -376,17 +396,7 @@ class QuadcoilParams(_Params):
             Partial derivatives of the part of K due produced by the 
             uniform current from the net poloidal/toroidal currents. 
         '''
-        
-        if winding_surface_mode=='divide':
-            n_phi_1fp = len(self.winding_surface.quadpoints_phi)//self.winding_surface.nfp
-            surface = self.winding_surface.copy_and_set_quadpoints(
-                quadpoints_phi=self.winding_surface.quadpoints_phi[:n_phi_1fp], 
-                quadpoints_theta=self.winding_surface.quadpoints_theta, 
-            )
-        elif winding_surface_mode:
-            surface = self.winding_surface
-        else:
-            surface = self.eval_surface
+        surface = self.winding_surface_split(winding_surface_mode)
         normal = surface.normal()
         gammadash1 = surface.gammadash1()
         gammadash2 = surface.gammadash2()
@@ -489,16 +499,9 @@ class QuadcoilParams(_Params):
         '''
         nfp = self.nfp
         cp_m, cp_n = self.make_mn()
-        if winding_surface_mode=='divide':
-            n_phi_1fp = len(self.winding_surface.quadpoints_phi)//self.winding_surface.nfp
-            quadpoints_phi = self.winding_surface.quadpoints_phi[:n_phi_1fp]
-            quadpoints_theta = self.winding_surface.quadpoints_theta
-        elif winding_surface_mode:
-            quadpoints_phi = self.winding_surface.quadpoints_phi
-            quadpoints_theta = self.winding_surface.quadpoints_theta
-        else:    
-            quadpoints_phi = self.quadpoints_phi
-            quadpoints_theta = self.quadpoints_theta
+        surface = self.winding_surface_split(winding_surface_mode)
+        quadpoints_phi = surface.quadpoints_phi
+        quadpoints_theta = surface.quadpoints_theta
         # The uniform index for phi contains first sin Fourier 
         # coefficients, then optionally cos is stellsym=False.
         n_harmonic = len(cp_m)

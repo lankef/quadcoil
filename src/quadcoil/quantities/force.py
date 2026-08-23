@@ -1,7 +1,11 @@
 import jax.numpy as jnp
 import numpy as np
 from .current import _K, _K_desc_unit
-from .self_field import _B_self_integrands_xyz, _integrate_B_self
+from .self_field import (
+    _B_self_integrands_xyz,
+    _B_self_integrands_affine,
+    _integrate_B_self,
+)
 from .quantity import _Quantity
 from quadcoil import project_arr_cylindrical
 
@@ -68,14 +72,16 @@ def _force_xyz(qp, dofs):
     integrand in a basis that rotates with the field period; the saving is small
     anyway (O(n_phi n_theta) vs. the O((n_phi n_theta)^2) kernel).
     '''
-    S_xyz, D_xyz = _B_self_integrands_xyz(qp, dofs, winding_surface_mode=True)
+    b_S, c_S, b_D, c_D = _B_self_integrands_affine(
+        qp, winding_surface_mode=True,
+    )
     single_results, double_results = _integrate_B_self(
         qp.eval_surface.gamma(),           # (n_phiy, n_thetay, 3)
         qp.winding_surface.gamma(),        # (n_phix*nfp, n_thetax, 3)
         qp.winding_surface.unitnormal(),   # (n_phix*nfp, n_thetax, 3)
         qp.winding_surface.da(),           # (n_phix*nfp, n_thetax)  — nfp=1 treats full surface as one period
-        S_xyz,                             # (n_phix*nfp, n_thetax, 3)
-        D_xyz,                             # (n_phix*nfp, n_thetax, 3)
+        b_S, c_S, b_D, c_D,
+        dofs['phi'],
         1,
         qp.bs_chunk_size,
     )
