@@ -77,6 +77,7 @@ def _force_xyz(qp, dofs):
         S_xyz,                             # (n_phix*nfp, n_thetax, 3)
         D_xyz,                             # (n_phix*nfp, n_thetax, 3)
         1,
+        qp.bs_chunk_size,
     )
     B_xyz = single_results + double_results  # (n_phiy, n_thetay, 3)
     return jnp.cross(_K(qp, dofs, winding_surface_mode=False), B_xyz, axis=-1)

@@ -27,12 +27,14 @@ class _Params:
         Bnormal_plasma=None,
         quadpoints_phi=None,
         quadpoints_theta=None, 
-        stellsym=None
+        stellsym=None,
+        bs_chunk_size=None,
         ):
         
         # Writing peroperties 
         self.plasma_surface = plasma_surface
         self.winding_surface = winding_surface
+        self.bs_chunk_size = bs_chunk_size
         assert len(winding_surface.quadpoints_phi)%winding_surface.nfp==0
         self.net_poloidal_current_amperes = net_poloidal_current_amperes
         self.net_toroidal_current_amperes = net_toroidal_current_amperes
@@ -98,6 +100,11 @@ class QuadcoilParams(_Params):
     quadpoints_theta : ndarray, shape (ntheta,), optional, default=None
         The poloidal quadrature points to evaluate quantities at. 
         Takes the winding surface's quadrature points by default. 
+    bs_chunk_size : int, optional, default=None
+        Number of Biot-Savart evaluation points to process at once in
+        :func:`~quadcoil.quantities.magnetic_field._winding_surface_B` and
+        :func:`~quadcoil.quantities.self_field._integrate_B_self`.
+        ``None`` keeps the original fully vectorized kernels.
 
     Attributes
     ----------
@@ -131,6 +138,8 @@ class QuadcoilParams(_Params):
         (Static) The number of degrees of freedom in :math:`\Phi_{sv}`.
     ndofs_half : int
         (Static) ``ndof`` if ``stellsym==True``, ``ndof//2`` otherwise. 
+    bs_chunk_size : int or None
+        (Static) Evaluation-point chunk size for Biot-Savart kernels.
     '''
     def __init__(
         self,
@@ -143,7 +152,8 @@ class QuadcoilParams(_Params):
         ntor=4, 
         quadpoints_phi=None,
         quadpoints_theta=None, 
-        stellsym=None
+        stellsym=None,
+        bs_chunk_size=None,
         ):
         
         # Writing peroperties 
@@ -156,6 +166,7 @@ class QuadcoilParams(_Params):
             quadpoints_phi=quadpoints_phi,
             quadpoints_theta=quadpoints_theta,
             stellsym=stellsym,
+            bs_chunk_size=bs_chunk_size,
         )
         self.mpol = mpol
         self.ntor = ntor
@@ -176,7 +187,8 @@ class QuadcoilParams(_Params):
             ntor=aux_data['ntor'],
             quadpoints_phi=children[6],
             quadpoints_theta=children[7],
-            stellsym=aux_data['stellsym']
+            stellsym=aux_data['stellsym'],
+            bs_chunk_size=aux_data.get('bs_chunk_size'),
         )
 
     def tree_flatten(self):
@@ -197,6 +209,7 @@ class QuadcoilParams(_Params):
             'ntor': self.ntor,
             'ndofs': self.ndofs,
             'ndofs_half': self.ndofs_half,
+            'bs_chunk_size': self.bs_chunk_size,
             # 'm': self.m,
             # 'n': self.n,
         }
@@ -286,6 +299,7 @@ class QuadcoilParams(_Params):
             quadpoints_phi=self.quadpoints_phi,
             quadpoints_theta=self.quadpoints_theta,
             stellsym=self.stellsym,
+            bs_chunk_size=self.bs_chunk_size,
         )
 
         phi_np = _np.array(phi_mn, dtype=float)
@@ -556,7 +570,8 @@ class QuadcoilParamsFiniteElement(_Params):
         Bnormal_plasma=None,
         quadpoints_phi=None,
         quadpoints_theta=None, 
-        stellsym=None
+        stellsym=None,
+        bs_chunk_size=None,
         ):
         
         # Writing peroperties 
@@ -569,6 +584,7 @@ class QuadcoilParamsFiniteElement(_Params):
             quadpoints_phi=quadpoints_phi,
             quadpoints_theta=quadpoints_theta,
             stellsym=stellsym,
+            bs_chunk_size=bs_chunk_size,
         )
         
 
@@ -584,7 +600,8 @@ class QuadcoilParamsFiniteElement(_Params):
             Bnormal_plasma=children[5],
             quadpoints_phi=children[6],
             quadpoints_theta=children[7],
-            stellsym=aux_data['stellsym']
+            stellsym=aux_data['stellsym'],
+            bs_chunk_size=aux_data.get('bs_chunk_size'),
         )
 
     def tree_flatten(self):
@@ -603,6 +620,7 @@ class QuadcoilParamsFiniteElement(_Params):
             'stellsym': self.stellsym,
             'ndofs': self.ndofs,
             'ndofs_half': self.ndofs_half,
+            'bs_chunk_size': self.bs_chunk_size,
             # 'm': self.m,
             # 'n': self.n,
         }

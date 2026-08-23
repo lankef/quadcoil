@@ -114,6 +114,8 @@ QUADCOIL_STATIC_ARGNAMES=[
     'smoothing',
     # Sidecar outputs:
     'export_winding_dofs',
+    # Biot-Savart evaluation-point chunking:
+    'bs_chunk_size',
 ]
 @partial(jit, static_argnames=QUADCOIL_STATIC_ARGNAMES)
 def _quadcoil_pure(
@@ -208,6 +210,7 @@ def _quadcoil_pure(
     lbfgs_memory:int=10, # applicable for 'slsqp' only
     maxiter:int=None,
     maxiter_inner:int=None, # applicable for 'auglag-lbfgs' only
+    bs_chunk_size:int=None,
 ):
     r'''The jitted part of quadcoil().
     '''
@@ -407,6 +410,7 @@ def _quadcoil_pure(
             quadpoints_phi=quadpoints_phi,
             quadpoints_theta=quadpoints_theta, 
             stellsym=stellsym,
+            bs_chunk_size=bs_chunk_size,
         )
         return qp_temp
 
@@ -1076,6 +1080,10 @@ def quadcoil(**kwargs):
     verbose : int, optional, default=0
         (Static) Print general info when ``verbose==1``.
         Print inside the outer iteration loop, too, when ``verbose==2``.
+    bs_chunk_size : int, optional, default=None
+        (Static) Number of Biot-Savart evaluation points to process at once
+        in the winding-surface and self-field kernels. ``None`` keeps the
+        original fully vectorized kernels.
     '''
     # Normalize metric_name before JIT: lists are unhashable static args.
     if 'metric_name' in kwargs:

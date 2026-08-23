@@ -8,7 +8,7 @@ from quadcoil.quantity.current import _K
 from quadcoil.quantity.force import (
     _force_cyl, _force_cyl_legacy, _force_xyz, _force_integrands_xyz,
 )
-from quadcoil.quantity.self_field import _B_self, _B_self_cyl, _B2_self
+from quadcoil.quantity.self_field import _B_self, _B_self_cyl, _B2_self, f_max_B2_self
 from load_test_data import load_data
 
 winding_surface, plasma_surface, cp, cpst, qp = load_data()
@@ -273,6 +273,39 @@ class QuadcoilBSelfTest(unittest.TestCase):
         self.assertTrue(jnp.isfinite(force_cyl).all(), 'force_cyl contains non-finite values')
         self.assertTrue(max_force_xyz < 1e15, f'force_xyz blew up: {max_force_xyz}')
         self.assertTrue(max_force_cyl < 1e15, f'force_cyl blew up: {max_force_cyl}')
+
+    def test_bs_chunk_size_parity(self):
+        '''Chunked self-field kernels must match the fully vectorized path.'''
+        qp_chunk = QuadcoilParams(
+            plasma_surface=qp.plasma_surface,
+            winding_surface=qp.winding_surface,
+            net_poloidal_current_amperes=qp.net_poloidal_current_amperes,
+            net_toroidal_current_amperes=qp.net_toroidal_current_amperes,
+            Bnormal_plasma=qp.Bnormal_plasma,
+            mpol=qp.mpol,
+            ntor=qp.ntor,
+            quadpoints_phi=qp.quadpoints_phi,
+            quadpoints_theta=qp.quadpoints_theta,
+            stellsym=qp.stellsym,
+            bs_chunk_size=5,
+        )
+        B_full = _B_self(qp, DOFS)
+        B_chunk = _B_self(qp_chunk, DOFS)
+        print('chunked vs full _B_self rel. err.:', _relerr(B_chunk, B_full))
+        self.assertTrue(_relerr(B_chunk, B_full) < 1e-12)
+
+        B2_full = _B2_self(qp, DOFS)
+        B2_chunk = _B2_self(qp_chunk, DOFS)
+        self.assertTrue(_relerr(B2_chunk, B2_full) < 1e-12)
+
+        fmax_full = f_max_B2_self(qp, DOFS)
+        fmax_chunk = f_max_B2_self(qp_chunk, DOFS)
+        self.assertTrue(_relerr(fmax_chunk, fmax_full) < 1e-12)
+
+        force_full = _force_xyz(qp, DOFS)
+        force_chunk = _force_xyz(qp_chunk, DOFS)
+        print('chunked vs full _force_xyz rel. err.:', _relerr(force_chunk, force_full))
+        self.assertTrue(_relerr(force_chunk, force_full) < 1e-12)
 
 
 if __name__ == "__main__":

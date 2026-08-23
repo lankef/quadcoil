@@ -1,6 +1,6 @@
+import jax
 import jax.numpy as jnp
-import jax.numpy as jnp
-from jax import jit, vmap
+from jax import jit
 from .current import _K
 from .quantity import _Quantity
 
@@ -30,7 +30,10 @@ def _winding_surface_B(qp, dofs):
         Kcrossr = jnp.cross(K_val, r)
         B_i = jnp.sum(nmag[:, None] * Kcrossr * rmag_inv_3[:, None], axis=0)
         return B_i
-    B = vmap(compute_B)(points) * fak
+    # lax.map(..., batch_size=None) is vmap-equivalent; a finite batch_size
+    # walks evaluation points in chunks so the pairwise kernel is not
+    # materialized for the full plasma grid at once.
+    B = jax.lax.map(compute_B, points, batch_size=qp.bs_chunk_size) * fak
     return B.reshape(gamma.shape) / nphi / ntheta
 _winding_surface_B_desc_unit = lambda scales: scales["B"]
 

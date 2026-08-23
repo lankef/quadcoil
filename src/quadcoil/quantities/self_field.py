@@ -7,8 +7,8 @@ sheet current using the Robin & Volpe (2022) formula. This module evaluates the
 :math:`\mathbf L' = \mathbf K \times \mathbf B_{self}`. See
 :func:`_B_self_integrands_xyz` for the derivation.
 '''
+import jax
 import jax.numpy as jnp
-import numpy as np
 from jax import jit
 from .current import _K
 from .quantity import _Quantity
@@ -243,7 +243,10 @@ def _B_self_integrands_xyz(qp, dofs, winding_surface_mode=False):
     integrand_double = 1e-7 * K_cross_n_x
     return integrand_single, integrand_double
 
-def _singular_layer_kernels(gamma_y, gamma_x, unitnormal_x, da_x, nfp):
+def _singular_layer_kernels(
+    gamma_y, gamma_x, unitnormal_x, da_x, nfp,
+    phi_y_indices=None, th_y_indices=None,
+):
     r'''
     Returns the quadrature-weighted single- and double-layer kernels for a
     regularized sheet-current singular integral:
@@ -277,6 +280,13 @@ def _singular_layer_kernels(gamma_y, gamma_x, unitnormal_x, da_x, nfp):
         ``gamma_x.shape[0]`` must equal ``da_x.shape[0] * nfp``.
     nfp : int
         Number of field periods spanned by ``gamma_x``.
+    phi_y_indices : ndarray, shape ``(n_phiy, n_thetay)``, optional
+        Global poloidal-index of each evaluation point, used for the
+        index-diagonal self-mask. Defaults to ``arange(n_phiy)`` along
+        axis 0. Required when ``gamma_y`` is a chunk of a larger eval grid.
+    th_y_indices : ndarray, shape ``(n_phiy, n_thetay)``, optional
+        Global toroidal-index of each evaluation point. Defaults to
+        ``arange(n_thetay)`` along axis 1.
 
     Returns
     -------
@@ -290,11 +300,17 @@ def _singular_layer_kernels(gamma_y, gamma_x, unitnormal_x, da_x, nfp):
     shape_integral = shapey + [nfp, n_phix_1fp, n_thetax]
 
     n_phiy, n_thetay = shapey
-    fp_idx   = np.arange(nfp)[None, None, :, None, None]
-    phi_xidx = np.arange(n_phix_1fp)[None, None, None, :, None]
-    th_xidx  = np.arange(n_thetax)[None, None, None, None, :]
-    phi_yidx = np.arange(n_phiy)[:, None, None, None, None]
-    th_yidx  = np.arange(n_thetay)[None, :, None, None, None]
+    fp_idx   = jnp.arange(nfp)[None, None, :, None, None]
+    phi_xidx = jnp.arange(n_phix_1fp)[None, None, None, :, None]
+    th_xidx  = jnp.arange(n_thetax)[None, None, None, None, :]
+    if phi_y_indices is None:
+        phi_yidx = jnp.arange(n_phiy)[:, None, None, None, None]
+    else:
+        phi_yidx = phi_y_indices[:, :, None, None, None]
+    if th_y_indices is None:
+        th_yidx = jnp.arange(n_thetay)[None, :, None, None, None]
+    else:
+        th_yidx = th_y_indices[:, :, None, None, None]
     self_mask = (
         (fp_idx == 0)
         & (phi_xidx == phi_yidx)
@@ -334,6 +350,7 @@ def _integrate_B_self(
     single_integrand,
     double_integrand,
     nfp,
+    bs_chunk_size=None,
 ):
     r'''
     Performs the singular integration of the self-field using
@@ -355,21 +372,63 @@ def _integrate_B_self(
     kernels) span.  Pass ``nfp=1`` when the integrands are in xyz (not
     field-period periodic) and the full winding surface is given as ``gamma_x``
     and ``da_x``.
+
+    ``bs_chunk_size`` walks evaluation points in batches via
+    :func:`jax.lax.map` so the pairwise kernel is not materialized for the
+    full eval grid at once.  ``None`` keeps the original fully vectorized
+    path.
     '''
-    single_kernel_da, double_kernel_da = _singular_layer_kernels(
-        gamma_y, gamma_x, unitnormal_x, da_x, nfp,
+    if bs_chunk_size is None:
+        single_kernel_da, double_kernel_da = _singular_layer_kernels(
+            gamma_y, gamma_x, unitnormal_x, da_x, nfp,
+        )
+        single_results = jnp.einsum(
+            'ijklm,lmn->ijn',
+            single_kernel_da,
+            single_integrand,
+        )
+        double_results = jnp.einsum(
+            'ijklm,lmn->ijn',
+            double_kernel_da,
+            double_integrand,
+        )
+        return single_results, double_results
+
+    n_phiy, n_thetay = gamma_y.shape[:2]
+    gamma_y_flat = gamma_y.reshape(-1, 3)
+    phi_y_flat = jnp.repeat(jnp.arange(n_phiy), n_thetay)
+    th_y_flat = jnp.tile(jnp.arange(n_thetay), n_phiy)
+
+    def _integrate_one(payload):
+        g, phi_y, th_y = payload
+        gy = g.reshape(1, 1, 3)
+        phi_idx = phi_y.reshape(1, 1)
+        th_idx = th_y.reshape(1, 1)
+        single_kernel_da, double_kernel_da = _singular_layer_kernels(
+            gy, gamma_x, unitnormal_x, da_x, nfp,
+            phi_y_indices=phi_idx, th_y_indices=th_idx,
+        )
+        single_pt = jnp.einsum(
+            'ijklm,lmn->ijn',
+            single_kernel_da,
+            single_integrand,
+        )
+        double_pt = jnp.einsum(
+            'ijklm,lmn->ijn',
+            double_kernel_da,
+            double_integrand,
+        )
+        return single_pt[0, 0], double_pt[0, 0]
+
+    single_flat, double_flat = jax.lax.map(
+        _integrate_one,
+        (gamma_y_flat, phi_y_flat, th_y_flat),
+        batch_size=bs_chunk_size,
     )
-    single_results = jnp.einsum(
-        'ijklm,lmn->ijn',
-        single_kernel_da,
-        single_integrand,
+    return (
+        single_flat.reshape(n_phiy, n_thetay, 3),
+        double_flat.reshape(n_phiy, n_thetay, 3),
     )
-    double_results = jnp.einsum(
-        'ijklm,lmn->ijn',
-        double_kernel_da,
-        double_integrand,
-    )
-    return single_results, double_results
 
 @jit 
 def _B_self(qp, dofs):
@@ -401,6 +460,7 @@ def _B_self(qp, dofs):
         single_integrand_xyz,              # (n_phix*nfp, n_thetax, 3)
         double_integrand_xyz,              # (n_phix*nfp, n_thetax, 3)
         1,
+        qp.bs_chunk_size,
     )
     return single_results + double_results
 
