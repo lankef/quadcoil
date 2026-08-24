@@ -10,7 +10,7 @@ authors = [
 ]
 description = "QUADCOIL, a global stellarator coil optimizer and coil complexity proxy."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "numpy",
     "jax >= 0.4.38",
