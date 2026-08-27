@@ -1,14 +1,19 @@
+# Builds and pycache
 docs/_build/
 dist/
 build/
 *.egg-info/
-*.pyc
 __pycache__/
+*.pyc
+*-cache
+# Checkpoints
 .ipynb_checkpoints/
 *checkpoint.py
 *checkpoint.ipynb
-.claude/
-*-cache
+# Data
 *.npy
-graphify-out
+# AI tools
+.claude/
+.cursor/
+graphify-out/
 
