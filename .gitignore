@@ -6,12 +6,15 @@ build/
 __pycache__/
 *.pyc
 *-cache
+
 # Checkpoints
 .ipynb_checkpoints/
 *checkpoint.py
 *checkpoint.ipynb
+
 # Data
 *.npy
+
 # AI tools
 .claude/
 .cursor/
