@@ -190,7 +190,12 @@ class VectorMetricTest(unittest.TestCase):
         """Chunked KKT adjoint VJP matches the fully vectorized path.
 
         Uses chunk sizes that both divide and do not divide the metric
-        length, so the ``lax.map`` remainder path is exercised.
+        length, so the remainder chunk is exercised.
+
+        Chunking only reorders floating-point reductions inside the VJP, so
+        the two paths agree to roundoff rather than bitwise. On this problem
+        the unchunked reference is also the memory-heaviest thing in the
+        suite, so it is pinned to CPU to keep it off whatever GPU CI has.
         """
         nfp = plasma_surface.nfp
         # Small grids / resolution keep the unchunked reference in memory
@@ -208,31 +213,48 @@ class VectorMetricTest(unittest.TestCase):
             winding_quadpoints_theta=theta,
             maxiter=50,
         )
-        out_ref, _, _, _ = quadcoil(
-            **_base_kwargs(**base, jac_chunk_size=None)
-        )
-        for chunk in (4, 7):
-            out_chunk, _, _, _ = quadcoil(
-                **_base_kwargs(**base, jac_chunk_size=chunk)
+        # Gradient leaves here span ~30 orders of magnitude, so a pure
+        # relative comparison is decided by entries sitting at the noise
+        # floor. Compare against each leaf's own scale instead. This bound
+        # is calibrated for THIS test problem only: the measured worst-case
+        # deviation is ~1.2e-10 of the leaf maximum, and the adjoint solve
+        # is deliberately ill-conditioned, so a different resolution,
+        # objective or metric will need a different number.
+        grad_atol_frac = 1e-8
+
+        cpu = jax.devices('cpu')[0]
+        with jax.default_device(cpu):
+            out_ref, _, _, _ = quadcoil(
+                **_base_kwargs(**base, jac_chunk_size=None)
             )
-            self.assertTrue(
-                jnp.allclose(
-                    out_ref['phi_dofs']['value'],
-                    out_chunk['phi_dofs']['value'],
-                    rtol=1e-10,
-                    atol=1e-12,
-                ),
-                f'phi_dofs value mismatch for jac_chunk_size={chunk}',
-            )
-            for key in out_ref['phi_dofs']['grad']:
-                a = out_ref['phi_dofs']['grad'][key]
-                b = out_chunk['phi_dofs']['grad'][key]
-                # Gradients can be O(1e20+); rely on relative tolerance.
-                self.assertTrue(
-                    jnp.allclose(a, b, rtol=1e-7, atol=0.0),
-                    f'grad leaf {key} mismatch for jac_chunk_size={chunk}: '
-                    f'maxabs={float(jnp.max(jnp.abs(a - b))):.3e}',
+            for chunk in (4, 7):
+                out_chunk, _, _, _ = quadcoil(
+                    **_base_kwargs(**base, jac_chunk_size=chunk)
                 )
+                self.assertTrue(
+                    jnp.allclose(
+                        out_ref['phi_dofs']['value'],
+                        out_chunk['phi_dofs']['value'],
+                        rtol=1e-10,
+                        atol=1e-12,
+                    ),
+                    f'phi_dofs value mismatch for jac_chunk_size={chunk}',
+                )
+                for key in out_ref['phi_dofs']['grad']:
+                    a = out_ref['phi_dofs']['grad'][key]
+                    b = out_chunk['phi_dofs']['grad'][key]
+                    scale = float(jnp.max(jnp.abs(a)))
+                    self.assertTrue(
+                        jnp.allclose(
+                            a, b,
+                            rtol=1e-7,
+                            atol=grad_atol_frac * scale,
+                        ),
+                        f'grad leaf {key} mismatch for '
+                        f'jac_chunk_size={chunk}: '
+                        f'maxabs={float(jnp.max(jnp.abs(a - b))):.3e} '
+                        f'leaf scale={scale:.3e}',
+                    )
 
 
 if __name__ == '__main__':

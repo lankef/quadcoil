@@ -623,8 +623,11 @@ Shared / top-level options:
 9. Chunking the adjoint derivative
 ----------------------------------
 
-When ``metric_name`` contains **array-valued** quantities (see Section 7), we
-**strongly recommend** setting ``jac_chunk_size`` to avoid memory overflow.
+Chunking is only likely to be necessary when ``metric_name`` contains
+**array-valued** quantities (see Section 7); in that case we **strongly
+recommend** setting ``jac_chunk_size`` to avoid memory overflow. If every
+requested metric is scalar, leaving ``jac_chunk_size=None`` is normally
+the better choice.
 
 .. list-table::
    :header-rows: 1
@@ -655,6 +658,17 @@ length-220 vector metric replicates ~11 MiB intermediates 220 times and
 can push peak device memory into the tens of GiB. Setting
 ``jac_chunk_size=16`` cuts that peak by roughly ``n_metrics_flat / 16``
 at the cost of that many sequential passes over the VJP.
+
+**Accuracy.** Chunking is exact in real arithmetic, but each chunk
+boundary changes the order in which floating-point reductions inside the
+VJP are accumulated, so the returned derivatives shift slightly. The shift
+is proportional to how ill-conditioned the KKT adjoint solve is, and it
+tends to grow as ``jac_chunk_size`` shrinks. Prefer the largest chunk size
+that fits in memory, and treat very small chunk sizes as a last resort. If
+the derivatives look suspect, check the conditioning of the adjoint solve
+before blaming the chunking: a poorly regularized objective can inflate
+the adjoint rows by many orders of magnitude, which amplifies any
+reordering.
 
 Example usage::
 
