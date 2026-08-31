@@ -523,6 +523,25 @@ def _f_B_self(qp, dofs):
     return jnp.sum(B2_val / 2 * da_1fp) * qp.nfp
 _f_B_self_desc_unit = lambda scales: _B_self_desc_unit(scales)**2 * scales["R0"] * scales["a"]
 
+@jit
+def _B_self_norm(qp, dofs):
+    r'''
+    Normal component of :math:`\mathbf B_{self}` on the first field period
+    of ``qp.winding_surface`` (same quadrature as :func:`_B_self`).
+    '''
+    gamma_x = qp.winding_surface.gamma()
+    n_phi_1fp = gamma_x.shape[0] // qp.nfp
+    unitnormal_1fp = qp.winding_surface.unitnormal()[:n_phi_1fp]
+    return jnp.sum(unitnormal_1fp * _B_self(qp, dofs), axis=-1)
+
+def _winding_1fp_da(qp):
+    n_phi_1fp = qp.winding_surface.gamma().shape[0] // qp.nfp
+    return qp.winding_surface.da()[:n_phi_1fp]
+
+_f_l1_B_self_norm_desc_unit = (
+    lambda scales: _B_self_desc_unit(scales) * scales["R0"] * scales["a"]
+)
+
 # ----- Wrappers -----
 # Linear 3d vector fields. Like winding_surface_B, setting their components
 # is close to trivial, but <= and >= are still supported.
@@ -544,6 +563,12 @@ B2_self = _Quantity.generate_c2(
     desc_unit=_B2_self_desc_unit,
 )
 
+B_self_norm = _Quantity.generate_c2(
+    func=_B_self_norm,
+    compatibility=['<=', '>='],
+    desc_unit=_B_self_desc_unit,
+)
+
 # This is a positive definite quadratic scalar. 
 f_B_self = _Quantity.generate_c2(
     func=_f_B_self, 
@@ -556,5 +581,13 @@ f_max_B2_self = _Quantity.generate_linf_norm(
     aux_argname='scaled_max_B2_self', 
     desc_unit=_B2_self_desc_unit,
     square=False,
+    auto_stellsym=True,
+)
+
+f_l1_B_self_norm = _Quantity.generate_l1_norm(
+    func=_B_self_norm,
+    aux_argname='scaled_abs_B_self_norm',
+    desc_unit=_f_l1_B_self_norm_desc_unit,
+    da_fn=_winding_1fp_da,
     auto_stellsym=True,
 )

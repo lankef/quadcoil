@@ -8,7 +8,9 @@ from quadcoil.quantity.current import _K
 from quadcoil.quantity.force import (
     _force_cyl, _force_cyl_legacy, _force_xyz, _force_integrands_xyz,
 )
-from quadcoil.quantity.self_field import _B_self, _B_self_cyl, _B2_self, f_max_B2_self
+from quadcoil.quantity.self_field import (
+    _B_self, _B_self_cyl, _B2_self, _B_self_norm, f_max_B2_self, f_l1_B_self_norm,
+)
 from load_test_data import load_data
 
 winding_surface, plasma_surface, cp, cpst, qp = load_data()
@@ -306,6 +308,25 @@ class QuadcoilBSelfTest(unittest.TestCase):
         force_chunk = _force_xyz(qp_chunk, DOFS)
         print('chunked vs full _force_xyz rel. err.:', _relerr(force_chunk, force_full))
         self.assertTrue(_relerr(force_chunk, force_full) < 1e-12)
+
+    def test_B_self_norm_and_l1(self):
+        '''
+        _B_self_norm is n · B_self on the winding 1fp grid, and
+        f_l1_B_self_norm is the surface L-1 integral of that scalar.
+        '''
+        gamma_x = qp.winding_surface.gamma()
+        n_phi_1fp = gamma_x.shape[0] // qp.nfp
+        unitnormal_1fp = qp.winding_surface.unitnormal()[:n_phi_1fp]
+        da_1fp = qp.winding_surface.da()[:n_phi_1fp]
+
+        Bn_ref = jnp.sum(unitnormal_1fp * _B_self(qp, DOFS), axis=-1)
+        Bn = _B_self_norm(qp, DOFS)
+        self.assertTrue(_relerr(Bn, Bn_ref) < 1e-12)
+
+        l1_ref = jnp.sum(da_1fp * jnp.abs(Bn)) * qp.nfp
+        l1 = f_l1_B_self_norm(qp, DOFS)
+        print('f_l1_B_self_norm vs hand integral, rel. err.:', _relerr(l1, l1_ref))
+        self.assertTrue(_relerr(l1, l1_ref) < 1e-12)
 
 
 if __name__ == "__main__":

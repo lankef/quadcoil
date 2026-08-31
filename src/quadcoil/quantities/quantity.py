@@ -518,7 +518,7 @@ class _Quantity:
             desc_unit=desc_unit,
         )
 
-    def generate_l1_norm(func, aux_argname, desc_unit, positive_definite=False, square=False, auto_stellsym=False):
+    def generate_l1_norm(func, aux_argname, desc_unit, positive_definite=False, square=False, auto_stellsym=False, da_fn=None):
         r'''
         Generates the slack constraints for an L-1 
         norm. See documentations for ``quadcoil.objective.Objective``.
@@ -554,25 +554,30 @@ class _Quantity:
         auto_stellsym : bool, optional, default=False
             When ``True``, ignores the second half of all objective values when constructing 
             constraints. Reduces computational cost and improves conditioning.
+        da_fn : Callable, optional, default=None
+            ``da_fn(qp) -> da`` returning the surface-area element on the same
+            quadrature grid as ``func``. Defaults to ``qp.eval_surface.da()``.
 
         Returns
         -------
         A ``_Quantity``.
         '''
+        if da_fn is None:
+            da_fn = lambda qp: qp.eval_surface.da()
 
         # The effective function
-        def _raw_f_impl(qp, dofs, func=func):
-            da = qp.eval_surface.da()
+        def _raw_f_impl(qp, dofs, func=func, da_fn=da_fn):
+            da = da_fn(qp)
             field = func(qp, dofs)
             integrand = da.reshape(da.shape + (1,) * (field.ndim - da.ndim)) * jnp.abs(field)
             return jnp.sum(integrand) * qp.nfp
         # The objective/constraint form of this L-1
         # norm is the surface integral pf the aux variable.
 
-        def _scaled_slack_f_impl(qp, dofs, unit, aux_argname=aux_argname):
+        def _scaled_slack_f_impl(qp, dofs, unit, aux_argname=aux_argname, da_fn=da_fn):
             # Because the aux vars are already
             # scaled to O(1), no unit dependence is actually needed here.
-            da = qp.eval_surface.da()
+            da = da_fn(qp)
             f_shape = eval_shape(func, qp, dofs).shape
             if auto_stellsym and qp.stellsym:
                 field = _expand_by_stellsym(dofs[aux_argname], f_shape)
@@ -581,8 +586,8 @@ class _Quantity:
             integrand = jnp.broadcast_to(da, field.shape) * jnp.abs(field)
             return jnp.sum(integrand) * qp.nfp
         
-        def _scaled_approx_f_impl(qp, dofs, unit, smoothing_params, func=func):
-            da = qp.eval_surface.da()
+        def _scaled_approx_f_impl(qp, dofs, unit, smoothing_params, func=func, da_fn=da_fn):
+            da = da_fn(qp)
             field = func(qp, dofs)
             # Assuming field and da has the same first two dims
             # but field may have an arbitrary num of extra dims. 

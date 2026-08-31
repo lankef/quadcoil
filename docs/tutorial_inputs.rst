@@ -620,4 +620,48 @@ Shared / top-level options:
      - ``1e-7``
      - Relative convergence tolerance.
 
+9. Chunking the adjoint derivative
+----------------------------------
+
+When ``metric_name`` contains **array-valued** quantities (see Section 7), we
+**strongly recommend** setting ``jac_chunk_size`` to avoid memory overflow.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Parameter
+     - Type
+     - Default
+     - Definition
+   * - ⭐ ``jac_chunk_size``
+     - ``int`` or ``None``, static
+     - ``None``
+     - Number of KKT adjoint metric rows to differentiate at once. ``None`` keeps the fully vectorized path.
+
+**Why this matters.** Adjoint differentiation creates one adjoint row per
+scalar metric component. All rows are pushed through a single VJP of the
+KKT residual with ``vmap``, so each lane holds a private copy of every
+taped intermediate and peak memory grows linearly with the total number of
+scalar components. Scalar metrics (for example ``'f_B'``, ``'f_K'``) are
+one or two lanes and cost essentially nothing. A length-``ndofs`` vector
+metric (for example ``'phi_dofs'``) is hundreds of lanes, and the taped
+winding-surface operators of shape
+``(n_winding_phi, n_winding_theta, 3, ndofs)`` are replicated once per
+lane.
+
+**Worked example.** At ``mpol=ntor=10`` (``ndofs=220``) with the default
+winding grid (``32*nfp`` by ``34`` = 2176 points for ``nfp=2``), one
+length-220 vector metric replicates ~11 MiB intermediates 220 times and
+can push peak device memory into the tens of GiB. Setting
+``jac_chunk_size=16`` cuts that peak by roughly ``n_metrics_flat / 16``
+at the cost of that many sequential passes over the VJP.
+
+Example usage::
+
+    out_dict, qp, dofs_opt, solve_results = quadcoil(
+        ...,
+        metric_name=('phi_dofs',),
+        jac_chunk_size=16,
+    )
+
 Thus far, we have successfully run an instance of QUADCOIL. The next section will explain how to interpret the outputs.

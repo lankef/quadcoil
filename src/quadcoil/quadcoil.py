@@ -116,6 +116,8 @@ QUADCOIL_STATIC_ARGNAMES=[
     'export_winding_dofs',
     # Biot-Savart evaluation-point chunking:
     'bs_chunk_size',
+    # KKT adjoint metric-row chunking:
+    'jac_chunk_size',
 ]
 @partial(jit, static_argnames=QUADCOIL_STATIC_ARGNAMES)
 def _quadcoil_pure(
@@ -211,6 +213,7 @@ def _quadcoil_pure(
     maxiter:int=None,
     maxiter_inner:int=None, # applicable for 'auglag-lbfgs' only
     bs_chunk_size:int=None,
+    jac_chunk_size:int=None,
 ):
     r'''The jitted part of quadcoil().
     '''
@@ -855,6 +858,7 @@ def _quadcoil_pure(
 
     all_values, dfdy, debug_info = adjoint_kkt(
         f_metrics_flat, stationarity_data, y_flat, verbose,
+        jac_chunk_size=jac_chunk_size,
     )
 
     out_dict = {}
@@ -1084,6 +1088,13 @@ def quadcoil(**kwargs):
         (Static) Number of Biot-Savart evaluation points to process at once
         in the winding-surface and self-field kernels. ``None`` keeps the
         original fully vectorized kernels.
+    jac_chunk_size : int, optional, default=None
+        (Static) Number of KKT adjoint metric rows to differentiate at once.
+        When ``metric_name`` contains array-valued quantities, each scalar
+        component becomes one adjoint row, and peak memory grows linearly
+        with the total number of rows. Setting ``jac_chunk_size`` bounds
+        that concurrency. ``None`` keeps the fully vectorized path.
+        Strongly recommended for vector metrics such as ``'phi_dofs'``.
     '''
     # Normalize metric_name before JIT: lists are unhashable static args.
     if 'metric_name' in kwargs:

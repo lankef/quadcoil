@@ -41,6 +41,10 @@ def gen_quadcoil_for_diff(**kwargs):
     # objective_weight,
     # constraint_value,
     # And its custom_jvp using partal.
+    #
+    # All other kwargs (static settings such as mpol, ntor, metric_name,
+    # bs_chunk_size, jac_chunk_size, solver options, ...) are captured in
+    # partial_kwargs and forwarded unchanged to _quadcoil_pure.
 
     # Copy the kwargs, remove the variables that are differentiable
     partial_kwargs = {}

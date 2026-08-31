@@ -186,6 +186,54 @@ class VectorMetricTest(unittest.TestCase):
             f'JVP {out_dot["f_B"]} != adjoint grad {expected}',
         )
 
+    def test_jac_chunk_size_equivalence(self):
+        """Chunked KKT adjoint VJP matches the fully vectorized path.
+
+        Uses chunk sizes that both divide and do not divide the metric
+        length, so the ``lax.map`` remainder path is exercised.
+        """
+        nfp = plasma_surface.nfp
+        # Small grids / resolution keep the unchunked reference in memory
+        # while still giving enough phi DOFs for chunking to matter.
+        plasma_phi = jnp.linspace(0., 1. / nfp, 4, endpoint=False)
+        winding_phi = jnp.linspace(0., 1., 4 * nfp, endpoint=False)
+        theta = jnp.linspace(0., 1., 4, endpoint=False)
+        base = dict(
+            metric_name=('phi_dofs',),
+            mpol=2,
+            ntor=2,
+            plasma_quadpoints_phi=plasma_phi,
+            plasma_quadpoints_theta=theta,
+            winding_quadpoints_phi=winding_phi,
+            winding_quadpoints_theta=theta,
+            maxiter=50,
+        )
+        out_ref, _, _, _ = quadcoil(
+            **_base_kwargs(**base, jac_chunk_size=None)
+        )
+        for chunk in (4, 7):
+            out_chunk, _, _, _ = quadcoil(
+                **_base_kwargs(**base, jac_chunk_size=chunk)
+            )
+            self.assertTrue(
+                jnp.allclose(
+                    out_ref['phi_dofs']['value'],
+                    out_chunk['phi_dofs']['value'],
+                    rtol=1e-10,
+                    atol=1e-12,
+                ),
+                f'phi_dofs value mismatch for jac_chunk_size={chunk}',
+            )
+            for key in out_ref['phi_dofs']['grad']:
+                a = out_ref['phi_dofs']['grad'][key]
+                b = out_chunk['phi_dofs']['grad'][key]
+                # Gradients can be O(1e20+); rely on relative tolerance.
+                self.assertTrue(
+                    jnp.allclose(a, b, rtol=1e-7, atol=0.0),
+                    f'grad leaf {key} mismatch for jac_chunk_size={chunk}: '
+                    f'maxabs={float(jnp.max(jnp.abs(a - b))):.3e}',
+                )
+
 
 if __name__ == '__main__':
     unittest.main()

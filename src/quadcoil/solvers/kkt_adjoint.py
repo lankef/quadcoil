@@ -33,6 +33,28 @@ from jax import config as config_jax
 config_jax.update('jax_enable_x64', True)
 
 
+def _adjoint_vjp_rows(vjp_fn, V, jac_chunk_size):
+    """Apply ``vjp_fn`` to each row of ``V``.
+
+    ``jac_chunk_size`` bounds how many adjoint rows are differentiated
+    simultaneously. ``None`` keeps the fully vectorized path.
+
+    When chunking, a Python loop of ``vmap`` calls is used (rather than
+    ``lax.map``) because ``jac_chunk_size`` is a static argument and the
+    leading size of ``V`` is known at trace time. This keeps the VJP
+    transform outside of ``scan``, which has been observed to produce
+    incorrect results for some KKT residual VJPs.
+    """
+    f = lambda v: vjp_fn(v)[0]
+    if jac_chunk_size is None:
+        return vmap(f)(V)
+    n = V.shape[0]
+    outs = []
+    for i in range(0, n, jac_chunk_size):
+        outs.append(vmap(f)(V[i : i + jac_chunk_size]))
+    return jnp.concatenate(outs, axis=0)
+
+
 def stationarity_kkt(
     constrained,
     x_opt,
@@ -141,6 +163,7 @@ def adjoint_kkt(
     stationarity_data,
     y_flat,
     verbose,
+    jac_chunk_size=None,
 ):
     r'''
     Compute dm/dy for a batch of flattened metrics via the KKT adjoint.
@@ -162,6 +185,11 @@ def adjoint_kkt(
         Output of :func:`stationarity_kkt`.
     y_flat : ndarray
     verbose : int
+    jac_chunk_size : int or None, optional
+        Number of adjoint metric rows to differentiate at once via the
+        KKT residual VJP. ``None`` keeps the fully vectorized ``vmap``
+        path. Setting a positive int bounds peak memory when
+        ``n_metrics_flat`` is large (array-valued metrics).
 
     Returns
     -------
@@ -193,7 +221,7 @@ def adjoint_kkt(
         # Adjoint: factor once, n_metrics_flat RHS
         V = jnp.linalg.lstsq(H_mat, J_x.T)[0].T  # (n_metrics_flat, n_x)
         _, vjp_fn = vjp(grad_y_stationarity, y_flat)
-        dfdy = J_y - vmap(lambda v: vjp_fn(v)[0])(V)  # (n_metrics_flat, n_y)
+        dfdy = J_y - _adjoint_vjp_rows(vjp_fn, V, jac_chunk_size)
         if verbose > 0:
             debug_info['vihp'] = V
 
@@ -207,7 +235,7 @@ def adjoint_kkt(
         ).T  # (n_w, n_metrics_flat)
         V = jnp.linalg.lstsq(J_KKT_mat.T, rhs)[0].T  # (n_metrics_flat, n_w)
         _, vjp_fn = vjp(R_y, y_flat)
-        dfdy = J_y - vmap(lambda v: vjp_fn(v)[0])(V)  # (n_metrics_flat, n_y)
+        dfdy = J_y - _adjoint_vjp_rows(vjp_fn, V, jac_chunk_size)
         if verbose > 0:
             solve_err = jnp.linalg.norm(J_KKT_mat.T @ V.T - rhs)
             debug_info['v'] = V
