@@ -198,21 +198,6 @@ class VectorMetricTest(unittest.TestCase):
         suite, so it is pinned to CPU to keep it off whatever GPU CI has.
         """
         nfp = plasma_surface.nfp
-        # Small grids / resolution keep the unchunked reference in memory
-        # while still giving enough phi DOFs for chunking to matter.
-        plasma_phi = jnp.linspace(0., 1. / nfp, 4, endpoint=False)
-        winding_phi = jnp.linspace(0., 1., 4 * nfp, endpoint=False)
-        theta = jnp.linspace(0., 1., 4, endpoint=False)
-        base = dict(
-            metric_name=('phi_dofs',),
-            mpol=2,
-            ntor=2,
-            plasma_quadpoints_phi=plasma_phi,
-            plasma_quadpoints_theta=theta,
-            winding_quadpoints_phi=winding_phi,
-            winding_quadpoints_theta=theta,
-            maxiter=50,
-        )
         # Gradient leaves here span ~30 orders of magnitude, so a pure
         # relative comparison is decided by entries sitting at the noise
         # floor. Compare against each leaf's own scale instead. This bound
@@ -222,8 +207,26 @@ class VectorMetricTest(unittest.TestCase):
         # objective or metric will need a different number.
         grad_atol_frac = 1e-8
 
+        # Arrays must be built under the CPU default device: JAX dispatches
+        # by data placement, so grids allocated on GPU before the context
+        # would keep the whole call on GPU.
         cpu = jax.devices('cpu')[0]
         with jax.default_device(cpu):
+            # Small grids / resolution keep the unchunked reference in memory
+            # while still giving enough phi DOFs for chunking to matter.
+            plasma_phi = jnp.linspace(0., 1. / nfp, 4, endpoint=False)
+            winding_phi = jnp.linspace(0., 1., 4 * nfp, endpoint=False)
+            theta = jnp.linspace(0., 1., 4, endpoint=False)
+            base = dict(
+                metric_name=('phi_dofs',),
+                mpol=2,
+                ntor=2,
+                plasma_quadpoints_phi=plasma_phi,
+                plasma_quadpoints_theta=theta,
+                winding_quadpoints_phi=winding_phi,
+                winding_quadpoints_theta=theta,
+                maxiter=50,
+            )
             out_ref, _, _, _ = quadcoil(
                 **_base_kwargs(**base, jac_chunk_size=None)
             )

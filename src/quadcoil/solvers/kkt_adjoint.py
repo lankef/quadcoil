@@ -20,38 +20,38 @@ The Jacobian of the KKT residual w.r.t. (x, z) is:
 
 ``adjoint_kkt`` takes a single batched metric callable that returns a
 flattened concatenation of all metrics. Metric Jacobians are obtained
-with one ``jacrev`` pass and one dense multi-RHS ``lstsq`` solve.
-Cross-derivatives of the KKT residual / stationarity condition w.r.t.
-problem parameters (``dRdy``, ``H_xy``) are never materialized; they
-are applied via VJP against the adjoint rows. Adjoint mode is the only
+with ``jacrev``. Cross-derivatives of the KKT residual / stationarity
+condition w.r.t. problem parameters (``dRdy``, ``H_xy``) are never
+materialized; they are applied via VJP against the adjoint rows,
+optionally chunked with ``jac_chunk_size``. Adjoint mode is the only
 mode, with the precondition ``n_metrics_flat <= n_y``.
 """
 
 import jax.numpy as jnp
-from jax import grad, jacrev, hessian, debug, vjp, vmap
+from jax import grad, jacrev, hessian, debug, lax, vjp, vmap
 from jax import config as config_jax
 config_jax.update('jax_enable_x64', True)
 
 
-def _adjoint_vjp_rows(vjp_fn, V, jac_chunk_size):
-    """Apply ``vjp_fn`` to each row of ``V``.
+def _chunked_vjp_rows(fn, V, jac_chunk_size):
+    """Apply ``fn`` to each row of ``V``, at most ``jac_chunk_size`` at a time.
 
-    ``jac_chunk_size`` bounds how many adjoint rows are differentiated
-    simultaneously. ``None`` keeps the fully vectorized path.
-
-    When chunking, a Python loop of ``vmap`` calls is used (rather than
-    ``lax.map``) because ``jac_chunk_size`` is a static argument and the
-    leading size of ``V`` is known at trace time. This keeps the VJP
-    transform outside of ``scan``, which has been observed to produce
-    incorrect results for some KKT residual VJPs.
+    A Python loop of ``vmap`` calls is used rather than ``lax.map``.
+    Inside the outer ``_quadcoil_pure`` JIT, multi-iteration ``scan`` /
+    ``lax.map`` over reverse-mode through the KKT stationarity map has
+    been observed to produce catastrophically wrong derivatives whenever
+    more than one full batch is needed (``n_batches > 1``). A single
+    scan step plus remainder is fine, which is why the failure is easy
+    to miss. ``optimization_barrier`` between chunks asks XLA not to
+    keep every unrolled chunk's intermediates live at once.
     """
-    f = lambda v: vjp_fn(v)[0]
     if jac_chunk_size is None:
-        return vmap(f)(V)
+        return vmap(fn)(V)
     n = V.shape[0]
     outs = []
     for i in range(0, n, jac_chunk_size):
-        outs.append(vmap(f)(V[i : i + jac_chunk_size]))
+        chunk_out = vmap(fn)(V[i : i + jac_chunk_size])
+        outs.append(lax.optimization_barrier(chunk_out))
     return jnp.concatenate(outs, axis=0)
 
 
@@ -186,10 +186,10 @@ def adjoint_kkt(
     y_flat : ndarray
     verbose : int
     jac_chunk_size : int or None, optional
-        Number of adjoint metric rows to differentiate at once via the
-        KKT residual VJP. ``None`` keeps the fully vectorized ``vmap``
-        path. Setting a positive int bounds peak memory when
-        ``n_metrics_flat`` is large (array-valued metrics).
+        Number of KKT residual VJP metric rows to differentiate at once.
+        ``None`` keeps the fully vectorized ``vmap`` path. Setting a
+        positive int bounds peak memory when ``n_metrics_flat`` is large
+        (array-valued metrics).
 
     Returns
     -------
@@ -221,7 +221,9 @@ def adjoint_kkt(
         # Adjoint: factor once, n_metrics_flat RHS
         V = jnp.linalg.lstsq(H_mat, J_x.T)[0].T  # (n_metrics_flat, n_x)
         _, vjp_fn = vjp(grad_y_stationarity, y_flat)
-        dfdy = J_y - _adjoint_vjp_rows(vjp_fn, V, jac_chunk_size)
+        dfdy = J_y - _chunked_vjp_rows(
+            lambda v: vjp_fn(v)[0], V, jac_chunk_size,
+        )
         if verbose > 0:
             debug_info['vihp'] = V
 
@@ -235,7 +237,9 @@ def adjoint_kkt(
         ).T  # (n_w, n_metrics_flat)
         V = jnp.linalg.lstsq(J_KKT_mat.T, rhs)[0].T  # (n_metrics_flat, n_w)
         _, vjp_fn = vjp(R_y, y_flat)
-        dfdy = J_y - _adjoint_vjp_rows(vjp_fn, V, jac_chunk_size)
+        dfdy = J_y - _chunked_vjp_rows(
+            lambda v: vjp_fn(v)[0], V, jac_chunk_size,
+        )
         if verbose > 0:
             solve_err = jnp.linalg.norm(J_KKT_mat.T @ V.T - rhs)
             debug_info['v'] = V
