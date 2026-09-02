@@ -1093,8 +1093,8 @@ def quadcoil(**kwargs):
         at once. When ``metric_name`` contains array-valued quantities,
         each scalar component becomes one adjoint row, and peak memory
         grows linearly with the total number of rows. Setting
-        ``jac_chunk_size`` splits the VJP into successive ``vmap``
-        blocks of that width. ``None`` keeps the fully vectorized path.
+        ``jac_chunk_size`` scans the VJP over ``lax.map`` blocks of that
+        width. ``None`` keeps the fully vectorized path.
         Strongly recommended for vector metrics such as ``'phi_dofs'``.
     '''
     # Normalize metric_name before JIT: lists are unhashable static args.

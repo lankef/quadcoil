@@ -36,23 +36,50 @@ config_jax.update('jax_enable_x64', True)
 def _chunked_vjp_rows(fn, V, jac_chunk_size):
     """Apply ``fn`` to each row of ``V``, at most ``jac_chunk_size`` at a time.
 
-    A Python loop of ``vmap`` calls is used rather than ``lax.map``.
-    Inside the outer ``_quadcoil_pure`` JIT, multi-iteration ``scan`` /
-    ``lax.map`` over reverse-mode through the KKT stationarity map has
-    been observed to produce catastrophically wrong derivatives whenever
-    more than one full batch is needed (``n_batches > 1``). A single
-    scan step plus remainder is fine, which is why the failure is easy
-    to miss. ``optimization_barrier`` between chunks asks XLA not to
-    keep every unrolled chunk's intermediates live at once.
+    ``lax.map`` keeps the chunk loop as a real ``while`` in the compiled
+    HLO, so only one chunk's intermediates are live at a time. The
+    previous implementation (kept commented out below) chunked with a
+    Python loop, which does not bound memory at all: JAX emits it as one
+    traced computation with ``n_batches`` call sites, XLA's call inliner
+    expands every one of them, and nothing then orders the chunks.
+
+    An HLO dump of a production run (job 16733787, 220 metric rows,
+    ``jac_chunk_size=32``, so 6 full chunks plus a 28-row remainder)
+    showed the six chunk bodies replicated into independent instruction
+    chains: the ratio of chunk-shaped defining instructions was 1:1
+    against the remainder before optimization and 5.7:1 after. All of
+    their zero-initialized accumulators were then allocated together by
+    a single command buffer emitting 119 buffers totalling 14.13 GiB,
+    leaving 23 co-live ``f64[32,64,34,3,220]`` accumulators of 0.342 GiB
+    each -- 11.3 GiB of an 18.2 GiB peak. The ``optimization_barrier``
+    the old code placed on each chunk's output did nothing for this,
+    because a barrier over one chunk's output creates no dependency on
+    any other chunk; it is dropped here.
+
+    Open question being re-tested: an earlier note on this function
+    claimed multi-iteration ``scan`` / ``lax.map`` over reverse-mode
+    through the KKT stationarity map produced catastrophically wrong
+    derivatives whenever ``n_batches > 1``, a single scan step plus
+    remainder being fine. That comparison was only ever run on the
+    unconstrained branch, while production uses the constrained one.
+    ``chunking_test/test_chunking.py`` now covers both; see the commit
+    message.
     """
     if jac_chunk_size is None:
         return vmap(fn)(V)
-    n = V.shape[0]
-    outs = []
-    for i in range(0, n, jac_chunk_size):
-        chunk_out = vmap(fn)(V[i : i + jac_chunk_size])
-        outs.append(lax.optimization_barrier(chunk_out))
-    return jnp.concatenate(outs, axis=0)
+    return lax.map(fn, V, batch_size=jac_chunk_size)
+    # Previous implementation, retained for reference. Correct, but
+    # unrolled by construction, so ``jac_chunk_size`` bounded the size of
+    # each chunk without bounding how many were resident at once:
+    #
+    # if jac_chunk_size is None:
+    #     return vmap(fn)(V)
+    # n = V.shape[0]
+    # outs = []
+    # for i in range(0, n, jac_chunk_size):
+    #     chunk_out = vmap(fn)(V[i : i + jac_chunk_size])
+    #     outs.append(lax.optimization_barrier(chunk_out))
+    # return jnp.concatenate(outs, axis=0)
 
 
 def stationarity_kkt(
@@ -188,7 +215,8 @@ def adjoint_kkt(
     jac_chunk_size : int or None, optional
         Number of KKT residual VJP metric rows to differentiate at once.
         ``None`` keeps the fully vectorized ``vmap`` path. Setting a
-        positive int bounds peak memory when ``n_metrics_flat`` is large
+        positive int scans the rows with ``lax.map`` in blocks of that
+        width, bounding peak memory when ``n_metrics_flat`` is large
         (array-valued metrics).
 
     Returns
