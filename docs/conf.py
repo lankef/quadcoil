@@ -22,7 +22,12 @@ extensions = [
     'sphinx.ext.viewcode',
     "sphinx.ext.napoleon",     # Support Google/Numpy docstrings
     'sphinx.ext.todo',
+    'myst_nb',
 ]
+
+# The example notebooks need JAX, simsopt and long solves, so their saved
+# outputs are rendered as-is.
+nb_execution_mode = 'off'
 
 autodoc_mock_imports = [
     'numpy',
@@ -35,7 +40,9 @@ autodoc_mock_imports = [
     'matplotlib',
 ]
 templates_path = ['_templates']
-exclude_patterns = ['_build', '.ipynb_checkpoints', 'Thumbs.db', '.DS_Store']
+exclude_patterns = [
+    '_build', '**/.ipynb_checkpoints', 'examples/data', 'Thumbs.db', '.DS_Store',
+]
 
 language = 'en'
 
@@ -49,3 +56,11 @@ html_static_path = ['_static']
 # https://www.sphinx-doc.org/en/master/usage/extensions/todo.html#configuration
 
 todo_include_todos = True
+
+
+def setup(app):
+    # myst_nb imports IPython, whose jedi dependency raises the recursion
+    # limit to 3000. autodoc unwraps the mocked ``jax.jit`` objects up to that
+    # limit, and the cost grows quadratically, which stalls the API pages.
+    # Runs after the extensions are loaded.
+    sys.setrecursionlimit(1000)

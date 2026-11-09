@@ -33,7 +33,7 @@ and then run:
 Validating the installation
 ------------------------------
 
-The installation can be validated by running the example notebooks in ``examples``. 
+The installation can be validated by running the :doc:`example notebooks <examples/index>`. 
 The unit tests requires Simsopt's `regcoil` branch, which is not completely merged into
 the main branch as of this writing. After installing the branch, run: 
 
@@ -63,6 +63,7 @@ Publications
    tutorial_to_desc
    tutorial_misc_outputs
    tutorial_to_simsopt
-   quantity    
+   quantity
+   examples/index
    quadcoil
    version_history

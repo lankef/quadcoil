@@ -1,6 +1,6 @@
 """Checks of custom JVP/grads on a curvature-constrained problem.
 
-Uses the same formulation as examples/filament.ipynb
+Uses the same formulation as docs/examples/filament.ipynb
 (f_max_K_dot_grad_K_cyl objective with K_theta and f_B constraints),
 at the test-sized harmonics mpol=4, ntor=4 used by the other JVP tests.
 

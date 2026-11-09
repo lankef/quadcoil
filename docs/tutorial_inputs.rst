@@ -8,7 +8,7 @@ Tutorial I: running QUADCOIL
 3. Evaluating the coil metrics and their derivative.
 
 QUADCOIL can be run by simply importing and calling ``quadcoil.quadcoil()``. 
-A minimal example can be found in ``examples/simple_example.ipynb``:
+A minimal example can be found in :doc:`examples/simple_example`:
 
 .. code-block:: python
   
