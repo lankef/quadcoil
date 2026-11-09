@@ -23,12 +23,18 @@ Installation
 
 QUADCOIL depends on JAX, Lineax, Optimistix, and slsqp-jax. Since JAX installation can be platform-specific, see the JAX installation guide `here <https://docs.jax.dev/en/latest/installation.html>`_.
 
-Clone the `QUADCOIL source files  <https://github.com/lankef/quadcoil>`_, 
+For the most up-to-date version, clone the `QUADCOIL source files <https://github.com/lankef/quadcoil>`_, 
 and then run:
 
 .. code-block:: bash
 
    pip install .
+
+Alternatively, a stable version of QUADCOIL can also be installed from `PyPI <https://pypi.org/project/quadcoil/>`_:
+
+.. code-block:: bash
+
+    pip install quadcoil
 
 Validating the installation
 ------------------------------
