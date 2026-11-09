@@ -45,18 +45,20 @@ the main branch as of this writing. After installing the branch, run:
 Contact
 -------
 
-Please contact `Lanke Fu <mailto:ffu@pppl.gov>`_ at PPPL for questions and bug reports.
+Please contact `Lanke Fu <mailto:lanke_fu@outlook.com>`_ at CIMS for questions and bug reports.
 
 Publications
 ------------
 
 1. `Global stellarator coil optimization with quadratic constraints and objectives <https://doi.org/10.1088/1741-4326/ada810>`_
+2. `A flexible and differentiable coil proxy for stellarator equilibrium optimization <https://pubs.aip.org/aip/pop/article/33/6/062506/3395906>`_
 
 
 .. toctree::
    :maxdepth: 1
    :caption: List of contents
 
+   self
    math
    tutorial_inputs
    tutorial_outputs
