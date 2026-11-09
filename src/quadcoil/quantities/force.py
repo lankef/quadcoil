@@ -4,7 +4,7 @@ from .current import _K, _K_desc_unit
 from .self_field import (
     _B_self_integrands_xyz,
     _B_self_integrands_affine,
-    _integrate_B_self,
+    _integrate_B_self_op,
 )
 from .quantity import _Quantity
 from quadcoil import project_arr_cylindrical
@@ -72,21 +72,28 @@ def _force_xyz(qp, dofs):
     integrand in a basis that rotates with the field period; the saving is small
     anyway (O(n_phi n_theta) vs. the O((n_phi n_theta)^2) kernel).
     '''
+    A, B0 = qp.get_op('B_self_eval', _B_self_eval_op)
+    B_xyz = A @ dofs['phi'] + B0  # (n_phiy, n_thetay, 3)
+    return jnp.cross(_K(qp, dofs, winding_surface_mode=False), B_xyz, axis=-1)
+
+
+def _B_self_eval_op(qp):
+    r'''
+    ``(A, B0)`` for the self-field on ``qp.eval_surface``, the field
+    crossed with ``K`` in :func:`_force_xyz`.
+    '''
     b_S, c_S, b_D, c_D = _B_self_integrands_affine(
         qp, winding_surface_mode=True,
     )
-    single_results, double_results = _integrate_B_self(
+    return _integrate_B_self_op(
         qp.eval_surface.gamma(),           # (n_phiy, n_thetay, 3)
         qp.winding_surface.gamma(),        # (n_phix*nfp, n_thetax, 3)
         qp.winding_surface.unitnormal(),   # (n_phix*nfp, n_thetax, 3)
         qp.winding_surface.da(),           # (n_phix*nfp, n_thetax)  — nfp=1 treats full surface as one period
         b_S, c_S, b_D, c_D,
-        dofs['phi'],
         1,
         qp.bs_chunk_size,
     )
-    B_xyz = single_results + double_results  # (n_phiy, n_thetay, 3)
-    return jnp.cross(_K(qp, dofs, winding_surface_mode=False), B_xyz, axis=-1)
 
 
 def _force_cyl(qp, dofs):

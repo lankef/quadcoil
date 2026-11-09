@@ -1,5 +1,5 @@
 from .jax import *
-from .file import *
+from .utils import *
 from .desc import *
 from .simsopt import *
 from .coil_cutting import *

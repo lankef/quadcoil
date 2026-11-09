@@ -54,7 +54,7 @@ quadcoil()
   - `src/quadcoil/quadcoil_params.py`: `QuadcoilParams` pytree (surfaces, currents, quadrature, dof packing)
   - `src/quadcoil/wrapper.py`: resolves string names into quantity objects/callables; merges callables; quadpoint defaults/validation
   - `src/quadcoil/solvers/__init__.py`: public solver exports
-  - `src/quadcoil/solvers/auglag.py`: augmented-Lagrangian solver; unconstrained inner solve now uses `optimistix.LBFGS`
+  - `src/quadcoil/solvers/auglag.py`: augmented-Lagrangian solver; unconstrained inner solve uses `optax.lbfgs`
   - `src/quadcoil/solvers/slsqp.py`: SLSQP wrapper built on `slsqp-jax` and `optimistix.minimise`
   - `src/quadcoil/solvers/ipm.py`: interior-point solver
   - `src/quadcoil/solvers/kkt_adjoint.py`: shared KKT stationarity/adjoint machinery used by multiple solvers
@@ -149,8 +149,8 @@ If you add a new objective/constraint term, you usually need to:
 ### Dependency refactoring
 
 **Core dependencies updated** (see `pyproject.toml`):
-- **Removed**: `optax` (legacy solver code was removed)
-- **Added**: `optimistix >= 0.0.1` (required for auglag-lbfgs and slsqp solvers)
+- **Added**: `optax >= 0.2.4` (auglag inner L-BFGS)
+- **Added**: `optimistix >= 0.0.1` (required for the slsqp solver and the winding-surface bisection)
 - **Added**: `slsqp-jax >= 0.0.1` (required for slsqp solver)
 - **Made optional**: `scipy` and `matplotlib`
 

@@ -3,7 +3,6 @@ from quadcoil import QuadcoilParams, SurfaceRZFourierJAX
 from quadcoil.quantity import Phi
 import jax.numpy as jnp
 from simsopt import load
-from simsopt.field import CurrentPotentialFourier, CurrentPotentialSolve
 from load_test_data import load_data, compare
 try:
     from simsopt.field import CurrentPotentialFourier, CurrentPotentialSolve
@@ -14,7 +13,7 @@ winding_surface, plasma_surface, cp, cpst, qp = load_data()
     
 class QuadcoilPhiTest(unittest.TestCase):
     # Testing dipole density calculation
-    @unittest.skipIf(not CPF_AVAILABLE, "Skipping dipole test, simsopt.field.CurrentPotentialFourier unavailable.")
+    @unittest.skipIf(not CPF_AVAILABLE, "Skipping dipole test, simsopt.field.CurrentPotentialFourier/CurrentPotentialSolve unavailable (requires the simsopt 'regcoil' branch).")
     def test_Phi(self):
         Phi_test = Phi(qp, {'phi': cp.get_dofs()})
         Phi_ans = cp.Phi()[:len(cp.winding_surface.quadpoints_phi)//cp.nfp]

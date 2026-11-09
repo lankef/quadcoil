@@ -360,7 +360,7 @@ def _singular_layer_kernels(
     return single_kernel_da, double_kernel_da
 
 
-def _integrate_B_self(
+def _integrate_B_self_op(
     gamma_y,
     gamma_x,
     unitnormal_x,
@@ -369,22 +369,21 @@ def _integrate_B_self(
     c_S,
     b_D,
     c_D,
-    phi,
     nfp,
     bs_chunk_size=None,
 ):
     r'''
-    Performs the singular integration of the self-field using
-    :func:`_singular_layer_kernels`.
+    phi-independent operator for the singular self-field integral.
 
-    ``b_S, c_S, b_D, c_D`` are the affine integrand operators from
-    :func:`_B_self_integrands_affine`, shapes ``(n_phix_1fp, n_thetax, 3, ndofs)``
-    / ``(n_phix_1fp, n_thetax, 3)``. Source axes are contracted into
-    ``A @ phi + B0`` before the mapped function returns, so nested JVPs
-    tape :math:`\partial B/\partial\Phi` of shape ``(3, ndofs)``, not the
-    unreduced source kernel.
+    Returns ``(A, B0)`` such that the summed single- plus double-layer
+    field is ``A @ phi + B0``, shapes ``(n_phiy, n_thetay, 3, ndofs)`` and
+    ``(n_phiy, n_thetay, 3)``. ``b_S, c_S, b_D, c_D`` are the affine
+    integrand operators from :func:`_B_self_integrands_affine`. Source axes
+    are contracted into ``A, B0`` before this function returns, so nested
+    JVPs tape :math:`\partial B/\partial\Phi` of shape ``(3, ndofs)``, not
+    the unreduced source kernel.
 
-    Note: when called from :func:`_B_self`, ``gamma_y`` is
+    Note: when called from :func:`_B_self_ws_op`, ``gamma_y`` is
     ``gamma_x[:n_phi_1fp]`` (a leading slice of the same JAX array), which
     guarantees that the index-diagonal entries of ``diff`` are bitwise zero and
     the index-based self-mask in :func:`_singular_layer_kernels` is exact.
@@ -405,18 +404,18 @@ def _integrate_B_self(
     def _contract(kernel, b, c):
         A = jnp.einsum('ijklm,lmnd->ijnd', kernel, b)
         B0 = jnp.einsum('ijklm,lmn->ijn', kernel, c)
-        return A @ phi + B0
+        return A, B0
 
     if bs_chunk_size is None:
         single_kernel_da, double_kernel_da = _singular_layer_kernels(
             gamma_y, gamma_x, unitnormal_x, da_x, nfp,
         )
-        return (
-            _contract(single_kernel_da, b_S, c_S),
-            _contract(double_kernel_da, b_D, c_D),
-        )
+        A_s, B0_s = _contract(single_kernel_da, b_S, c_S)
+        A_d, B0_d = _contract(double_kernel_da, b_D, c_D)
+        return A_s + A_d, B0_s + B0_d
 
     n_phiy, n_thetay = gamma_y.shape[:2]
+    ndofs = b_S.shape[-1]
     gamma_y_flat = gamma_y.reshape(-1, 3)
     phi_y_flat = jnp.repeat(jnp.arange(n_phiy), n_thetay)
     th_y_flat = jnp.tile(jnp.arange(n_thetay), n_phiy)
@@ -430,19 +429,41 @@ def _integrate_B_self(
             gy, gamma_x, unitnormal_x, da_x, nfp,
             phi_y_indices=phi_idx, th_y_indices=th_idx,
         )
-        single_pt = _contract(single_kernel_da, b_S, c_S)
-        double_pt = _contract(double_kernel_da, b_D, c_D)
-        return single_pt[0, 0], double_pt[0, 0]
+        A_s, B0_s = _contract(single_kernel_da, b_S, c_S)
+        A_d, B0_d = _contract(double_kernel_da, b_D, c_D)
+        return (A_s + A_d)[0, 0], (B0_s + B0_d)[0, 0]
 
-    single_flat, double_flat = jax.lax.map(
+    A_flat, B0_flat = jax.lax.map(
         _integrate_one,
         (gamma_y_flat, phi_y_flat, th_y_flat),
         batch_size=bs_chunk_size,
     )
     return (
-        single_flat.reshape(n_phiy, n_thetay, 3),
-        double_flat.reshape(n_phiy, n_thetay, 3),
+        A_flat.reshape(n_phiy, n_thetay, 3, ndofs),
+        B0_flat.reshape(n_phiy, n_thetay, 3),
     )
+
+
+def _B_self_ws_op(qp):
+    r'''
+    ``(A, B0)`` for :func:`_B_self`: the self-field on the first field
+    period of ``qp.winding_surface``.
+    '''
+    b_S, c_S, b_D, c_D = _B_self_integrands_affine(
+        qp, winding_surface_mode=True,
+    )
+    gamma_x = qp.winding_surface.gamma()          # (n_phix*nfp, n_thetax, 3)
+    n_phi_1fp = gamma_x.shape[0] // qp.nfp
+    return _integrate_B_self_op(
+        gamma_x[:n_phi_1fp],               # (n_phi_1fp, n_thetax, 3) — slice of gamma_x
+        gamma_x,                           # (n_phix*nfp, n_thetax, 3)
+        qp.winding_surface.unitnormal(),   # (n_phix*nfp, n_thetax, 3)
+        qp.winding_surface.da(),           # (n_phix*nfp, n_thetax)
+        b_S, c_S, b_D, c_D,
+        1,
+        qp.bs_chunk_size,
+    )
+
 
 @jit 
 def _B_self(qp, dofs):
@@ -456,26 +477,12 @@ def _B_self(qp, dofs):
     (rather than an independent surface evaluated on a 1-fp grid) guarantees
     that the diagonal entries of the difference tensor ``gamma_y - gamma_x``
     are bitwise zero, which makes the index-based self-interaction mask in
-    :func:`_integrate_B_self` exact for any winding-surface quadrature choice.
+    :func:`_integrate_B_self_op` exact for any winding-surface quadrature choice.
 
     See :func:`_B_self_integrands_xyz` for the derivation.
     '''
-    b_S, c_S, b_D, c_D = _B_self_integrands_affine(
-        qp, winding_surface_mode=True,
-    )
-    gamma_x = qp.winding_surface.gamma()          # (n_phix*nfp, n_thetax, 3)
-    n_phi_1fp = gamma_x.shape[0] // qp.nfp
-    single_results, double_results = _integrate_B_self(
-        gamma_x[:n_phi_1fp],               # (n_phi_1fp, n_thetax, 3) — slice of gamma_x
-        gamma_x,                           # (n_phix*nfp, n_thetax, 3)
-        qp.winding_surface.unitnormal(),   # (n_phix*nfp, n_thetax, 3)
-        qp.winding_surface.da(),           # (n_phix*nfp, n_thetax)
-        b_S, c_S, b_D, c_D,
-        dofs['phi'],
-        1,
-        qp.bs_chunk_size,
-    )
-    return single_results + double_results
+    A, B0 = qp.get_op('B_self_ws', _B_self_ws_op)
+    return A @ dofs['phi'] + B0
 
 @jit 
 def _B_self_cyl(qp, dofs):

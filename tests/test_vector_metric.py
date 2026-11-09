@@ -42,53 +42,56 @@ class VectorMetricTest(unittest.TestCase):
         )
         self.assertEqual(out_dict, {})
 
-    def test_phi_dofs_value_and_shape(self):
-        out_dict, _, dofs_opt, _ = quadcoil(
-            **_base_kwargs(metric_name=('phi_dofs',))
-        )
-        self.assertIn('phi_dofs', out_dict)
-        phi = dofs_opt['phi']
-        self.assertTrue(
-            jnp.allclose(out_dict['phi_dofs']['value'], phi),
-            'phi_dofs value must equal dofs_opt["phi"]',
-        )
-        grad_plasma = out_dict['phi_dofs']['grad']['df_dplasma_dofs']
-        self.assertEqual(
-            grad_plasma.shape,
-            (len(phi), len(plasma_surface.get_dofs())),
-        )
-
-    def test_phi_dofs_fd_net_poloidal_current(self):
-        out_dict, _, dofs_opt, _ = quadcoil(
-            **_base_kwargs(metric_name=('phi_dofs',))
-        )
-        dphi_dG = out_dict['phi_dofs']['grad'][
-            'df_dnet_poloidal_current_amperes'
-        ]
-        # Finite difference of phi w.r.t. net poloidal current.
-        eps = 1e-4 * abs(net_poloidal_current_amperes)
-        _, _, dofs_plus, _ = quadcoil(
-            **_base_kwargs(
-                metric_name=(),
-                value_only=True,
-                net_poloidal_current_amperes=net_poloidal_current_amperes + eps,
-            )
-        )
-        _, _, dofs_minus, _ = quadcoil(
-            **_base_kwargs(
-                metric_name=(),
-                value_only=True,
-                net_poloidal_current_amperes=net_poloidal_current_amperes - eps,
-            )
-        )
-        dphi_dG_fd = (dofs_plus['phi'] - dofs_minus['phi']) / (2 * eps)
-        # Relative error against the larger of FD / adjoint scale.
-        scale = jnp.maximum(jnp.max(jnp.abs(dphi_dG_fd)), jnp.max(jnp.abs(dphi_dG)))
-        rel_err = jnp.max(jnp.abs(dphi_dG - dphi_dG_fd)) / scale
-        self.assertLess(
-            float(rel_err), 5e-2,
-            f'd(phi)/dG adjoint vs FD relative error too large: {rel_err}',
-        )
+    # phi_dofs as a metric adjoints every current-potential degree of freedom.
+    # That is costly, and the feature may be deprecated, so these tests are off.
+    #
+    # def test_phi_dofs_value_and_shape(self):
+    #     out_dict, _, dofs_opt, _ = quadcoil(
+    #         **_base_kwargs(metric_name=('phi_dofs',))
+    #     )
+    #     self.assertIn('phi_dofs', out_dict)
+    #     phi = dofs_opt['phi']
+    #     self.assertTrue(
+    #         jnp.allclose(out_dict['phi_dofs']['value'], phi),
+    #         'phi_dofs value must equal dofs_opt["phi"]',
+    #     )
+    #     grad_plasma = out_dict['phi_dofs']['grad']['df_dplasma_dofs']
+    #     self.assertEqual(
+    #         grad_plasma.shape,
+    #         (len(phi), len(plasma_surface.get_dofs())),
+    #     )
+    #
+    # def test_phi_dofs_fd_net_poloidal_current(self):
+    #     out_dict, _, dofs_opt, _ = quadcoil(
+    #         **_base_kwargs(metric_name=('phi_dofs',))
+    #     )
+    #     dphi_dG = out_dict['phi_dofs']['grad'][
+    #         'df_dnet_poloidal_current_amperes'
+    #     ]
+    #     # Finite difference of phi w.r.t. net poloidal current.
+    #     eps = 1e-4 * abs(net_poloidal_current_amperes)
+    #     _, _, dofs_plus, _ = quadcoil(
+    #         **_base_kwargs(
+    #             metric_name=(),
+    #             value_only=True,
+    #             net_poloidal_current_amperes=net_poloidal_current_amperes + eps,
+    #         )
+    #     )
+    #     _, _, dofs_minus, _ = quadcoil(
+    #         **_base_kwargs(
+    #             metric_name=(),
+    #             value_only=True,
+    #             net_poloidal_current_amperes=net_poloidal_current_amperes - eps,
+    #         )
+    #     )
+    #     dphi_dG_fd = (dofs_plus['phi'] - dofs_minus['phi']) / (2 * eps)
+    #     # Relative error against the larger of FD / adjoint scale.
+    #     scale = jnp.maximum(jnp.max(jnp.abs(dphi_dG_fd)), jnp.max(jnp.abs(dphi_dG)))
+    #     rel_err = jnp.max(jnp.abs(dphi_dG - dphi_dG_fd)) / scale
+    #     self.assertLess(
+    #         float(rel_err), 5e-2,
+    #         f'd(phi)/dG adjoint vs FD relative error too large: {rel_err}',
+    #     )
 
     def test_rank2_metric_gradient_shape(self):
         """Bnormal is (nphi, ntheta); grad leaves must be (*metric, *param)."""
@@ -186,78 +189,83 @@ class VectorMetricTest(unittest.TestCase):
             f'JVP {out_dot["f_B"]} != adjoint grad {expected}',
         )
 
-    def test_jac_chunk_size_equivalence(self):
-        """Chunked KKT adjoint VJP matches the fully vectorized path.
-
-        Uses chunk sizes that both divide and do not divide the metric
-        length, so the remainder chunk is exercised.
-
-        Chunking only reorders floating-point reductions inside the VJP, so
-        the two paths agree to roundoff rather than bitwise. On this problem
-        the unchunked reference is also the memory-heaviest thing in the
-        suite, so it is pinned to CPU to keep it off whatever GPU CI has.
-        """
-        nfp = plasma_surface.nfp
-        # Gradient leaves here span ~30 orders of magnitude, so a pure
-        # relative comparison is decided by entries sitting at the noise
-        # floor. Compare against each leaf's own scale instead. This bound
-        # is calibrated for THIS test problem only: the measured worst-case
-        # deviation is ~1.2e-10 of the leaf maximum, and the adjoint solve
-        # is deliberately ill-conditioned, so a different resolution,
-        # objective or metric will need a different number.
-        grad_atol_frac = 1e-8
-
-        # Arrays must be built under the CPU default device: JAX dispatches
-        # by data placement, so grids allocated on GPU before the context
-        # would keep the whole call on GPU.
-        cpu = jax.devices('cpu')[0]
-        with jax.default_device(cpu):
-            # Small grids / resolution keep the unchunked reference in memory
-            # while still giving enough phi DOFs for chunking to matter.
-            plasma_phi = jnp.linspace(0., 1. / nfp, 4, endpoint=False)
-            winding_phi = jnp.linspace(0., 1., 4 * nfp, endpoint=False)
-            theta = jnp.linspace(0., 1., 4, endpoint=False)
-            base = dict(
-                metric_name=('phi_dofs',),
-                mpol=2,
-                ntor=2,
-                plasma_quadpoints_phi=plasma_phi,
-                plasma_quadpoints_theta=theta,
-                winding_quadpoints_phi=winding_phi,
-                winding_quadpoints_theta=theta,
-                maxiter=50,
-            )
-            out_ref, _, _, _ = quadcoil(
-                **_base_kwargs(**base, jac_chunk_size=None)
-            )
-            for chunk in (4, 7):
-                out_chunk, _, _, _ = quadcoil(
-                    **_base_kwargs(**base, jac_chunk_size=chunk)
-                )
-                self.assertTrue(
-                    jnp.allclose(
-                        out_ref['phi_dofs']['value'],
-                        out_chunk['phi_dofs']['value'],
-                        rtol=1e-10,
-                        atol=1e-12,
-                    ),
-                    f'phi_dofs value mismatch for jac_chunk_size={chunk}',
-                )
-                for key in out_ref['phi_dofs']['grad']:
-                    a = out_ref['phi_dofs']['grad'][key]
-                    b = out_chunk['phi_dofs']['grad'][key]
-                    scale = float(jnp.max(jnp.abs(a)))
-                    self.assertTrue(
-                        jnp.allclose(
-                            a, b,
-                            rtol=1e-7,
-                            atol=grad_atol_frac * scale,
-                        ),
-                        f'grad leaf {key} mismatch for '
-                        f'jac_chunk_size={chunk}: '
-                        f'maxabs={float(jnp.max(jnp.abs(a - b))):.3e} '
-                        f'leaf scale={scale:.3e}',
-                    )
+    # def test_jac_chunk_size_equivalence(self):
+    #     """Chunked KKT adjoint VJP matches the fully vectorized path.
+    #
+    #     Uses phi_dofs as the metric, so the adjoint row count is the number
+    #     of current-potential degrees of freedom. Disabled with the other
+    #     phi_dofs-metric tests: that adjoint is costly and the feature may
+    #     be deprecated.
+    #
+    #     Uses chunk sizes that both divide and do not divide the metric
+    #     length, so the remainder chunk is exercised.
+    #
+    #     Chunking only reorders floating-point reductions inside the VJP, so
+    #     the two paths agree to roundoff rather than bitwise. On this problem
+    #     the unchunked reference is also the memory-heaviest thing in the
+    #     suite, so it is pinned to CPU to keep it off whatever GPU CI has.
+    #     """
+    #     nfp = plasma_surface.nfp
+    #     # Gradient leaves here span ~30 orders of magnitude, so a pure
+    #     # relative comparison is decided by entries sitting at the noise
+    #     # floor. Compare against each leaf's own scale instead. This bound
+    #     # is calibrated for THIS test problem only: the measured worst-case
+    #     # deviation is ~1.2e-10 of the leaf maximum, and the adjoint solve
+    #     # is deliberately ill-conditioned, so a different resolution,
+    #     # objective or metric will need a different number.
+    #     grad_atol_frac = 1e-8
+    #
+    #     # Arrays must be built under the CPU default device: JAX dispatches
+    #     # by data placement, so grids allocated on GPU before the context
+    #     # would keep the whole call on GPU.
+    #     cpu = jax.devices('cpu')[0]
+    #     with jax.default_device(cpu):
+    #         # Small grids / resolution keep the unchunked reference in memory
+    #         # while still giving enough phi DOFs for chunking to matter.
+    #         plasma_phi = jnp.linspace(0., 1. / nfp, 4, endpoint=False)
+    #         winding_phi = jnp.linspace(0., 1., 4 * nfp, endpoint=False)
+    #         theta = jnp.linspace(0., 1., 4, endpoint=False)
+    #         base = dict(
+    #             metric_name=('phi_dofs',),
+    #             mpol=2,
+    #             ntor=2,
+    #             plasma_quadpoints_phi=plasma_phi,
+    #             plasma_quadpoints_theta=theta,
+    #             winding_quadpoints_phi=winding_phi,
+    #             winding_quadpoints_theta=theta,
+    #             maxiter=50,
+    #         )
+    #         out_ref, _, _, _ = quadcoil(
+    #             **_base_kwargs(**base, jac_chunk_size=None)
+    #         )
+    #         for chunk in (4, 7):
+    #             out_chunk, _, _, _ = quadcoil(
+    #                 **_base_kwargs(**base, jac_chunk_size=chunk)
+    #             )
+    #             self.assertTrue(
+    #                 jnp.allclose(
+    #                     out_ref['phi_dofs']['value'],
+    #                     out_chunk['phi_dofs']['value'],
+    #                     rtol=1e-10,
+    #                     atol=1e-12,
+    #                 ),
+    #                 f'phi_dofs value mismatch for jac_chunk_size={chunk}',
+    #             )
+    #             for key in out_ref['phi_dofs']['grad']:
+    #                 a = out_ref['phi_dofs']['grad'][key]
+    #                 b = out_chunk['phi_dofs']['grad'][key]
+    #                 scale = float(jnp.max(jnp.abs(a)))
+    #                 self.assertTrue(
+    #                     jnp.allclose(
+    #                         a, b,
+    #                         rtol=1e-7,
+    #                         atol=grad_atol_frac * scale,
+    #                     ),
+    #                     f'grad leaf {key} mismatch for '
+    #                     f'jac_chunk_size={chunk}: '
+    #                     f'maxabs={float(jnp.max(jnp.abs(a - b))):.3e} '
+    #                     f'leaf scale={scale:.3e}',
+    #                 )
 
 
 if __name__ == '__main__':

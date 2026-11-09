@@ -8,12 +8,6 @@ try:
 except ImportError:
     _HAS_MATPLOTLIB = False
 
-try:
-    from scipy.fft import rfft
-    _HAS_SCIPY = True
-except ImportError:
-    _HAS_SCIPY = False
-
 # Importing simsopt 
 from quadcoil import QuadcoilParams
 from quadcoil.quantities import Phi_with_net_current
@@ -106,37 +100,6 @@ def coil_zeta_theta_from_qp(
     print('Cutting complete. Number of coils/half field period:', num_coils)
     return(contour_zeta, contour_theta)
 
-# IFFT a array in real space to a sin/cos series used by sinsopt.geo.curve
-def ifft_simsopt(x, order):
-    """
-    Convert real-space array to sin/cos series using FFT.
-    
-    Requires scipy for FFT operations.
-    
-    Raises
-    ------
-    ImportError
-        If scipy is not installed.
-    """
-    if not _HAS_SCIPY:
-        raise ImportError(
-            "scipy is required for Fourier analysis in coil cutting. "
-            "Install with: pip install scipy or pip install quadcoil[coil-cutting]"
-        )
-    
-    assert len(x) >= 2*order  # the order of the fft is limited by the number of samples
-    xf = rfft(x) / len(x)
-
-    fft_0 = [xf[0].real]  # find the 0 order coefficient
-    fft_cos = 2 * xf[1:order + 1].real  # find the cosine coefficients
-    fft_sin = (-2 * xf[:order + 1].imag)[1:]  # find the sine coefficients
-    dof = np.zeros(order*2+1)
-    dof[0] = fft_0[0]
-    dof[1::2] = fft_sin
-    dof[2::2] = fft_cos
-
-    return dof
-
 # This script assumes the contours do not zig-zag back and forth across the theta=0 line,
 # after shifting the current potential by theta_shift grid points.
 # The nescin file is used to provide the coil winding surface, so make sure this is consistent with the regcoil run.
@@ -144,21 +107,40 @@ def ifft_simsopt(x, order):
 # def cut_coil(qp, qpst):
 # filename = 'regcoil_out.li383.nc' # sys.argv[1]
 # TODO: these tow have a lot of duplicate code. Clean up when finalizing how QUADCOIL is integrated.
-def coil_xyz_from_qp(
-    qp:QuadcoilParams,
+def gamma_current_from_qp(
+    qp: QuadcoilParams,
     dofs,
     coils_per_half_period=1,
     theta_shift=0,
-    save=False, save_name='placeholder'): 
+):
+    """Contour a QUADCOIL solution into centerline samples and currents.
+
+    Parameters
+    ----------
+    qp : QuadcoilParams
+        QUADCOIL problem configuration.
+    dofs : dict
+        Optimized QUADCOIL degrees of freedom.
+    coils_per_half_period : int, optional
+        Number of contours per half field period.
+    theta_shift : float, optional
+        Fractional shift applied to contour levels.
+
+    Returns
+    -------
+    gammas : list of ndarray, each shape (n_j, 3)
+        Sampled XYZ centerlines (metres), one per cut coil.
+    currents : list of float
+        Current [A] for each cut coil (uniform magnitude).
+    """
     contour_zeta, contour_theta = coil_zeta_theta_from_qp(
         qp=qp,
         dofs=dofs,
         coils_per_half_period=coils_per_half_period,
         theta_shift=theta_shift
     )
-    num_coils = len(contour_zeta)    
-    nfp = qp.nfp 
-    net_poloidal_current_amperes = qp.net_poloidal_current_amperes 
+    num_coils = len(contour_zeta)
+    net_poloidal_current_amperes = qp.net_poloidal_current_amperes
 
     # ------------------------
     # Load surface shape
@@ -188,82 +170,196 @@ def coil_xyz_from_qp(
                 contour_R[j] = contour_R[j] + crc*np.cos(angle) + crs*np.sin(angle)
                 contour_Z[j] = contour_Z[j] + czs*np.sin(angle) + czc*np.cos(angle)
 
-    contour_X = []
-    contour_Y = []
+    gammas = []
     for j in range(num_coils):
-        contour_X.append(contour_R[j]*np.cos(contour_zeta[j]))
-        contour_Y.append(contour_R[j]*np.sin(contour_zeta[j]))
-    coil_currents = net_poloidal_current_amperes / num_coils / qp.nfp
+        x = contour_R[j] * np.cos(contour_zeta[j])
+        y = contour_R[j] * np.sin(contour_zeta[j])
+        gammas.append(np.column_stack([x, y, contour_Z[j]]))
+
+    coil_current = net_poloidal_current_amperes / num_coils / qp.nfp
     if qp.stellsym:
-        coil_currents = coil_currents/2
-    if save: 
-        coilsFilename='coils.'+save_name
-        print("coilsFilename:",coilsFilename)
-        # Write coils file
-        f = open(coilsFilename,'w')
-        f.write('periods '+str(nfp)+'\n')
-        f.write('begin filament\n')
-        f.write('mirror NIL\n')
+        coil_current = coil_current / 2
+    currents = [coil_current] * num_coils
+    return gammas, currents
 
-        for j in range(num_coils):
-            N = len(contour_X[j])
-            for k in range(N):
-                f.write('{:14.22e} {:14.22e} {:14.22e} {:14.22e}\n'.format(contour_X[j][k],contour_Y[j][k],contour_Z[j][k],coil_currents))
-            # Close the loop
-            k=0
-            f.write('{:14.22e} {:14.22e} {:14.22e} {:14.22e} 1 Modular\n'.format(contour_X[j][k],contour_Y[j][k],contour_Z[j][k],0))
 
-        f.write('end\n')
-        f.close()
-    return (
-        contour_X,
-        contour_Y,
-        contour_Z,
-        coil_currents,
-        # np.sqrt(minSeparation2)
-    )
+def curve_from_gamma(gamma, order, ppp=20):
+    """Fit one simsopt ``CurveXYZFourier`` to a sampled centerline.
 
-# Load curves from lists of arrays containing x, y, and z.
-def simsopt_curves_from_xyz(
-    contour_X,
-    contour_Y,
-    contour_Z, 
-    order=None, ppp=20):
-    num_coils = len(contour_X)
-    try:     
+    Parameters
+    ----------
+    gamma : ndarray, shape (n, 3)
+        Sampled XYZ points along the curve (one period, ordered).
+    order : int
+        Fourier order. Must satisfy ``order < n / 2``.
+    ppp : int, optional
+        Quadrature points per Fourier period for the fitted curve.
+
+    Returns
+    -------
+    simsopt.geo.CurveXYZFourier
+        Curve whose dofs are the least-squares Fourier fit to ``gamma``.
+
+    Raises
+    ------
+    ValueError
+        If ``order`` is not smaller than ``n / 2``.
+    ImportError
+        If simsopt is not installed.
+    """
+    try:
         from simsopt.geo import CurveXYZFourier
-    except:
+    except ImportError:
         raise ImportError('Simsopt is required to use the coil-cutting features.')
-    # Calculating order
-    if not order:
-        order=float('inf')
-        for i in range(num_coils):
-            xArr = contour_X[i]
-            yArr = contour_Y[i]
-            zArr = contour_Z[i]
-            for x in [xArr, yArr, zArr]:
-                if len(x)//2<order:
-                    order = len(x)//2
-    
-    coils = [CurveXYZFourier(order*ppp, order) for i in range(num_coils)]
-    # Compute the Fourier coefficients for each coil
-    for ic in range(num_coils):
-        xArr = contour_X[ic]
-        yArr = contour_Y[ic]
-        zArr = contour_Z[ic]
 
-        # Compute the Fourier coefficients
-        dofs=[]
-        for x in [xArr, yArr, zArr]:
-            dof_i = ifft_simsopt(x, order)
-            dofs.append(dof_i)
+    gamma = np.asarray(gamma)
+    n = gamma.shape[0]
+    if not (order < n / 2):
+        raise ValueError("order must be smaller than sample point number /2")
 
-        coils[ic].local_x = np.concatenate(dofs)
-    return coils
+    # Design matrix for DOF order [c0, s1, c1, ..., s_order, c_order].
+    # Angle convention matches JaxCurveXYZFourier: 2π * quadpoint.
+    phi = np.linspace(0.0, 1.0, n, endpoint=False)
+    angle = 2.0 * np.pi * phi
+    A = np.empty((n, 2 * order + 1))
+    A[:, 0] = 1.0
+    for m in range(1, order + 1):
+        A[:, 2 * m - 1] = np.sin(m * angle)
+        A[:, 2 * m] = np.cos(m * angle)
+
+    dofs = []
+    for k in range(3):
+        dofs.append(np.linalg.lstsq(A, gamma[:, k], rcond=None)[0])
+
+    curve = CurveXYZFourier(order * ppp, order)
+    curve.local_x = np.concatenate(dofs)
+    return curve
+
+
+def _rotation_matrix_to_quaternion(R):
+    """Convert a 3x3 rotation matrix to a quaternion ``[q0, qi, qj, qk]``."""
+    R = np.asarray(R)
+    t = np.trace(R)
+    if t > 0.0:
+        s = 2.0 * np.sqrt(t + 1.0)
+        q0 = 0.25 * s
+        qi = (R[2, 1] - R[1, 2]) / s
+        qj = (R[0, 2] - R[2, 0]) / s
+        qk = (R[1, 0] - R[0, 1]) / s
+    elif (R[0, 0] > R[1, 1]) and (R[0, 0] > R[2, 2]):
+        s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
+        q0 = (R[2, 1] - R[1, 2]) / s
+        qi = 0.25 * s
+        qj = (R[0, 1] + R[1, 0]) / s
+        qk = (R[0, 2] + R[2, 0]) / s
+    elif R[1, 1] > R[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
+        q0 = (R[0, 2] - R[2, 0]) / s
+        qi = (R[0, 1] + R[1, 0]) / s
+        qj = 0.25 * s
+        qk = (R[1, 2] + R[2, 1]) / s
+    else:
+        s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
+        q0 = (R[1, 0] - R[0, 1]) / s
+        qi = (R[0, 2] + R[2, 0]) / s
+        qj = (R[1, 2] + R[2, 1]) / s
+        qk = 0.25 * s
+    q = np.array([q0, qi, qj, qk])
+    return q / np.linalg.norm(q)
+
+
+def planar_curve_from_gamma(gamma, order=10, ppp=20):
+    """Fit one simsopt ``CurvePlanarFourier`` to a sampled centerline.
+
+    Finds the nearest plane to ``gamma``, projects the points onto it, and
+    least-squares fits the polar Fourier series. Sample angles are taken as
+    equally spaced in the simsopt parameterization, ``φ_i = 2π i / n``.
+
+    Parameters
+    ----------
+    gamma : ndarray, shape (n, 3)
+        Sampled XYZ points along the curve (one period, ordered).
+    order : int, optional
+        Fourier order. Must satisfy ``order < n / 2``.
+    ppp : int, optional
+        Quadrature points per Fourier period for the fitted curve.
+
+    Returns
+    -------
+    simsopt.geo.CurvePlanarFourier
+        Planar curve whose dofs are the least-squares Fourier fit to ``gamma``.
+
+    Raises
+    ------
+    ValueError
+        If ``gamma`` is not shape ``(n, 3)`` or ``order`` is not smaller
+        than ``n / 2``.
+    ImportError
+        If simsopt is not installed.
+    """
+    try:
+        from simsopt.geo import CurvePlanarFourier
+    except ImportError:
+        raise ImportError('Simsopt is required to use the coil-cutting features.')
+
+    gamma = np.asarray(gamma, dtype=float)
+    if gamma.ndim != 2 or gamma.shape[1] != 3:
+        raise ValueError("gamma must have shape (n_points, 3)")
+    n = gamma.shape[0]
+    if not (order < n / 2):
+        raise ValueError("order must be smaller than sample point number /2")
+
+    center = np.mean(gamma, axis=0)
+    centered = gamma - center
+    _, _, Vt = np.linalg.svd(centered, full_matrices=False)
+    normal = Vt[-1]
+    normal = normal / np.linalg.norm(normal)
+
+    proj = gamma - np.outer(centered @ normal, normal)
+
+    v0 = proj[0] - center
+    v0_norm = np.linalg.norm(v0)
+    if v0_norm < 1e-14:
+        e1 = Vt[0] - np.dot(Vt[0], normal) * normal
+        e1_norm = np.linalg.norm(e1)
+        if e1_norm < 1e-14:
+            e1 = np.cross(normal, np.array([1.0, 0.0, 0.0]))
+            if np.linalg.norm(e1) < 1e-14:
+                e1 = np.cross(normal, np.array([0.0, 1.0, 0.0]))
+        e1 = e1 / np.linalg.norm(e1)
+    else:
+        e1 = v0 / v0_norm
+
+    e2 = np.cross(normal, e1)
+    e2 = e2 / np.linalg.norm(e2)
+    if n >= 2 and np.dot(proj[1] - center, e2) < 0.0:
+        normal = -normal
+        e2 = -e2
+
+    R = np.column_stack((e1, e2, normal))
+    q = _rotation_matrix_to_quaternion(R)
+
+    u = (proj - center) @ e1
+    v = (proj - center) @ e2
+    r = np.hypot(u, v)
+
+    phi = 2.0 * np.pi * np.linspace(0.0, 1.0, n, endpoint=False)
+    A = np.empty((n, 2 * order + 1))
+    A[:, 0] = 1.0
+    for m in range(1, order + 1):
+        A[:, m] = np.cos(m * phi)
+        A[:, order + m] = np.sin(m * phi)
+    rc_rs = np.linalg.lstsq(A, r, rcond=None)[0]
+
+    dofs = np.concatenate([rc_rs, q, center])
+    curve = CurvePlanarFourier(order * ppp, order)
+    curve.set_dofs(dofs)
+    return curve
+
 
 def simsopt_coil_from_qp(
     qp, dofs, coils_per_half_period, theta_shift=0,
-    method=coil_xyz_from_qp,
+    method=gamma_current_from_qp,
     base_mode=False,
     order=10, ppp=40):
     '''
@@ -287,8 +383,8 @@ def simsopt_coil_from_qp(
         Fractional shift applied to the contour levels. Nonzero shifts are
         ignored when stellarator symmetry is enabled.
     method : callable, optional
-        Function used to generate coil contour coordinates from ``qp`` and
-        ``dofs``. By default, ``coil_xyz_from_qp`` is used.
+        Function used to generate centerlines and currents from ``qp`` and
+        ``dofs``. By default, ``gamma_current_from_qp`` is used.
     base_mode : bool, optional
         If ``True``, return the base curves and currents before symmetry
         expansion. If ``False``, return the symmetry-expanded Simsopt coil set.
@@ -310,30 +406,15 @@ def simsopt_coil_from_qp(
         from simsopt.field.coil import coils_via_symmetries
     except:
         raise ImportError('Simsopt is required to use the coil-cutting features.')
-    (
-        contour_X,
-        contour_Y,
-        contour_Z,
-        coil_currents,
-        # min_separation
-    ) = method(
+    gammas, currents_scalar_list = method(
         qp=qp,
         dofs=dofs,
         coils_per_half_period=coils_per_half_period,
         theta_shift=theta_shift,
-        save=False
     )
-    curves = simsopt_curves_from_xyz(
-        contour_X,
-        contour_Y,
-        contour_Z, 
-        order=order,
-        ppp=ppp)
-    currents=[]
-    for i in range(len(curves)):
-        currents.append(Current(coil_currents))
+    curves = [curve_from_gamma(g, order=order, ppp=ppp) for g in gammas]
+    currents = [Current(I) for I in currents_scalar_list]
     if base_mode:
         return curves, currents
     coils = coils_via_symmetries(curves, currents, qp.nfp, qp.stellsym)
     return coils
-

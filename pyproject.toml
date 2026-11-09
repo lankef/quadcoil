@@ -16,6 +16,7 @@ dependencies = [
     "jax >= 0.4.38",
     "lineax >= 0.0.6",
     "optimistix >= 0.1.0",
+    "optax >= 0.2.4",
     "slsqp-jax >= 0.15.0"
 ]
 classifiers = [

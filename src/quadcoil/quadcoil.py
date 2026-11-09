@@ -415,7 +415,12 @@ def _quadcoil_pure(
             stellsym=stellsym,
             bs_chunk_size=bs_chunk_size,
         )
-        return qp_temp
+        # Imported here: this module is loaded while the package initializes.
+        from quadcoil.quantities.operators import build_cached_ops
+        # Built once per y, outside the solver loop. The objective closures
+        # below capture this qp, so each iteration only does A @ phi + B0.
+        # The NESCOIL initial guess and the SVD preconditioner reuse it too.
+        return build_cached_ops(qp_temp)
 
     # ----- Objective function generator -----
     # A function that handles the parameter-dependence
@@ -792,7 +797,7 @@ def _quadcoil_pure(
                 debug.print('Metric evaluated. {x} = {y}', x=metric_name_i, y=metric_result_i)
         if export_winding_dofs:
             out_dict['winding_surface_dofs'] = {'value': qp.winding_surface.dofs}
-        return out_dict, qp, dofs_opt, solve_results
+        return out_dict, qp.without_cached_ops(), dofs_opt, solve_results
     # flatten the y dictionary. This will simplify the code structure a bit
     y_flat, unravel_y = flatten_util.ravel_pytree(y_dict_current)
 
@@ -930,7 +935,7 @@ def _quadcoil_pure(
                 'df_dwinding_dofs': jnp.eye(n_winding),
             }
         out_dict['winding_surface_dofs'] = {'value': w_val, 'grad': w_grad}
-    return out_dict, qp, dofs_opt, solve_results
+    return out_dict, qp.without_cached_ops(), dofs_opt, solve_results
 
 
 def quadcoil(**kwargs):

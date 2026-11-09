@@ -161,7 +161,9 @@ def project_arr_cylindrical(
 
 
 def max_lse(x, epsilon, **kwargs):
-    approx = epsilon * jnn.logsumexp(a=x/epsilon, **kwargs)
+    logn = jnp.maximum(1.0, jnp.log(x.size))
+    epsilon_norm = epsilon/logn
+    approx = epsilon_norm * jnn.logsumexp(a=x/epsilon_norm, **kwargs)
     return approx
 
 def abs_lse(x, epsilon, **kwargs):

@@ -12,13 +12,22 @@ for _i, _a, _m in [(0, 2, 1), (1, 0, 2), (2, 1, 0)]:
     _levi_civita[_i, _a, _m] = -1.0
 
 # ----- Implementations -----
-@jit
-def _winding_surface_B(qp, dofs):
+def _winding_surface_B_op(qp):
+    r'''
+    phi-independent operator for the winding-surface field on the plasma:
+
+    ``B = A @ phi + B0``, with shapes ``(n_phi, n_theta, 3, ndofs)`` and
+    ``(n_phi, n_theta, 3)``. The ``mu_0 / 4 pi`` factor and the quadrature
+    normalization are included.
+
+    Contracting the sources into ``A, B0`` before multiplying by ``phi``
+    keeps nested JVPs at shape ``(3, ndofs)`` instead of the unreduced
+    source kernel. :meth:`QuadcoilParams.get_op` returns a copy built once
+    per solve when one is cached, so a solver loop does not rebuild it.
+    '''
     # A port of simsoptpp/winding_surface.cpp
     # Array WindingSurfaceB(Array& points, Array& ws_points, Array& ws_normal, Array& K)
-    # NOTE: Bnormal_plasma is not necessarily stellarator 
-    # symmetric even for stellarator symmetric equilibria.
-    gamma = qp.plasma_surface.gamma() # The shapes will be used later
+    gamma = qp.plasma_surface.gamma()  # The shapes will be used later
     points = gamma.reshape((-1, 3))
     ws_gamma = qp.winding_surface.gamma()
     ws_points = ws_gamma.reshape((-1, 3))
@@ -26,27 +35,35 @@ def _winding_surface_B(qp, dofs):
     nphi = ws_gamma.shape[0]
     ntheta = ws_gamma.shape[1]
     fak = 1e-7  # mu0 divided by 4 * pi factor
-    # K = b_K @ phi + c_K. Contract sources into A (3, ndofs) and B0 (3,)
-    # before the matvec so nested JVPs tape ∂B/∂Φ, not [n_eval, ndofs, n_src].
+    scale = fak / nphi / ntheta
     b_K, c_K = _K_op(qp, winding_surface_mode=True)
     b_K = b_K.reshape((-1, 3, b_K.shape[-1]))
     c_K = c_K.reshape((-1, 3))
-    phi_mn = dofs['phi']
     eps = jnp.asarray(_levi_civita)
     nmag = jnp.sqrt(jnp.sum(ws_normal**2, axis=1))
-    def compute_B(point):
+
+    def compute_op(point):
         r = point.reshape(1, -1) - ws_points
         w = nmag / jnp.sqrt(jnp.sum(r**2, axis=1))**3
         A = jnp.einsum('s,ijk,sjm,sk->im', w, eps, b_K, r)
         B0 = jnp.einsum('s,ijk,sj,sk->i', w, eps, c_K, r)
-        return A @ phi_mn + B0
+        return A, B0
+
     # lax.map(..., batch_size=None) is a sequential scan, not vmap. Keep the
     # original fully vectorized path unless a finite chunk size is set.
     if qp.bs_chunk_size is None:
-        B = vmap(compute_B)(points) * fak
+        A, B0 = vmap(compute_op)(points)
     else:
-        B = jax.lax.map(compute_B, points, batch_size=qp.bs_chunk_size) * fak
-    return B.reshape(gamma.shape) / nphi / ntheta
+        A, B0 = jax.lax.map(compute_op, points, batch_size=qp.bs_chunk_size)
+    return (A * scale).reshape(gamma.shape + (A.shape[-1],)), (B0 * scale).reshape(gamma.shape)
+
+
+@jit
+def _winding_surface_B(qp, dofs):
+    # NOTE: Bnormal_plasma is not necessarily stellarator
+    # symmetric even for stellarator symmetric equilibria.
+    A, B0 = qp.get_op('winding_surface_B', _winding_surface_B_op)
+    return A @ dofs['phi'] + B0
 _winding_surface_B_desc_unit = lambda scales: scales["B"]
 
 @jit 

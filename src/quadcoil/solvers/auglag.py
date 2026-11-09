@@ -21,7 +21,7 @@ from jax.lax import while_loop
 from jax import config as config_jax
 config_jax.update('jax_enable_x64', True)
 
-import optimistix as optx
+import optax
 
 lstsq_vmap = vmap(jnp.linalg.lstsq)
 
@@ -40,7 +40,11 @@ def solve_unconstrained_auglag_lbfgs(
     lbfgs_memory=10,
 ):
     r'''
-    Performs unconstrained optimization using ``optimistix.LBFGS``.
+    Performs unconstrained optimization using ``optax.lbfgs``.
+
+    The line search is optax's default zoom search (strong Wolfe, at most
+    20 trials, initial step guess ``'one'``). ``maxiter`` counts accepted
+    updates, not line-search trials.
 
     Parameters
     ----------
@@ -54,10 +58,10 @@ def solve_unconstrained_auglag_lbfgs(
     solver_options : dict
         L-BFGS options.  Recognised keys:
 
-        - ``'atol'`` — absolute gradient tolerance.
-        - ``'rtol'`` — relative gradient tolerance.
+        - ``'atol'`` — absolute tolerance in the Cauchy test below.
+        - ``'rtol'`` — relative tolerance in the Cauchy test below.
     maxiter : int, optional, default=10000
-        (Static) Maximum L-BFGS iteration count.
+        (Static) Maximum number of accepted L-BFGS updates.
     lbfgs_memory : int, optional, default=10
         (Static) L-BFGS history length.
     verbose : int
@@ -70,35 +74,55 @@ def solve_unconstrained_auglag_lbfgs(
 
         - ``'fin_f'`` — objective value at the optimum.
         - ``'fin_x'`` — the optimum, shape ``(N,)``.
-        - ``'niter'`` — iteration count.
-        - ``'fin_dx'`` — set to ``jnp.nan`` (not tracked by optimistix).
-        - ``'fin_du'`` — set to ``jnp.nan`` (not tracked by optimistix).
-        - ``'fin_df'`` — set to ``jnp.nan`` (not tracked by optimistix).
+        - ``'niter'`` — number of accepted updates.
+        - ``'fin_dx'`` — L2 norm of the last accepted step.
+        - ``'fin_du'`` — same as ``'fin_dx'`` (the applied update is the step).
+        - ``'fin_df'`` — absolute change in ``f`` on the last accepted step.
     '''
+    # Same termination as optimistix.LBFGS: both the step and the change in f
+    # are small in the max-norm, ``max|dx| < atol + rtol*|x|`` and
+    # ``|df| < atol + rtol*|f|``. The first accepted step is never a reason
+    # to stop. atol/rtol are not gradient tolerances.
     atol = solver_options.get('atol', 1e-6) if solver_options else 1e-6
     rtol = solver_options.get('rtol', 1e-6) if solver_options else 1e-6
 
-    solver = optx.LBFGS(
-        rtol=rtol,
-        atol=atol,
-        history_length=lbfgs_memory,
+    # Default linesearch is zoom, 20 steps, initial_guess_strategy='one'.
+    opt = optax.lbfgs(memory_size=lbfgs_memory)
+    # Recycles the value and gradient the line search already computed.
+    # The initial state stores value=inf, which makes the first call
+    # evaluate fun; later calls read the stored accepted value.
+    value_and_grad = optax.value_and_grad_from_state(fun)
+    f0 = fun(init_params)
+    state0 = opt.init(init_params)
+
+    def cond(carry):
+        x, x_prev, f, f_prev, state, k = carry
+        del state
+        y_small = jnp.max(
+            jnp.abs(x - x_prev) / (atol + rtol * jnp.abs(x))
+        ) < 1
+        f_small = jnp.abs(f - f_prev) / (atol + rtol * jnp.abs(f)) < 1
+        return (k < maxiter) & jnp.isfinite(f) & ((k < 1) | ~(y_small & f_small))
+
+    def body(carry):
+        x, x_prev, f, f_prev, state, k = carry
+        del x_prev, f_prev
+        value, grad = value_and_grad(x, state=state)
+        updates, state = opt.update(
+            grad, state, x, value=value, grad=grad, value_fn=fun,
+        )
+        x_new = optax.apply_updates(x, updates)
+        # Value of fun at x_new, stored by the zoom line search.
+        f_new = optax.tree.get(state, 'value')
+        return x_new, x, f_new, f, state, k + 1
+
+    x_opt, x_prev, f_opt, f_prev, state, niter = while_loop(
+        cond, body,
+        (init_params, init_params, f0, f0, state0, jnp.int32(0)),
     )
-
-    def objective(y, args):
-        return fun(y), None
-
-    sol = optx.minimise(
-        objective,
-        solver,
-        init_params,
-        has_aux=True,
-        max_steps=maxiter,
-        throw=False,
-    )
-
-    x_opt = sol.value
-    f_opt = fun(x_opt)
-    niter = sol.stats.get('num_steps', jnp.int32(maxiter))
+    del state
+    fin_dx = jnp.linalg.norm(x_opt - x_prev)
+    fin_df = jnp.abs(f_opt - f_prev)
 
     if verbose > 0:
         jax.debug.print(
@@ -110,9 +134,9 @@ def solve_unconstrained_auglag_lbfgs(
         'fin_f': f_opt,
         'fin_x': x_opt,
         'niter': niter,
-        'fin_dx': jnp.nan,
-        'fin_du': jnp.nan,
-        'fin_df': jnp.nan,
+        'fin_dx': fin_dx,
+        'fin_du': fin_dx,
+        'fin_df': fin_df,
     }
 
 # Thresholding function for g+.
@@ -183,14 +207,14 @@ def solve_constrained_auglag_lbfgs(
         - ``'mu_init'`` (``jnp.zeros(0)``) — initial :math:`\mu` multiplier for inequality constraints.
         - ``'xstop_outer'`` (``1e-7``) — outer-loop ``x`` convergence rate tolerance.
         - ``'ctol_outer'`` (``1e-7``) — outer-loop constraint-violation tolerance.
-        - ``'atol_inner'`` (``1e-6``) — absolute gradient tolerance for inner L-BFGS solves.
-        - ``'rtol_inner'`` (``1e-6``) — relative gradient tolerance for inner L-BFGS solves.
-        - ``'atol_inner_last'`` (``1e-10``) — absolute gradient tolerance for the final inner solve.
-        - ``'rtol_inner_last'`` (``1e-10``) — relative gradient tolerance for the final inner solve.
+        - ``'atol_inner'`` (``1e-6``) — absolute Cauchy tolerance for inner L-BFGS solves (step and change in ``f``, max-norm).
+        - ``'rtol_inner'`` (``1e-6``) — relative Cauchy tolerance for inner L-BFGS solves.
+        - ``'atol_inner_last'`` (``1e-10``) — absolute Cauchy tolerance for the final inner solve.
+        - ``'rtol_inner_last'`` (``1e-10``) — relative Cauchy tolerance for the final inner solve.
     maxiter : int, optional, default=10000
-        (Static) Maximum total outer-loop iterations.
+        (Static) Maximum total inner-iteration count across outer steps.
     maxiter_inner : int, optional, default=500
-        (Static) Maximum inner L-BFGS iterations per outer step.
+        (Static) Maximum accepted inner L-BFGS updates per outer step.
     verbose : int, optional, default=0
         (Static) Verbosity. ``>1`` prints outer iteration convergence info.
     c_k_safe : float, optional, default=1e15

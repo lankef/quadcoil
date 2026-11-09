@@ -168,6 +168,24 @@ class SurfaceJAX:
     gammadash2dash2_at_point = lambda self, phi, theta: self.gammadash_at_point(phi, theta, 0, 2)
 
     # ------------------------------------------------------------------
+    # Fourier mode numbers (per-dof; subclass-specific layouts)
+    # ------------------------------------------------------------------
+
+    @property
+    def m(self):
+        """Poloidal mode number for each dof."""
+        raise NotImplementedError(
+            f'{type(self).__name__} does not define Fourier mode numbers m'
+        )
+
+    @property
+    def n(self):
+        """Toroidal mode number for each dof."""
+        raise NotImplementedError(
+            f'{type(self).__name__} does not define Fourier mode numbers n'
+        )
+
+    # ------------------------------------------------------------------
     # Geometric quantities
     # ------------------------------------------------------------------
 
@@ -992,6 +1010,20 @@ class SurfaceRZFourierJAX(SurfaceJAX):
     ``[rc, rs, zc, zs]`` otherwise, matching simsopt's convention exactly.
     """
 
+    @property
+    def m(self):
+        """Poloidal mode number for each dof (simsopt SurfaceRZFourier.m layout)."""
+        mc, ms, _, _ = make_rzfourier_mc_ms_nc_ns(self.mpol, self.ntor)
+        m = jnp.concatenate([mc, ms])
+        return jnp.concatenate([m, m]) if not self.stellsym else m
+
+    @property
+    def n(self):
+        """Toroidal mode number for each dof (simsopt SurfaceRZFourier.n layout)."""
+        _, _, nc, ns = make_rzfourier_mc_ms_nc_ns(self.mpol, self.ntor)
+        n = jnp.concatenate([nc, ns])
+        return jnp.concatenate([n, n]) if not self.stellsym else n
+
     # ------------------------------------------------------------------
     # Construction helpers
     # ------------------------------------------------------------------
@@ -1440,6 +1472,28 @@ class SurfaceXYZTensorFourierJAX(SurfaceJAX):
         )
         return len(rx) + len(ry) + len(rz)
 
+    @property
+    def m(self):
+        """Poloidal mode number for each active dof (x, y, z blocks)."""
+        rx, _, ry, _, rz, _ = _xyztensor_active_indices(
+            self.mpol, self.ntor, self.stellsym
+        )
+        rows = jnp.concatenate([
+            jnp.asarray(rx), jnp.asarray(ry), jnp.asarray(rz)
+        ])
+        return jnp.where(rows <= self.mpol, rows, rows - self.mpol)
+
+    @property
+    def n(self):
+        """Toroidal mode number for each active dof (x, y, z blocks)."""
+        _, cx, _, cy, _, cz = _xyztensor_active_indices(
+            self.mpol, self.ntor, self.stellsym
+        )
+        cols = jnp.concatenate([
+            jnp.asarray(cx), jnp.asarray(cy), jnp.asarray(cz)
+        ])
+        return jnp.where(cols <= self.ntor, cols, -(cols - self.ntor))
+
     # ------------------------------------------------------------------
     # JAX pytree protocol
     # ------------------------------------------------------------------
@@ -1768,6 +1822,24 @@ class SurfaceXYZFourierJAX(SurfaceJAX):
         )
         surf.set_dofs(np.array(self.dofs))
         return surf
+
+    @property
+    def m(self):
+        """Poloidal mode number for each dof (xc/ys/zs or full XYZ layout)."""
+        mc, ms, _, _ = make_rzfourier_mc_ms_nc_ns(self.mpol, self.ntor)
+        if self.stellsym:
+            return jnp.concatenate([mc, ms, ms])  # xc, ys, zs
+        m = jnp.concatenate([mc, ms])
+        return jnp.concatenate([m, m, m])  # x, y, z
+
+    @property
+    def n(self):
+        """Toroidal mode number for each dof (xc/ys/zs or full XYZ layout)."""
+        _, _, nc, ns = make_rzfourier_mc_ms_nc_ns(self.mpol, self.ntor)
+        if self.stellsym:
+            return jnp.concatenate([nc, ns, ns])  # xc, ys, zs
+        n = jnp.concatenate([nc, ns])
+        return jnp.concatenate([n, n, n])  # x, y, z
 
     # ------------------------------------------------------------------
     # JAX pytree protocol
@@ -2554,6 +2626,14 @@ class SurfaceOffsetJAX(SurfaceJAX):
             quadpoints_phi, quadpoints_theta
         )
         return SurfaceOffsetJAX(new_base, self.d_expand)
+
+    @property
+    def m(self):
+        return self.base_surface.m
+
+    @property
+    def n(self):
+        return self.base_surface.n
     
     # ------------------------------------------------------------------
     # Methods from SurfaceJAX not supported by offset surfaces

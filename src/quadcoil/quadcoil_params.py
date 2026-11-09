@@ -29,6 +29,7 @@ class _Params:
         quadpoints_theta=None, 
         stellsym=None,
         bs_chunk_size=None,
+        cached_ops=None,
         ):
         
         # Writing peroperties 
@@ -39,6 +40,9 @@ class _Params:
         self.net_poloidal_current_amperes = net_poloidal_current_amperes
         self.net_toroidal_current_amperes = net_toroidal_current_amperes
         self.Bnormal_plasma = Bnormal_plasma
+        # phi-independent operators, name -> (A, B0). None means callers
+        # build them on the fly. See quadcoil.quantities.operators.
+        self.cached_ops = cached_ops
         if stellsym is None:
             stellsym = winding_surface.stellsym and plasma_surface.stellsym
         self.stellsym = stellsym
@@ -123,7 +127,7 @@ class QuadcoilParams(_Params):
     bs_chunk_size : int, optional, default=None
         Number of Biot-Savart evaluation points to process at once in
         :func:`~quadcoil.quantities.magnetic_field._winding_surface_B` and
-        :func:`~quadcoil.quantities.self_field._integrate_B_self`.
+        :func:`~quadcoil.quantities.self_field._integrate_B_self_op`.
         ``None`` keeps the original fully vectorized kernels.
 
     Attributes
@@ -160,6 +164,12 @@ class QuadcoilParams(_Params):
         (Static) ``ndof`` if ``stellsym==True``, ``ndof//2`` otherwise. 
     bs_chunk_size : int or None
         (Static) Evaluation-point chunk size for Biot-Savart kernels.
+    cached_ops : dict or None
+        (Traced) ``name -> (A, B0)`` operators that do not depend on the
+        current potential. Built once per solve by
+        :func:`quadcoil.quantities.operators.build_cached_ops` so the
+        solver loop only evaluates ``A @ phi + B0``. ``None`` (the
+        default) makes quantities build the operators on each call.
     '''
     def __init__(
         self,
@@ -174,6 +184,7 @@ class QuadcoilParams(_Params):
         quadpoints_theta=None, 
         stellsym=None,
         bs_chunk_size=None,
+        cached_ops=None,
         ):
         
         # Writing peroperties 
@@ -187,6 +198,7 @@ class QuadcoilParams(_Params):
             quadpoints_theta=quadpoints_theta,
             stellsym=stellsym,
             bs_chunk_size=bs_chunk_size,
+            cached_ops=cached_ops,
         )
         self.mpol = mpol
         self.ntor = ntor
@@ -209,6 +221,7 @@ class QuadcoilParams(_Params):
             quadpoints_theta=children[7],
             stellsym=aux_data['stellsym'],
             bs_chunk_size=aux_data.get('bs_chunk_size'),
+            cached_ops=children[8],
         )
 
     def tree_flatten(self):
@@ -221,6 +234,7 @@ class QuadcoilParams(_Params):
             self.Bnormal_plasma,
             self.quadpoints_phi,
             self.quadpoints_theta,
+            self.cached_ops,
         )
         aux_data = {
             # 'nfp': self.nfp,
@@ -234,7 +248,49 @@ class QuadcoilParams(_Params):
             # 'n': self.n,
         }
         return children, aux_data
-    
+
+    def _copy(self, cached_ops):
+        '''New QuadcoilParams with ``cached_ops`` replaced.'''
+        return QuadcoilParams(
+            plasma_surface=self.plasma_surface,
+            winding_surface=self.winding_surface,
+            net_poloidal_current_amperes=self.net_poloidal_current_amperes,
+            net_toroidal_current_amperes=self.net_toroidal_current_amperes,
+            Bnormal_plasma=self.Bnormal_plasma,
+            mpol=self.mpol,
+            ntor=self.ntor,
+            quadpoints_phi=self.quadpoints_phi,
+            quadpoints_theta=self.quadpoints_theta,
+            stellsym=self.stellsym,
+            bs_chunk_size=self.bs_chunk_size,
+            cached_ops=cached_ops,
+        )
+
+    def with_cached_ops(self, cached_ops):
+        '''Return a copy storing ``cached_ops`` (``name -> (A, B0)``).'''
+        return self._copy(cached_ops)
+
+    def without_cached_ops(self):
+        '''Return a copy with no operator cache.
+
+        The returned object has the same pytree structure as a
+        ``QuadcoilParams`` built by a caller, so it can leave
+        ``quadcoil()`` without changing the public output.
+        '''
+        return self._copy(None)
+
+    def get_op(self, name, builder):
+        '''Return the cached ``(A, B0)`` for ``name``, or build it.
+
+        ``builder(self)`` is used when this object has no cache or does
+        not store ``name``. Whether a cache is present is part of the
+        pytree structure, so the branch is concrete under JIT.
+        '''
+        cached = self.cached_ops
+        if cached is not None and name in cached:
+            return cached[name]
+        return builder(self)
+
     # -- Cached quantites -- 
     # == Helpers == 
     # @lru_cache()
@@ -282,7 +338,8 @@ class QuadcoilParams(_Params):
         Modes present in both bases are copied; modes that exist in the new
         basis but not in the old are set to zero.  All other fields of the
         returned ``QuadcoilParams`` (surfaces, currents, quad-points,
-        ``stellsym``) are inherited from ``self``.
+        ``stellsym``) are inherited from ``self``. The operator cache is
+        dropped, because its trailing axis has length ``ndofs``.
 
         This method is intentionally implemented with plain NumPy so that it
         can be called in the eager Python layer between solver steps without
