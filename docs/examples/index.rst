@@ -8,8 +8,6 @@ read their inputs from ``docs/examples/data/``.
    :maxdepth: 1
 
    simple_example
-   scaling
    regcoil
    filament
    dipole_density
-   taylor_test
