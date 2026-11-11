@@ -122,6 +122,20 @@ _force_desc_unit = lambda scales: scales["B"] * _K_desc_unit(scales) * scales["a
 _forcel1_desc_unit = lambda scales: scales["B"] * _K_desc_unit(scales) * scales["a"]**2 * scales["R0"] * scales["a"]
 _force2_desc_unit = lambda scales: (scales["B"] * _K_desc_unit(scales) * scales["a"]**2)**2
 
+# Non-convex quadratic 3d vector fields. Setting their components
+# is close to trivial, so only inequality constraints are supported.
+force_xyz = _Quantity.generate_c2(
+    func=_force_xyz,
+    compatibility=['<=', '>='],
+    desc_unit=_force_desc_unit,
+)
+
+force_cyl = _Quantity.generate_c2(
+    func=_force_cyl,
+    compatibility=['<=', '>='],
+    desc_unit=_force_desc_unit,
+)
+
 # This is an l-inf norm. We have implemented a template
 # in _Quantity. It's non-convex but Shor-relaxable into SDP.
 f_max_force_cyl = _Quantity.generate_linf_norm(

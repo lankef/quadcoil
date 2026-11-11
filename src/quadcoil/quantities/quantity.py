@@ -279,7 +279,7 @@ class _Quantity:
     def generate_linf_norm(func, aux_argname, desc_unit, positive_definite=False, square=False, auto_stellsym=False):
         r'''
         Generates the slack constraints for an L-:math:`\infty`
-        norm. See documentations for ``quadcoil.objective.Objective``.
+        norm. See documentations for ``_Quantity``.
         An L-:math:`\infty` norm term in an objective or :math:`\leq`
         constraint can be represented by:
 
@@ -366,9 +366,9 @@ class _Quantity:
         
     def generate_linf_norm_4(func, aux_argname, desc_unit):
         r'''
-        Generates the slack constraints for an L-:math:`\infty`
-        norm. See documentations for ``quadcoil.objective.Objective``.
-        An L-:math:`\infty` norm term in an objective or :math:`\leq`
+        Generates the slack constraints for the 4th power of an L-:math:`\infty`
+        norm. See documentations for ``_Quantity``.
+        An :math:`\|f\|_\infty^4` term in an objective or :math:`\leq`
         constraint can be represented by:
 
         .. math::
@@ -389,12 +389,6 @@ class _Quantity:
             ``_Quantity``s.
         desc_unit : Callable
             A callable calculating the quantity's unit in DESC.
-        positive_definite : bool, optional, default=False
-            Whether ``func`` is positive definite. If ``True``, then
-            the second constraint is not required.
-        square : bool, optional, default=True
-            When ``True``, generates :math:`\|f\|_\infty^2` instead. This is better-behaved
-            when used as objective.
 
         Returns
         -------
@@ -436,15 +430,16 @@ class _Quantity:
 
     def generate_huber(func, desc_unit, auto_stellsym=False):
         r'''
-        Generates a Huber loss function (smooth approximation for l2 norm)
+        Generates a pseudo-Huber penalty, a smooth approximation of the
+        surface integral of the pointwise L-2 norm of :math:`f`:
 
         .. math::
 
-            \|f\|_1 = \int da |f| &= \sum_{i=1}^{i=N_{grid}} N p_i,\\
-            \text{where}\\
-            N \text{ is the length of the surface normal}\\
-             f_i - p_i &\leq 0\\
-            -f_i - p_i &\leq 0
+            \int da \|f\|_2 \approx \int da \left(\sqrt{\|f/a\|_2^2 + \epsilon^2} - \epsilon\right),
+
+        where :math:`a` is the unit and :math:`\epsilon` is
+        ``smoothing_params['lse_epsilon']``. The smoothing is always applied,
+        even when ``smoothing='slack'`` (in that case, :math:`\epsilon=10^{-3}`).
         
         This is a scalar, convex quantity that's only compatible as an 
         objective term or with ``'<='`` constraints.
@@ -452,9 +447,8 @@ class _Quantity:
         Parameters
         ----------  
         func : Callable
-            The source function :math:`f` to convert into an L-:math:`\infty` norm.
-        func_shape : Tuple
-            The shape of ``func``'s output. Muse be 
+            The source function :math:`f`. Its trailing dimensions are 
+            flattened and treated as the vector components.
         desc_unit : Callable
             A callable calculating the quantity's unit in DESC.
         auto_stellsym : bool, optional, default=False
@@ -490,7 +484,10 @@ class _Quantity:
                     -1
                 ))
             field_norm = (
-                jnp.linalg.norm(field/unit + smoothing_params['lse_epsilon']**2, axis=-1)
+                jnp.sqrt(
+                    jnp.sum((field/unit)**2, axis=-1)
+                    + smoothing_params['lse_epsilon']**2
+                )
                 - smoothing_params['lse_epsilon']
             )
             integrand = da * field_norm
@@ -521,7 +518,7 @@ class _Quantity:
     def generate_l1_norm(func, aux_argname, desc_unit, positive_definite=False, square=False, auto_stellsym=False, da_fn=None):
         r'''
         Generates the slack constraints for an L-1 
-        norm. See documentations for ``quadcoil.objective.Objective``.
+        norm. See documentations for ``_Quantity``.
         An L-1 norm in an objective or a :math:`\leq` constraint is equivalent to:
 
         .. math::
@@ -538,13 +535,11 @@ class _Quantity:
         Parameters
         ----------  
         func : Callable
-            The source function :math:`f` to convert into an L-:math:`\infty` norm.
-        func_shape : Tuple
-            The shape of ``func``'s output. Muse be 
+            The source function :math:`f` to convert into an L-1 norm.
         aux_argname : str
             The name of the slack variable. Must be unique among all supported
             ``_Quantity``s.
-        maxdesc_unit : Callable
+        desc_unit : Callable
             A callable calculating the quantity's unit in DESC.
         positive_definite : bool, optional, default=False
             Whether ``func`` is positive definite. If ``True``, then

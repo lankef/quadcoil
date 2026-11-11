@@ -49,7 +49,6 @@ SOLVER_OPTIONS_DEFAULT_DICT = {
         'rtol_inner':       tol_default,
         'atol_inner_last':  tol_default_last,
         'rtol_inner_last':  tol_default_last,
-        'svtol':            tol_default,
     },
     'ipm': {
         'tol_kkt': 1e-6,
@@ -119,8 +118,7 @@ QUADCOIL_STATIC_ARGNAMES=[
     # KKT adjoint metric-row chunking:
     'jac_chunk_size',
 ]
-@partial(jit, static_argnames=QUADCOIL_STATIC_ARGNAMES)
-def _quadcoil_pure(
+def _quadcoil_pure_nojit(
     # Now, the regular arguments.
     nfp:int, # Documented
     stellsym:bool, # Documented
@@ -378,8 +376,6 @@ def _quadcoil_pure(
             )
         # winding surface is not provided. 
         # Its dofs will not be among x.
-        # gen_offset_dofs is only implemented for SurfaceRZFourierJAX;
-        # other surface types will raise NotImplementedError here.
         else:
             winding_surface = plasma_surface.gen_winding_surface(
                 d_expand=y_dict['plasma_coil_distance'],
@@ -937,6 +933,7 @@ def _quadcoil_pure(
         out_dict['winding_surface_dofs'] = {'value': w_val, 'grad': w_grad}
     return out_dict, qp.without_cached_ops(), dofs_opt, solve_results
 
+_quadcoil_pure = jit(_quadcoil_pure_nojit, static_argnames=QUADCOIL_STATIC_ARGNAMES)
 
 def quadcoil(**kwargs):
     r'''
@@ -963,10 +960,10 @@ def quadcoil(**kwargs):
     ntor : int, optional, default=4
         (Static) The number of toroidal Fourier harmonics in :math:`\Phi_{sv}`.
     quadpoints_phi : ndarray, shape (nphi,), optional, default=None
-        (Traced) The poloidal quadrature points on the winding surface to evaluate the objectives at.
+        (Traced) The toroidal quadrature points on the winding surface to evaluate the objectives at.
         Uses one period from the winding surface by default.
     quadpoints_theta : ndarray, shape (ntheta,), optional, default=None
-        (Traced) The toroidal quadrature points on the winding surface to evaluate the objectives at.
+        (Traced) The poloidal quadrature points on the winding surface to evaluate the objectives at.
         Uses one period from the winding surface by default.
     phi_init : ndarray, optional, default=None
         (Traced) The initial guess. All zeros by default (unless ``phi_init_with_nescoil`` is ``True``).
@@ -990,8 +987,8 @@ def quadcoil(**kwargs):
         (Traced) The coil-plasma distance. Is set to ``None`` by default, but a value must be provided if ``winding_dofs`` is not provided.
     surface_type : str, optional, default='SurfaceRZFourier'
         (Static) The surface parametrization. One of ``'SurfaceRZFourier'``,
-        ``'SurfaceXYZTensorFourier'``, ``'SurfaceXYZFourier'``.
-        Auto-offset (``plasma_coil_distance``) only works with ``'SurfaceRZFourier'``.
+        ``'SurfaceXYZTensorFourier'``, ``'SurfaceXYZFourier'``. Applies to both the
+        plasma boundary and the winding surface.
     winding_surface_mode : str, optional, default='self-intersection'
         (Static) Winding-surface generation mode when auto-generating from
         ``plasma_coil_distance``. One of ``'self-intersection'``, ``'hull'``,
@@ -1027,7 +1024,9 @@ def quadcoil(**kwargs):
     objective_unit : ndarray, optional, default=None
         (Traced) The normalization constants of the objective terms, so that ``f/objective_unit`` is :math:`O(1)`. May contain ``None``
     constraint_name : tuple, optional, default=()
-        (Static) The names of the constraint functions. Must be a member of ``quadcoil.quantities`` that outputs a scalar.
+        (Static) The names of the constraint functions. Must be members of ``quadcoil.quantities``
+        that support the corresponding ``constraint_type``. Can be scalars or fields. For fields,
+        the threshold applies to every element.
     constraint_type : tuple, optional, default=()
         (Static) The types of the constraints. Must consist of ``'>='``, ``'<='``, ``'=='`` only.
     constraint_unit : ndarray, optional, default=()
@@ -1055,8 +1054,9 @@ def quadcoil(**kwargs):
     solver : str, optional, default='auglag-lbfgs'
         (Static) Optimizer backend. One of ``'auglag-lbfgs'``, ``'ipm'``, ``'slsqp'``.
     solver_options : dict, optional, default=None
-        (Traced) Solver-specific options. Merged with
-        ``SOLVER_OPTIONS_DEFAULT_DICT[solver]``; unspecified keys take their defaults.
+        (Traced) Solver-specific options. Uses ``SOLVER_OPTIONS_DEFAULT_DICT[solver]`` when
+        ``None``. A partial dict is merged with the defaults inside each solver, so
+        unspecified keys take their defaults.
 
         For ``'auglag-lbfgs'``:
         - ``'c_init'`` (``1.``) — initial penalty :math:`c` factor.
@@ -1067,7 +1067,6 @@ def quadcoil(**kwargs):
         - ``'rtol_inner'`` (``1e-6``) — relative gradient tolerance for inner L-BFGS solves.
         - ``'atol_inner_last'`` (``1e-10``) — absolute gradient tolerance for the final inner solve.
         - ``'rtol_inner_last'`` (``1e-10``) — relative gradient tolerance for the final inner solve.
-        - ``'svtol'`` (``1e-6``) — singular-value cut-off for pre-conditioning.
 
         For ``'ipm'``: ``'tol_kkt'``, ``'tau'``, ``'delta_init'``, ``'delta_min'``, ``'delta_max'``.
 
@@ -1101,7 +1100,15 @@ def quadcoil(**kwargs):
         ``jac_chunk_size`` scans the VJP over ``lax.map`` blocks of that
         width. ``None`` keeps the fully vectorized path.
         Strongly recommended for vector metrics such as ``'phi_dofs'``.
+    enable_jitting : bool, optional, default=True
+        When ``True``, JIT-compiles the whole of ``quadcoil()`` as one program.
+        When ``False``, runs the top level eagerly, so only the individually
+        jitted pieces (solver iterations, quantities, surface ops) are compiled.
+        Useful for debugging, profiling, or avoiding long whole-program
+        compile times.
     '''
+    enable_jitting = kwargs.pop('enable_jitting', True)
+    quadcoil_impl = _quadcoil_pure if enable_jitting else _quadcoil_pure_nojit
     # Normalize metric_name before JIT: lists are unhashable static args.
     if 'metric_name' in kwargs:
         metric_name = kwargs['metric_name']
@@ -1112,7 +1119,7 @@ def quadcoil(**kwargs):
         else:
             kwargs['metric_name'] = tuple(metric_name)
     try:
-        out_dict, qp, dofs_opt, solve_results = _quadcoil_pure(**kwargs)
+        out_dict, qp, dofs_opt, solve_results = quadcoil_impl(**kwargs)
     except RuntimeError as e:
         # Catch some common Equinox errors due to improper 
         # parameter choices.

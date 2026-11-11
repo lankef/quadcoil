@@ -1,9 +1,11 @@
-Tutorial V: Simsopt integrations
+Tutorial 3: Simsopt integrations
 =======================================
 
-QUADCOIL surface objects follow Simsopt's ``SurfaceRZFourier`` conventions.
-They can be constructed from Simsopt surfaces, exported back to Simsopt, or
-converted to DESC surfaces as described in :doc:`tutorial_to_desc`.
+QUADCOIL surface objects follow Simsopt's surface conventions.
+``SurfaceRZFourierJAX``, ``SurfaceXYZFourierJAX`` and ``SurfaceXYZTensorFourierJAX``
+correspond to Simsopt's ``SurfaceRZFourier``, ``SurfaceXYZFourier`` and
+``SurfaceXYZTensorFourier``. They can be constructed from Simsopt surfaces and
+exported back to Simsopt. For DESC workflows, see :doc:`examples/quasi_single_stage`.
 
 Surface conversion
 ------------------
@@ -16,14 +18,15 @@ To import a Simsopt ``SurfaceRZFourier``:
 
     quadcoil_surface = SurfaceRZFourierJAX.from_simsopt(simsopt_surface)
 
-To export a QUADCOIL surface:
+The other surface types work the same way, for example
+``SurfaceXYZFourierJAX.from_simsopt(simsopt_surface)``. To export a QUADCOIL surface:
 
 .. code-block:: python
 
     simsopt_surface = quadcoil_surface.to_simsopt()
 
 This is useful after a QUADCOIL run because ``qp.plasma_surface`` and
-``qp.winding_surface`` are both ``SurfaceRZFourierJAX`` objects:
+``qp.winding_surface`` are QUADCOIL surfaces of the type selected by ``surface_type``:
 
 .. code-block:: python
 

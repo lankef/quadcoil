@@ -11,3 +11,4 @@ read their inputs from ``docs/examples/data/``.
    regcoil
    filament
    dipole_density
+   quasi_single_stage

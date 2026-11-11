@@ -1,4 +1,4 @@
-Tutorial IV: Miscellaneous output utilities
+Tutorial 4: Miscellaneous output utilities
 ===========================================
 
 QUADCOIL includes a few small output utilities for passing surfaces and coil

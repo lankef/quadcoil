@@ -6,7 +6,7 @@ def generate_desc_scaling(objective_name, constraint_name, scales):
     '''
     A helper method for calculating the units of each objectives and constraints
     using quantities scales = desc.objectives.normalization.compute_scaling_factors(eq).
-    The formula must be first implemented as quadcoil.objective.<quantity_name>_desc_unit.
+    The formula must be first implemented as the ``desc_unit`` of ``quadcoil.quantities.<quantity_name>``.
     '''
     if isinstance(objective_name, str):
         objective_unit = get_quantity(objective_name).desc_unit(scales)

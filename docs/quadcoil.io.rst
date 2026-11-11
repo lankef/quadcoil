@@ -46,6 +46,14 @@ quadcoil.io.jax module
    :show-inheritance:
    :undoc-members:
 
+quadcoil.io.utils module
+------------------------
+
+.. automodule:: quadcoil.io.utils
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
 Module contents
 ---------------
 

@@ -100,7 +100,7 @@ def merge_callables(
         ):
     r'''
     Merge a tuple of ``callable``s into one that 
-    takes 2 arguments (all functions in the ``quadcoil.objective`` do),
+    takes 2 arguments (all functions in the ``quadcoil.quantities`` do),
     by flattening and concatenating their outputs into an 1D ``array``. 
     Used to construct constraints.
 
@@ -253,7 +253,7 @@ def _parse_objectives(
     r'''
     Parses a tuple of ``str`` quantities names (or a single ``str`` for one objective only), 
     an array of weights, and a tuple of units into a ``callable`` 
-    that outputs the weighted sum of the corresponding functions in ``quadcoil.objectives``. 
+    that outputs the weighted sum of the corresponding functions in ``quadcoil.quantities``. 
 
     Parameters
     ----------  
@@ -335,7 +335,7 @@ def _parse_constraints(
     Parameters
     ----------  
     constraint_name : tuple of str 
-        A tuple of quantity names in ``quadcoil.objective``. The corresponding 
+        A tuple of quantity names in ``quadcoil.quantities``. The corresponding 
         quantity can be both scalars or a vector fields (``ndarray``).
     constraint_type : tuple of str 
         A tuple of strings. Must consists of ``'>=', '<=', '=='`` only.

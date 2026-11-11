@@ -37,10 +37,50 @@ quadcoil.quadcoil\_params module
    :show-inheritance:
    :undoc-members:
 
-quadcoil.solvers module
+quadcoil.nescoil module
 -----------------------
 
-.. automodule:: quadcoil.solvers
+.. automodule:: quadcoil.nescoil
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
+quadcoil.plotting module
+------------------------
+
+.. automodule:: quadcoil.plotting
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
+quadcoil.solvers.auglag module
+------------------------------
+
+.. automodule:: quadcoil.solvers.auglag
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
+quadcoil.solvers.ipm module
+---------------------------
+
+.. automodule:: quadcoil.solvers.ipm
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
+quadcoil.solvers.slsqp module
+-----------------------------
+
+.. automodule:: quadcoil.solvers.slsqp
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
+quadcoil.solvers.kkt\_adjoint module
+------------------------------------
+
+.. automodule:: quadcoil.solvers.kkt_adjoint
    :members:
    :show-inheritance:
    :undoc-members:

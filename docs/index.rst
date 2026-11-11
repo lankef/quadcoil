@@ -1,5 +1,5 @@
-QUADCOIL documentation
-======================
+Homepage
+========
 
 Welcome to the documentation for `QUADCOIL <https://github.com/lankef/quadcoil>`_, 
 the stellarator coil complexity proxy/global coil optimizer!
@@ -21,7 +21,7 @@ In other words, it's a "winding surface" code. However, unlike other winding sur
 Installation
 ------------
 
-QUADCOIL depends on JAX, Lineax, Optimistix, and slsqp-jax. Since JAX installation can be platform-specific, see the JAX installation guide `here <https://docs.jax.dev/en/latest/installation.html>`_.
+QUADCOIL requires Python 3.11 or newer, and depends on JAX, Lineax, Optimistix, Optax, and slsqp-jax. Since JAX installation can be platform-specific, see the JAX installation guide `here <https://docs.jax.dev/en/latest/installation.html>`_.
 
 For the most up-to-date version, clone the `QUADCOIL source files <https://github.com/lankef/quadcoil>`_, 
 and then run:
@@ -39,13 +39,24 @@ Alternatively, a stable version of QUADCOIL can also be installed from `PyPI <ht
 Validating the installation
 ------------------------------
 
-The installation can be validated by running the :doc:`example notebooks <examples/index>`. 
-The unit tests requires Simsopt's `regcoil` branch, which is not completely merged into
-the main branch as of this writing. After installing the branch, run: 
+The installation can be validated by running the :doc:`example notebooks <examples/index>`
+or the unit tests. To run all unit tests, run from the repository root:
 
 .. code-block:: bash
 
+    cd tests
     python -m unittest discover
+
+To run a single test, for example:
+
+.. code-block:: bash
+
+    cd tests
+    python -m unittest test_regcoil.QuadcoilKTest.test_regcoil
+
+Tests that compare against Simsopt or DESC are skipped automatically when those
+packages are not installed. The Simsopt comparisons require Simsopt's ``regcoil`` 
+branch, which is not completely merged into the main branch as of this writing.
 
 
 Contact
@@ -68,9 +79,8 @@ Publications
    math
    tutorial_inputs
    tutorial_outputs
-   tutorial_to_desc
-   tutorial_misc_outputs
    tutorial_to_simsopt
+   tutorial_misc_outputs
    quantity
    examples/index
    quadcoil

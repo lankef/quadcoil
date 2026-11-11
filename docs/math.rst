@@ -10,7 +10,7 @@ with a "current potential" :math:`\Phi`:
 
 .. math::
 
-   \mathbf{K} = \hat{\mathbf{n}} \cdot \nabla \Phi.
+   \mathbf{K} = \hat{\mathbf{n}} \times \nabla \Phi.
 
 :math:`\Phi` can be split into 3 parts:
 
@@ -29,9 +29,10 @@ QUADCOIL solves the constrained optimization problem:
 
 .. math::
 
-   \Phi^*_{sv} = &\text{argmin}_{\Phi_{sv}} \Sigma_i\lambda_i f_i(\Phi_{sv}),
+   \Phi^*_{sv} = &\text{argmin}_{\Phi_{sv}} \Sigma_i \frac{w_i}{a_i} f_i(\Phi_{sv}),\\
    &\text{subject to } g_j(\Phi_{sv}) \leq \text{ or } \geq\text{ or } = p_j \\
-   ...
+   &...
 
-Here, :math:`f_i` can be any supported scalar quantity(ies), and :math:`g_j` can be 
+Here, :math:`f_i` can be any supported scalar quantity(ies), :math:`w_i` are the objective weights, 
+and :math:`a_i` are normalization constants (see :doc:`tutorial_inputs`). :math:`g_j` can be 
 any supported scalars or fields. See :ref:`available_quantities` for the list of supported quantities.

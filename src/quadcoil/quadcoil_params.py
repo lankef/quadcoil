@@ -98,7 +98,7 @@ class QuadcoilParams(_Params):
     does not include problem-specific info such as objectives, constraints
     or solutions. This class is primarily intended as a concise way to 
     pass information into objective functions. It allows functions
-    in ``quadcoil.objective`` to have the same signature, despite requiring
+    in ``quadcoil.quantities`` to have the same signature, despite requiring
     different info to calculate. 
 
     Parameters

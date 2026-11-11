@@ -1,4 +1,4 @@
-Tutorial I: running QUADCOIL
+Tutorial 1: running QUADCOIL
 ================================
 
 ``quadcoil.quadcoil()`` is a wrapper that performs all necessary steps needed to generate a sheet current coil set from a plasma boundary, given coil-plasma distance and other engineering requirements. These includes:
@@ -41,7 +41,7 @@ A minimal example can be found in :doc:`examples/simple_example`:
     )
 
     # Plotting the solution
-    from quadcoil.quantity import Phi_with_net_current
+    from quadcoil.quantities import Phi_with_net_current
     import matplotlib.pyplot as plt
     
     plt.contour(
@@ -164,7 +164,7 @@ These parameters defines basic properties of the sheet current solutions.
    * - ``phi_unit``
      - ``float``, traced
      - :math:`\frac{d_{cs}B_\text{normal}^\text{plasma}}{\mu_0}`.
-     - A normalization constant :math:`a_\Phi`, so that :math:`\Phi_{sv}`'s Fourier coefficients satisfy :math:`\Phi_{sv, M, N}/a_\Phi\approx O(1)`. Automatically calculated by default.
+     - A normalization constant :math:`a_\Phi`, so that :math:`\Phi_{sv}`'s Fourier coefficients satisfy :math:`\Phi_{sv, M, N}/a_\Phi\approx O(1)`. Automatically calculated by default. Only used when ``precond`` is ``None`` or ``'ess'``. Overridden when ``phi_init_with_nescoil=True``.
 
 3. Choosing the winding surface
 --------------------------------------------
@@ -190,7 +190,7 @@ QUADCOIL can automatically generate winding surfaces when used as an equilibrium
    * - ``surface_type``
      - ``str``, static
      - ``'SurfaceRZFourier'``
-     - Surface parametrization. One of ``'SurfaceRZFourier'``, ``'SurfaceXYZTensorFourier'``, ``'SurfaceXYZFourier'``. 
+     - Surface parametrization of both the plasma boundary and the winding surface. One of ``'SurfaceRZFourier'``, ``'SurfaceXYZTensorFourier'``, ``'SurfaceXYZFourier'``. All three support auto-generating the winding surface. ``plasma_dofs`` and ``winding_dofs`` must follow the chosen parametrization.
    * - ``winding_mpol``
      - ``int``, static
      - 6
@@ -223,6 +223,10 @@ QUADCOIL can automatically generate winding surfaces when used as an equilibrium
      - ``float``, traced
      - ``1e-5``
      - Tikhonov regularization weight for the least-squares surface fit.
+   * - ⭐ ``export_winding_dofs``
+     - ``bool``, static
+     - ``False``
+     - When ``True``, adds the generated winding surface dofs and their derivatives to the outputs as ``out_dict['winding_surface_dofs']``. Mainly for DESC free-boundary workflows. See :doc:`tutorial_outputs`.
    * - ⭐ ``winding_stellsym``
      - ``bool``, static
      - ``True``
@@ -425,6 +429,10 @@ The following are important numerical settings.
      - ``int``, static
      - ``0``
      - ``0`` is silent. ``1`` prints important info. ``2`` also prints outer-loop progress. Higher values may print more solver detail.
+   * - ``enable_jitting``
+     - ``bool``
+     - ``True``
+     - When ``True``, JIT-compiles the whole of ``quadcoil()`` as one program. When ``False``, runs the top level eagerly, so only the individually jitted pieces are compiled. Useful for debugging, profiling, or avoiding long whole-program compile times.
 
 QUADCOIL performs optimization on non-smooth objectives. For the optimizer to converge well, it has to
 convert the non-smooth problem to a smooth problem. The currently supported values for ``'smoothing'`` are:
@@ -458,8 +466,9 @@ We are almost there. After an optimum coil set :math:`\Phi^*_{sv}` is found, QUA
 - ``net_poloidal_current_amperes``
 - ``net_toroidal_current_amperes``
 - ``plasma_coil_distance`` or ``winding_dofs``
-- ``objective_weight`` (if enabled)
-- ``constraint_value`` (if enabled)
+- ``objective_weight`` (only in multi-objective mode, when ``objective_name`` is a ``tuple``)
+- ``constraint_value`` (if constraints are present)
+- ``Bnormal_plasma`` (if provided)
 
 Metrics are selected with ``metric_name``:
 
@@ -476,7 +485,7 @@ Metrics are selected with ``metric_name``:
      - Metric names from :ref:`available_quantities`. A single ``str`` is treated as a one-element tuple. Lists are converted to tuples before JIT. ``None`` or ``()`` skips metric evaluation and KKT adjoint work.
 
 **Adjoint differentiation:** When ``value_only=False`` (default), QUADCOIL performs
- KKT adjoint differentiation for all listed metrics with respect to plasma DOFs,
+KKT adjoint differentiation for all listed metrics with respect to plasma DOFs,
 winding-surface parameters, constraints, and weights. Array-valued metrics are supported:
 ``'value'`` keeps the metric shape, and each gradient leaf has shape
 ``(*metric_shape, *param_shape)``. Large fields (for example ``'Bnormal'``) can be
@@ -575,10 +584,6 @@ Shared / top-level options:
      - ``float``
      - ``1e-6``, ``1e-10``
      - Relative gradient tolerance for ordinary / final inner L-BFGS solves.
-   * - ``solver_options['svtol']``
-     - ``float``
-     - ``1e-6``
-     - Singular-value cut-off used by some preconditioning paths.
 
 ``solver='ipm'`` options:
 
@@ -620,10 +625,36 @@ Shared / top-level options:
      - ``1e-7``
      - Relative convergence tolerance.
 
-9. Chunking the adjoint derivative
-----------------------------------
+9. Chunking for large problems
+------------------------------
 
-Chunking is only likely to be necessary when ``metric_name`` contains
+QUADCOIL provides two chunking options to reduce peak memory. Both default to
+``None``, which keeps the fully vectorized paths.
+
+Biot-Savart chunking
+~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+
+   * - Parameter
+     - Type
+     - Default
+     - Definition
+   * - ``bs_chunk_size``
+     - ``int`` or ``None``, static
+     - ``None``
+     - Number of Biot-Savart evaluation points to process at once in the winding-surface field kernel (used by ``f_B`` and other plasma-field quantities) and the self-field kernels (used by self-field and force quantities).
+
+These kernels contract every evaluation point against every source point
+on the winding surface. Setting ``bs_chunk_size`` evaluates the points in
+sequential blocks of that size, which reduces peak memory at some cost
+in speed. The result matches the vectorized path to rounding error.
+
+Adjoint chunking
+~~~~~~~~~~~~~~~~
+
+Chunking the adjoint derivative is only likely to be necessary when ``metric_name`` contains
 **array-valued** quantities (see Section 7); in that case we **strongly
 recommend** setting ``jac_chunk_size`` to avoid memory overflow. If every
 requested metric is scalar, leaving ``jac_chunk_size=None`` is normally
@@ -652,13 +683,10 @@ lanes, and the taped winding-surface operators of shape
 ``(n_winding_phi, n_winding_theta, 3, ndofs)`` are replicated once per
 lane.
 
-Setting a positive ``jac_chunk_size`` splits that VJP into successive
-``vmap`` calls of that width, with an ``optimization_barrier`` between
-chunks so XLA is less likely to keep every chunk's intermediates live at
-once. (A ``jax.lax.map`` / ``scan`` formulation would enforce stricter
-sequential liveness, but multi-iteration ``scan`` over reverse-mode
-through the KKT stationarity map is incorrect when fused into the outer
-QUADCOIL JIT; see the source comment on ``_chunked_vjp_rows``.)
+Setting a positive ``jac_chunk_size`` maps that VJP over blocks of that
+width with ``jax.lax.map``. The chunk loop stays a real loop in the
+compiled program, so only one chunk's intermediates are live at a time.
+See the source comment on ``_chunked_vjp_rows`` for details.
 
 **Worked example.** At ``mpol=ntor=10`` (``ndofs=220``) with the default
 winding grid (``32*nfp`` by ``34`` = 2176 points for ``nfp=2``), one

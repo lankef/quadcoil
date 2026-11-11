@@ -1,8 +1,8 @@
-Tutorial II: interpreting outputs
+Tutorial 2: interpreting outputs
 ===================================
 
 This tutorial will explain how to interpret the output from QUADCOIL. 
-We illustrate this with the example in ``example/topology.ipynb``:
+We illustrate this with the coil topology example in :doc:`examples/filament`:
 
 .. code-block:: python
 
@@ -78,10 +78,30 @@ Its structure is:
 Here, we can see that the first level of the dictionary is organized by the 
 name of the metric, ``'f_B'`` and ``'f_K'``. The second level is organized into 
 two categories, ``'value'`` and ``'grad'``. The ``'grad'`` entry contains a third level. 
-It is organized by the name of the independent variable of each gradient.
-The keys in the third level will change based on whether 
-multi-objective optimization is enabled, constraints are present, 
-and whether the winding surface is provided.
+It is organized by the name of the independent variable of each gradient,
+prefixed by ``df_d``. The available keys depend on the problem setup:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Key
+     - Present when
+   * - ``df_dplasma_dofs``
+     - Always.
+   * - ``df_dnet_poloidal_current_amperes``
+     - Always.
+   * - ``df_dnet_toroidal_current_amperes``
+     - Always.
+   * - ``df_dobjective_weight``
+     - Multi-objective mode (``objective_name`` is a ``tuple``).
+   * - ``df_dconstraint_value``
+     - Constraints are present.
+   * - ``df_dBnormal_plasma``
+     - ``Bnormal_plasma`` is provided.
+   * - ``df_dplasma_coil_distance``
+     - The winding surface is auto-generated from ``plasma_coil_distance``.
+   * - ``df_dwinding_dofs``
+     - The winding surface is provided through ``winding_dofs``.
 
 For array-valued metrics (including ``'phi_dofs'``), ``'value'`` keeps the metric
 shape, and each leaf under ``'grad'`` has shape ``(*metric_shape, *param_shape)``.
@@ -92,11 +112,23 @@ shape ``(n_phi, n_plasma)``.
 Setting ``value_only=True`` when running ``quadcoil.quadcoil`` will skip gradient calculations.
 In this case, ``out_dict`` will not have the ``'grad'`` layer.
 
+``out_dict`` may also contain the following entries:
+
+- ``out_dict['winding_surface_dofs']``: present when ``export_winding_dofs=True``.
+  ``'value'`` is the winding surface dofs. ``'grad'`` has the same keys as the metrics,
+  with each leaf of shape ``(n_winding_dofs, *param_shape)``. When the winding surface is 
+  auto-generated, only ``df_dplasma_dofs`` and ``df_dplasma_coil_distance`` are non-zero.
+  When it is provided, ``df_dwinding_dofs`` is the identity.
+- Adjoint debug entries: when ``verbose > 0`` and ``value_only=False``, each metric's 
+  dict also contains the adjoint vectors (``'vihp'`` for unconstrained problems, ``'v'`` 
+  for constrained problems) and, for constrained problems, the KKT adjoint solve error,
+  ``'J_KKT_solve_err'``.
+
 ``qp`` - Problem configurations
 ---------------------------------------------------------------------
 ``qp : QuadcoilParams`` is an object that contains information on the plasma boundary, 
 winding surface, net currents, external normal field and resolutions. Together, ``qp`` and ``dofs_opt`` contain 
-all information required to evaluate any physical quantities available in ``quadcoil.quantity``.
+all information required to evaluate any physical quantities available in ``quadcoil.quantities``.
 For a detailed list of supported quantities, see :ref:`available_quantities`.
 ``qp`` **does not** contain the objective and constraint choices. 
 
@@ -106,8 +138,10 @@ are two copies of the same winding surfaces, with one and all field periods.
 ``qp.eval_surface`` stores the quadrature points used to evaluate quadcoil objectives.
 ``qp.winding_surface`` stores the quadrature points used to evaluate the Biot-Savart source integrals.
 
-All three surfaces can be exported to Simsopt or DESC by calling ``<surface>.to_simsopt()`` 
-and ``<surface>.to_desc()``.
+All three surfaces use the parametrization selected by ``surface_type``, and can be 
+exported to Simsopt by calling ``<surface>.to_simsopt()``. Only ``SurfaceRZFourierJAX`` 
+(``surface_type='SurfaceRZFourier'``, the default) can be exported to DESC, with 
+``<surface>.to_desc()``.
 
 ``dofs_opt`` - Optimized degrees of freedom
 ---------------------------------------------------------------------
@@ -117,11 +151,38 @@ uses the same convention as ``simsopt.field.CurrentPotentialFourier`` in the
 ``regcoil`` branch of Simsopt. 
 
 Together, ``qp`` and ``dofs_opt`` contain all information required to evaluate any 
-physical quantities available in ``quadcoil.quantity``. 
+physical quantities available in ``quadcoil.quantities``. 
 
 ``solve_results`` - Optimizer end state
 ---------------------------------------------------------------------
-``solve_results`` contains the optimizer output from the QUADCOIL solve. Its
-exact contents depend on whether the solve was constrained and whether
-``value_only=True`` was used.
+``solve_results`` contains the optimizer output from the QUADCOIL solve. All values
+are in the solver's internal, preconditioned and normalized coordinates. Its
+exact contents depend on the solver and on whether the problem is constrained.
+
+All solvers return:
+
+- ``'fin_x'``: the optimum in the solver's internal coordinates.
+- ``'fin_f'``: the normalized objective value at the optimum.
+- ``'niter'``: the number of iterations taken.
+
+Solver-specific entries:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Solver
+     - Unconstrained problems
+     - Constrained problems
+   * - ``'auglag-lbfgs'``
+     - ``'fin_dx'``, ``'fin_du'``: norm of the last accepted step. ``'fin_df'``: change in ``f`` on the last accepted step.
+     - ``'fin_g'``, ``'fin_h'``: inequality and equality constraint values. ``'fin_c'``: final penalty factor. ``'fin_lam'``, ``'fin_mu'``: final equality and inequality multipliers. ``'fin_l_aug'``: final augmented Lagrangian value.
+   * - ``'ipm'``
+     - ``'fin_kkt_res'``: final KKT residual. ``'converged'``.
+     - ``'fin_g'``: constraint values. ``'fin_z'``: multipliers. ``'fin_s'``: slack variables. ``'fin_kkt_res'``: final KKT residual. ``'converged'``.
+   * - ``'slsqp'``
+     - ``'converged'``.
+     - ``'fin_g'``: inequality constraint values. ``'fin_z'``: multipliers. ``'converged'``.
+
+When ``phi_init_with_nescoil=True`` (default), ``solve_results['dofs_nescoil']``
+also contains the NESCOIL solution used as the initial guess, ``{'phi': ...}``.
 

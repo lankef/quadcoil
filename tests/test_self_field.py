@@ -3,7 +3,8 @@ import jax
 jax.config.update('jax_enable_x64', True)
 import jax.numpy as jnp
 import numpy as np
-from quadcoil import QuadcoilParams, SurfaceRZFourierJAX, project_arr_cylindrical
+from quadcoil import QuadcoilParams, SurfaceRZFourierJAX, project_arr_cylindrical, get_quantity, quadcoil
+from quadcoil.quantities import force_cyl, force_xyz
 from quadcoil.quantity.current import _K
 from quadcoil.quantity.force import (
     _force_cyl, _force_cyl_legacy, _force_xyz, _force_integrands_xyz,
@@ -327,6 +328,63 @@ class QuadcoilBSelfTest(unittest.TestCase):
         l1 = f_l1_B_self_norm(qp, DOFS)
         print('f_l1_B_self_norm vs hand integral, rel. err.:', _relerr(l1, l1_ref))
         self.assertTrue(_relerr(l1, l1_ref) < 1e-12)
+
+
+class QuadcoilForceQuantityTest(unittest.TestCase):
+    '''
+    Tests the public force_xyz / force_cyl quantities.
+    '''
+
+    def test_public_force_matches_private(self):
+        n_phi_eval = len(qp.quadpoints_phi)
+        n_theta_eval = len(qp.quadpoints_theta)
+        f_cyl = force_cyl(qp, DOFS)
+        f_xyz = force_xyz(qp, DOFS)
+        self.assertEqual(f_cyl.shape, (n_phi_eval, n_theta_eval, 3))
+        self.assertEqual(f_xyz.shape, (n_phi_eval, n_theta_eval, 3))
+        self.assertTrue(_relerr(f_cyl, _force_cyl(qp, DOFS)) < 1e-12)
+        self.assertTrue(_relerr(f_xyz, _force_xyz(qp, DOFS)) < 1e-12)
+        self.assertIs(get_quantity('force_xyz'), force_xyz)
+        self.assertIs(get_quantity('force_cyl'), force_cyl)
+        self.assertEqual(set(force_cyl.compatibility), {'<=', '>='})
+        self.assertEqual(set(force_xyz.compatibility), {'<=', '>='})
+
+    def test_force_cyl_constraint_smoke(self):
+        '''A '<=' constraint on the force field must run through quadcoil().'''
+        kwargs = dict(
+            nfp=plasma_surface.nfp,
+            stellsym=plasma_surface.stellsym,
+            mpol=2,
+            ntor=2,
+            plasma_dofs=plasma_surface.get_dofs(),
+            plasma_mpol=plasma_surface.mpol,
+            plasma_ntor=plasma_surface.ntor,
+            net_poloidal_current_amperes=qp.net_poloidal_current_amperes,
+            net_toroidal_current_amperes=0.,
+            plasma_coil_distance=plasma_surface.minor_radius(),
+            plasma_quadpoints_phi=jnp.linspace(0, 1 / plasma_surface.nfp, 8, endpoint=False),
+            plasma_quadpoints_theta=jnp.linspace(0, 1, 8, endpoint=False),
+            winding_quadpoints_phi=jnp.linspace(0, 1, 8 * plasma_surface.nfp, endpoint=False),
+            winding_quadpoints_theta=jnp.linspace(0, 1, 8, endpoint=False),
+            objective_name='f_B',
+            metric_name=('f_max_force_cyl',),
+            value_only=True,
+            maxiter=20,
+        )
+        out_free, _, _, _ = quadcoil(**kwargs)
+        threshold = float(out_free['f_max_force_cyl']['value'])
+        out_dict, qp_out, dofs_opt, _ = quadcoil(
+            constraint_name=('force_cyl',),
+            constraint_type=('<=',),
+            constraint_value=jnp.array([threshold]),
+            constraint_unit=(threshold,),
+            **kwargs,
+        )
+        force_val = force_cyl(qp_out, dofs_opt)
+        print('force_cyl <= constraint, max force / threshold:',
+              float(jnp.max(force_val)) / threshold)
+        self.assertTrue(jnp.isfinite(force_val).all())
+        self.assertTrue(jnp.isfinite(out_dict['f_max_force_cyl']['value']))
 
 
 if __name__ == "__main__":
