@@ -120,6 +120,7 @@ K = _Quantity.generate_c2(
     func=_K, 
     compatibility=['<=', '>='], 
     desc_unit=_K_desc_unit,
+    convexity_type='linear',
 )
 
 _K_cyl = lambda qp, dofs: _K(qp, dofs, cyl_mode=True)
@@ -128,6 +129,7 @@ K_cyl = _Quantity.generate_c2(
     func=_K_cyl, 
     compatibility=['<=', '>='], 
     desc_unit=_K_desc_unit,
+    convexity_type='linear',
 )
 
 # This is a positive definite quadratic vector field.
@@ -139,12 +141,14 @@ K2 = _Quantity.generate_c2(
     func=_K2, 
     compatibility=['<='], 
     desc_unit=_K2_desc_unit,
+    convexity_type='quadratic',
 )
 
 f_max_K2 = _Quantity.generate_linf_norm(
     func=_K2, 
     aux_argname='scaled_max_K2_f_max_K2', 
     desc_unit=_K2_desc_unit,
+    convexity_type='quadratic_slack',
     square=False,
     auto_stellsym=True,
 )
@@ -152,6 +156,7 @@ f_max_K2 = _Quantity.generate_linf_norm(
 f_huber_K = _Quantity.generate_huber(
     func=_K, 
     desc_unit=_f_huber_K_desc_unit,
+    convexity_type=None,
     auto_stellsym=True,
 )
 
@@ -162,6 +167,7 @@ K_theta = _Quantity.generate_c2(
     func=_K_theta, 
     compatibility=['<=', '>='], 
     desc_unit=_K_desc_unit,
+    convexity_type='linear',
 )
 
 # This is a positive definite quadratic scalar. 
@@ -169,4 +175,5 @@ f_K = _Quantity.generate_c2(
     func=_f_K, 
     compatibility=['f', '<='], 
     desc_unit=_f_K_desc_unit,
+    convexity_type='quadratic',
 )

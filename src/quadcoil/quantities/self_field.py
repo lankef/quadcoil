@@ -556,24 +556,28 @@ B_self = _Quantity.generate_c2(
     func=_B_self,
     compatibility=['<=', '>='],
     desc_unit=_B_self_desc_unit,
+    convexity_type='linear',
 )
 
 B_self_cyl = _Quantity.generate_c2(
     func=_B_self_cyl,
     compatibility=['<=', '>='],
     desc_unit=_B_self_desc_unit,
+    convexity_type='linear',
 )
 
 B2_self = _Quantity.generate_c2(
     func=_B2_self, 
     compatibility=['<='], 
     desc_unit=_B2_self_desc_unit,
+    convexity_type='quadratic',
 )
 
 B_self_norm = _Quantity.generate_c2(
     func=_B_self_norm,
     compatibility=['<=', '>='],
     desc_unit=_B_self_desc_unit,
+    convexity_type='linear',
 )
 
 # This is a positive definite quadratic scalar. 
@@ -581,12 +585,14 @@ f_B_self = _Quantity.generate_c2(
     func=_f_B_self, 
     compatibility=['f', '<='], 
     desc_unit=_f_B_self_desc_unit,
+    convexity_type='quadratic',
 )
 
 f_max_B2_self = _Quantity.generate_linf_norm(
     func=_B2_self, 
     aux_argname='scaled_max_B2_self', 
     desc_unit=_B2_self_desc_unit,
+    convexity_type='quadratic_slack',
     square=False,
     auto_stellsym=True,
 )
@@ -595,6 +601,7 @@ f_l1_B_self_norm = _Quantity.generate_l1_norm(
     func=_B_self_norm,
     aux_argname='scaled_abs_B_self_norm',
     desc_unit=_f_l1_B_self_norm_desc_unit,
+    convexity_type='linear_slack',
     da_fn=_winding_1fp_da,
     auto_stellsym=True,
 )

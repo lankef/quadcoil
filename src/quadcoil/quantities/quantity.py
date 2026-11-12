@@ -126,6 +126,12 @@ class _Quantity:
         Whether this quantity can serve as an objective, or appear in
         ``'<='``  ``'=='`` and (or) ``'>='`` constraints. Must be a ``List`` containing one or 
         more of ``'f'``, ``'<='``  ``'=='`` and (or) ``'>='``.
+    convexity_type : str or None
+        Convexity classification of this quantity. One of ``'linear'``,
+        ``'quadratic'``, ``'linear_slack'``, ``'quadratic_slack'``, or ``None``.
+        Non-``None`` values imply convexity of the quantity itself; whether a
+        particular use (for example ``'>='`` on a quadratic) is convex is a
+        separate question for the solver dispatch.
     desc_unit : Callable(scale: dict)
         For calculating the unit of this quantity in DESC.
 
@@ -139,9 +145,11 @@ class _Quantity:
     _scaled_slack_dofs_init : dict{str: Callable(qp: QuadcoilParams, dofs: dict, unit: float) -> Tuple}
     desc_unit : Callable(scale: dict)
     compatibility : List[str]
+    convexity_type : str or None
     '''
 
     _used_aux_names = set()  # class-level registry for checking duplicate aux var names
+    _CONVEXITY_TYPES = ('linear', 'quadratic', 'linear_slack', 'quadratic_slack', None)
 
     def __init__(
         self, 
@@ -152,6 +160,7 @@ class _Quantity:
         _scaled_slack_h_eq_impl,
         _scaled_slack_dofs_init, 
         compatibility, 
+        convexity_type,
         desc_unit
     ):
         if isinstance(_scaled_slack_f_impl, _Quantity):
@@ -181,6 +190,8 @@ class _Quantity:
                 if item not in ['<=', '==', '>=', 'f']:
                     raise ValueError(f'`compatibility` contains illegal value, {item}')
             self.__class__._used_aux_names = self.__class__._used_aux_names | aux_names
+        if convexity_type not in self._CONVEXITY_TYPES:
+            raise ValueError(f'`convexity_type` has illegal value, {convexity_type}')
         # Setting attributes
         self._raw_f_impl = _raw_f_impl
         self._scaled_approx_f_impl = _scaled_approx_f_impl
@@ -189,6 +200,7 @@ class _Quantity:
         self._scaled_slack_h_eq_impl = _scaled_slack_h_eq_impl
         self._scaled_slack_dofs_init = _scaled_slack_dofs_init
         self.compatibility = compatibility
+        self.convexity_type = convexity_type
         self.desc_unit = desc_unit
         
     @partial(jit, static_argnames=('self',))
@@ -262,7 +274,7 @@ class _Quantity:
             raise ValueError('Smoothing mode config not recognized: ' + str(smoothing))
 
 
-    def generate_c2(func, compatibility, desc_unit):
+    def generate_c2(func, compatibility, desc_unit, convexity_type):
         def _scaled_f_impl(qp, dofs, unit, smoothing_params={}):
             return func(qp, dofs)/unit
         return _Quantity(
@@ -273,10 +285,11 @@ class _Quantity:
             _scaled_slack_h_eq_impl=None,
             _scaled_slack_dofs_init=None, 
             compatibility=compatibility, 
+            convexity_type=convexity_type,
             desc_unit=desc_unit,
         )
 
-    def generate_linf_norm(func, aux_argname, desc_unit, positive_definite=False, square=False, auto_stellsym=False):
+    def generate_linf_norm(func, aux_argname, desc_unit, convexity_type, positive_definite=False, square=False, auto_stellsym=False):
         r'''
         Generates the slack constraints for an L-:math:`\infty`
         norm. See documentations for ``_Quantity``.
@@ -361,10 +374,11 @@ class _Quantity:
             # The slack dofs' names and initial values
             _scaled_slack_dofs_init={aux_argname: _scaled_slack_dofs_init},
             compatibility=['f', '<='], 
+            convexity_type=convexity_type,
             desc_unit=desc_unit,
         )
         
-    def generate_linf_norm_4(func, aux_argname, desc_unit):
+    def generate_linf_norm_4(func, aux_argname, desc_unit, convexity_type):
         r'''
         Generates the slack constraints for the 4th power of an L-:math:`\infty`
         norm. See documentations for ``_Quantity``.
@@ -425,10 +439,11 @@ class _Quantity:
             # The slack dofs' names and initial values
             _scaled_slack_dofs_init={aux_argname: _scaled_slack_dofs_init},
             compatibility=['f', '<='], 
+            convexity_type=convexity_type,
             desc_unit=desc_unit,
         )
 
-    def generate_huber(func, desc_unit, auto_stellsym=False):
+    def generate_huber(func, desc_unit, convexity_type, auto_stellsym=False):
         r'''
         Generates a pseudo-Huber penalty, a smooth approximation of the
         surface integral of the pointwise L-2 norm of :math:`f`:
@@ -512,10 +527,11 @@ class _Quantity:
             _scaled_slack_h_eq_impl=None,
             _scaled_slack_dofs_init=None, 
             compatibility=['f', '<='], 
+            convexity_type=convexity_type,
             desc_unit=desc_unit,
         )
 
-    def generate_l1_norm(func, aux_argname, desc_unit, positive_definite=False, square=False, auto_stellsym=False, da_fn=None):
+    def generate_l1_norm(func, aux_argname, desc_unit, convexity_type, positive_definite=False, square=False, auto_stellsym=False, da_fn=None):
         r'''
         Generates the slack constraints for an L-1 
         norm. See documentations for ``_Quantity``.
@@ -627,5 +643,6 @@ class _Quantity:
             _scaled_slack_h_eq_impl=None, 
             _scaled_slack_dofs_init={aux_argname: _scaled_slack_dofs_init},
             compatibility=['f', '<='], 
+            convexity_type=convexity_type,
             desc_unit=desc_unit,
         )

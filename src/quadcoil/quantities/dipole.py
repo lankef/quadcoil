@@ -53,6 +53,7 @@ Phi = _Quantity.generate_c2(
     func=_Phi, 
     compatibility=['<=', '>='], 
     desc_unit=_Phi_desc_unit,
+    convexity_type='linear',
 )
 
 # This is a linear scalar field. Again, 
@@ -61,6 +62,7 @@ Phi_with_net_current = _Quantity.generate_c2(
     func=_Phi_with_net_current, 
     compatibility=['<=', '>='], 
     desc_unit=_Phi_desc_unit,
+    convexity_type='linear',
 )
 
 # This is a convex quadratic scalar field. It supports only <=.  
@@ -68,12 +70,14 @@ Phi2 = _Quantity.generate_c2(
     func=_Phi2, 
     compatibility=['<='], 
     desc_unit=_Phi2_desc_unit,
+    convexity_type='quadratic',
 )
 
 f_max_Phi = _Quantity.generate_linf_norm(
     func=_Phi, 
     aux_argname='scaled_max_Phi', 
     desc_unit=_Phi_desc_unit,
+    convexity_type='linear_slack',
     auto_stellsym=True,
 )
 
@@ -81,6 +85,7 @@ f_max_Phi2 = _Quantity.generate_linf_norm(
     func=_Phi, 
     aux_argname='scaled_max_Phi_f_max_Phi2', 
     desc_unit=_Phi2_desc_unit,
+    convexity_type='linear_slack',
     square=True,
     auto_stellsym=True,
 )
@@ -89,6 +94,7 @@ f_max_Phi4 = _Quantity.generate_linf_norm_4(
     func=_Phi, 
     aux_argname='scaled_max_Phi2_f_max_Phi4', 
     desc_unit=_Phi4_desc_unit,
+    convexity_type='quadratic_slack',
 )
 
 # f_max_Phi2 = _Quantity.generate_linf_norm(
@@ -102,6 +108,7 @@ f_l1_Phi = _Quantity.generate_l1_norm(
     func=_Phi, 
     aux_argname='scaled_abs_Phi', 
     desc_unit=_f_l1_Phi_desc_unit,
+    convexity_type='linear_slack',
     auto_stellsym=True,
 )
 
@@ -110,5 +117,6 @@ f_Phi = _Quantity.generate_c2(
     func=_f_Phi, 
     compatibility=['f', '<='], 
     desc_unit=_f_Phi_desc_unit,
+    convexity_type='quadratic',
 )
     

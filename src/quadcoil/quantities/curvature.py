@@ -56,6 +56,7 @@ K_dot_grad_K = _Quantity.generate_c2(
     func=_K_dot_grad_K, 
     compatibility=['<=', '>=', '=='], 
     desc_unit=_K_dot_grad_K_desc_unit,
+    convexity_type=None,
 )
 
 # This is the r, phi, z component of the 
@@ -65,6 +66,7 @@ K_dot_grad_K_cyl = _Quantity.generate_c2(
     func=_K_dot_grad_K_cyl, 
     compatibility=['<=', '>='], 
     desc_unit=_K_dot_grad_K_desc_unit,
+    convexity_type=None,
 )
 
 # This is an l-inf norm. We have implemented a template
@@ -73,5 +75,6 @@ f_max_K_dot_grad_K_cyl = _Quantity.generate_linf_norm(
     func=_K_dot_grad_K_cyl, 
     aux_argname='max_KK_cyl', 
     desc_unit=_K_dot_grad_K_desc_unit,
+    convexity_type=None,
     auto_stellsym=True,
 )

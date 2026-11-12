@@ -9,4 +9,5 @@ phi_dofs = _Quantity.generate_c2(
     func=_phi_dofs,
     compatibility=[],
     desc_unit=_Phi_desc_unit,
+    convexity_type='linear',
 )

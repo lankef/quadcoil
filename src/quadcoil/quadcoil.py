@@ -17,11 +17,16 @@ from quadcoil.solvers import (
     stationarity_kkt,
     adjoint_kkt,
 )
+from quadcoil.solvers.special import (
+    classify_problem,
+    solve_qcqp_one,
+    QCQP_ONE_STATUS,
+)
 
 from quadcoil.wrapper import _parse_objectives, _parse_constraints, _resolve_quadpoints
 from functools import partial
 from quadcoil.quantities import Bnormal, K_cyl
-from jax import jacfwd, jacrev, jit, block_until_ready, debug, flatten_util, eval_shape, grad, vmap, tree_util
+from jax import jacfwd, jacrev, jit, block_until_ready, debug, flatten_util, eval_shape, grad, vmap, tree_util, lax, core
 from jax import config as config_jax
 import jax.numpy as jnp
 import lineax as lx
@@ -117,8 +122,10 @@ QUADCOIL_STATIC_ARGNAMES=[
     'bs_chunk_size',
     # KKT adjoint metric-row chunking:
     'jac_chunk_size',
+    # Special convex solvers:
+    'enable_special',
 ]
-def _quadcoil_pure_nojit(
+def _quadcoil_prepare_nojit(
     # Now, the regular arguments.
     nfp:int, # Documented
     stellsym:bool, # Documented
@@ -213,23 +220,8 @@ def _quadcoil_pure_nojit(
     bs_chunk_size:int=None,
     jac_chunk_size:int=None,
 ):
-    r'''The jitted part of quadcoil().
+    r'''Build problem state (surfaces, f/g/h, preconditioned x) without solving.
     '''
-    # ----- Solver options unpacking -----
-    if solver_options is None:
-        solver_options = SOLVER_OPTIONS_DEFAULT_DICT[solver]
-
-    # ----- maxiter defaults per solver -----
-    if maxiter is None:
-        if solver == 'auglag-lbfgs':
-            maxiter = 10000
-        elif solver == 'ipm':
-            maxiter = 100
-        else:  # slsqp
-            maxiter = 500
-    if maxiter_inner is None:
-        maxiter_inner = 500
-
     # ----- Warning for constraint treatment -----
     if smoothing == 'slack' and solver != 'auglag-lbfgs':
         warnings.warn(
@@ -663,122 +655,83 @@ def _quadcoil_pure_nojit(
             mu=mu_init.shape, lam=lam_init.shape,
             s=final_str, t=ndofs_tot, u=ny, n_g=n_g, n_h=n_h
         )
-    
-    # ----- Solving QUADCOIL -----
-    # A dictionary containing augmented lagrangian info
-    # and the last augmented lagrangian objective function for 
-    # implicit differentiation.
-    # When unconstrained, this function instead serves the 
-    # purpose of "zooming in" when iteration step lengths
-    # are small.
-    if not constrained:
-        if solver == 'auglag-lbfgs':
-            solve_results = solve_unconstrained_auglag_lbfgs(
-                init_params=x_flat_init,
-                fun=f_precond,
-                convex=convex,
-                maxiter=maxiter,
-                solver_options={
-                    'atol': solver_options.get('atol_inner_last', tol_default_last),
-                    'rtol': solver_options.get('rtol_inner_last', tol_default_last),
-                },
-                verbose=verbose,
-                lbfgs_memory=lbfgs_memory,
-            )
-        elif solver == 'ipm':
-            solve_results = solve_unconstrained_ipm(
-                init_params=x_flat_init,
-                fun=f_precond,
-                convex=convex,
-                maxiter=maxiter,
-                solver_options=solver_options,
-                verbose=verbose,
-            )
-        elif solver == 'slsqp':
-            solve_results = solve_unconstrained_slsqp(
-                init_params=x_flat_init,
-                fun=f_precond,
-                convex=convex,
-                maxiter=maxiter,
-                solver_options=solver_options,
-                verbose=verbose,
-                lbfgs_memory=lbfgs_memory,
-            )
-        else:
-            raise ValueError(f"Unknown solver: {solver}")
-        x_flat_opt = solve_results['fin_x']
-        dofs_opt = flat_x_to_dofs(x_flat_opt)
-        if verbose>0:       
-            debug.print(
-                '----- Solver status summary -----\n'\
-                'Final value of objective f: {f}\n'\
-                'Total iteration number: {niter}\n'\
-                'Solve results:\n'\
-                '{solve_results}',
-                f=solve_results['fin_f'],
-                niter=solve_results['niter'],
-                solve_results=solve_results
-            )
-    else:
-        if solver == 'auglag-lbfgs':
-            solve_results = solve_constrained_auglag_lbfgs(
-                x_init=x_flat_init,
-                f_obj=f_precond,
-                h_eq=h_precond,
-                g_ineq=g_precond,
-                maxiter=maxiter,
-                maxiter_inner=maxiter_inner,
-                solver_options={**solver_options, 'lam_init': lam_init, 'mu_init': mu_init},
-                verbose=verbose,
-                lbfgs_memory=lbfgs_memory,
-            )
-        elif solver == 'ipm':
-            solve_results = solve_constrained_ipm(
-                x_init=x_flat_init,
-                f_obj=f_precond,
-                h_eq=h_precond,
-                g_ineq=g_precond,
-                convex=convex,
-                maxiter=maxiter,
-                solver_options=solver_options,
-                verbose=verbose,
-            )
-        elif solver == 'slsqp':
-            solve_results = solve_constrained_slsqp(
-                x_init=x_flat_init,
-                f_obj=f_precond,
-                h_eq=h_precond,
-                g_ineq=g_precond,
-                convex=convex,
-                maxiter=maxiter,
-                solver_options=solver_options,
-                verbose=verbose,
-                lbfgs_memory=lbfgs_memory,
-            )
-        else:
-            raise ValueError(f"Unknown solver: {solver}")
-        # The optimum, unit-less.
-        x_flat_opt = solve_results['fin_x']
-        dofs_opt = flat_x_to_dofs(x_flat_opt)
-        if verbose>0:       
-            debug.print(
-                '----- Solver status summary -----\n'\
-                'Final value of objective f: {f}\n'\
-                'Total iteration number: {niter}\n'\
-                'Solve results:\n'\
-                '{solve_results}',
-                f=solve_results['fin_f'],
-                niter=solve_results['niter'],
-                solve_results=solve_results
-            )
-            
-    # ----- Calculating metrics and gradients -----
-    # If nescoil initial conditions are used, output it
-    # solution too.
-    if phi_init_with_nescoil:
-        solve_results['dofs_nescoil'] = {'phi': phi_init}
 
-    # value_only or empty metric_name: skip KKT / adjoint work.
+    return {
+        'nfp': nfp,
+        'stellsym': stellsym,
+        'plasma_mpol': plasma_mpol,
+        'plasma_ntor': plasma_ntor,
+        'plasma_dofs': plasma_dofs,
+        'plasma_coil_distance': plasma_coil_distance,
+        'phi_init': phi_init,
+        'phi_init_with_nescoil': phi_init_with_nescoil,
+        'metric_name': metric_name,
+        'value_only': value_only,
+        'export_winding_dofs': export_winding_dofs,
+        'verbose': verbose,
+        'convex': convex,
+        'solver': solver,
+        'solver_options': solver_options,
+        'lbfgs_memory': lbfgs_memory,
+        'maxiter': maxiter,
+        'maxiter_inner': maxiter_inner,
+        'jac_chunk_size': jac_chunk_size,
+        'y_dict_current': y_dict_current,
+        'y_to_qp': y_to_qp,
+        'f_g_ineq_h_eq_from_y': f_g_ineq_h_eq_from_y,
+        'qp': qp,
+        'f_obj': f_obj,
+        'g_ineq': g_ineq,
+        'h_eq': h_eq,
+        'n_g': n_g,
+        'n_h': n_h,
+        'constrained': constrained,
+        'f_precond': f_precond,
+        'g_precond': g_precond,
+        'h_precond': h_precond,
+        'x_flat_init': x_flat_init,
+        'flat_x_to_dofs': flat_x_to_dofs,
+        'mu_init': mu_init,
+        'lam_init': lam_init,
+    }
+
+
+def _quadcoil_finish_nojit(state, solve_results, *, kkt_mode):
+    r'''Evaluate metrics and KKT adjoints after a primal solve.
+
+    Parameters
+    ----------
+    kkt_mode : str
+        ``'auto'`` selects KKT form from ``state['solver']`` and whether the
+        problem is constrained (generic path). ``'special'`` selects the
+        special-solver adjoint: constrained KKT with ``fin_z`` when feasible,
+        or unconstrained stationarity of ``g`` (argmin-g map) when infeasible,
+        chosen at runtime by ``lax.cond`` on ``status_code``.
+    '''
+    qp = state['qp']
+    f_obj = state['f_obj']
+    flat_x_to_dofs = state['flat_x_to_dofs']
+    y_dict_current = state['y_dict_current']
+    y_to_qp = state['y_to_qp']
+    f_g_ineq_h_eq_from_y = state['f_g_ineq_h_eq_from_y']
+    metric_name = state['metric_name']
+    value_only = state['value_only']
+    export_winding_dofs = state['export_winding_dofs']
+    verbose = state['verbose']
+    jac_chunk_size = state['jac_chunk_size']
+    plasma_dofs = state['plasma_dofs']
+    plasma_coil_distance = state['plasma_coil_distance']
+    constrained_problem = state['constrained']
+
+    x_flat_opt = solve_results['fin_x']
+    dofs_opt = flat_x_to_dofs(x_flat_opt)
+
+    if state['phi_init_with_nescoil']:
+        solve_results = {
+            **solve_results,
+            'dofs_nescoil': {'phi': state['phi_init']},
+        }
+
     if value_only or len(metric_name) == 0:
         out_dict = {}
         for metric_name_i in metric_name:
@@ -786,55 +739,20 @@ def _quadcoil_pure_nojit(
                 metric_result_i = f_obj(qp_temp=qp, x=dofs_opt)
             else:
                 metric_result_i = get_quantity(metric_name_i)(qp, dofs_opt)
-            out_dict[metric_name_i] = {
-                'value': metric_result_i
-            }
-            if verbose>0:
-                debug.print('Metric evaluated. {x} = {y}', x=metric_name_i, y=metric_result_i)
+            out_dict[metric_name_i] = {'value': metric_result_i}
+            if verbose > 0:
+                debug.print(
+                    'Metric evaluated. {x} = {y}',
+                    x=metric_name_i, y=metric_result_i,
+                )
         if export_winding_dofs:
             out_dict['winding_surface_dofs'] = {'value': qp.winding_surface.dofs}
         return out_dict, qp.without_cached_ops(), dofs_opt, solve_results
-    # flatten the y dictionary. This will simplify the code structure a bit
+
     y_flat, unravel_y = flatten_util.ravel_pytree(y_dict_current)
-
-    # ----- Stationarity conditions -----
-    
-    # Each solver has slightly different stationarity condition.
     x_opt = solve_results['fin_x']
-    if solver == 'auglag-lbfgs':
-        z_ineq, z_eq = recover_multipliers(
-            x_opt, y_flat, f_g_ineq_h_eq_from_y, unravel_y, flat_x_to_dofs,
-        )
-        z_opt = jnp.concatenate([z_ineq, z_eq])
+    solver = state['solver']
 
-        def f_g_combined_from_y(y_dict):
-            f_obj_i, g_ineq_i, h_eq_i, n_g_i, n_h_i, aux = f_g_ineq_h_eq_from_y(y_dict)
-            g_combined = lambda dofs: jnp.concatenate([g_ineq_i(dofs), h_eq_i(dofs)])
-            h_empty = lambda dofs: jnp.zeros(0)
-            return f_obj_i, g_combined, h_empty, n_g_i + n_h_i, 0, aux
-
-        f_g_for_kkt = f_g_combined_from_y
-    elif solver in ('ipm', 'slsqp'):
-        z_opt = solve_results.get('fin_z', jnp.zeros(0, dtype=x_opt.dtype))
-        f_g_for_kkt = f_g_ineq_h_eq_from_y
-    else:
-        raise ValueError(f"Unknown solver: {solver}")
-
-    if not constrained:
-        z_opt = jnp.zeros(0, dtype=x_opt.dtype)
-
-    stationarity_data = stationarity_kkt(
-        constrained=constrained,
-        x_opt=x_opt,
-        z_opt=z_opt,
-        y_flat=y_flat,
-        f_g_ineq_h_eq_from_y=f_g_for_kkt,
-        unravel_y=unravel_y,
-        flat_x_to_dofs=flat_x_to_dofs,
-        verbose=verbose,
-    )
-
-    # Evaluate metrics once for shapes / sizes, then batch into one adjoint.
     metric_shapes = []
     metric_K_list = []
     for metric_name_i in metric_name:
@@ -857,10 +775,104 @@ def _quadcoil_pure_nojit(
             parts.append(jnp.atleast_1d(v).ravel())
         return jnp.concatenate(parts)
 
-    all_values, dfdy, debug_info = adjoint_kkt(
-        f_metrics_flat, stationarity_data, y_flat, verbose,
-        jac_chunk_size=jac_chunk_size,
-    )
+    # kkt_mode:
+    #   'auto' — generic path: mirror legacy auglag/ipm/slsqp dispatch
+    #   'special' — qcqp_one / future special solvers (lax.cond on status)
+    if kkt_mode == 'special':
+        status_code = solve_results['status_code']
+        z_opt = solve_results.get('fin_z', jnp.zeros(1, dtype=x_opt.dtype))
+
+        def _constrained_adjoint(_):
+            stationarity_data = stationarity_kkt(
+                constrained=True,
+                x_opt=x_opt,
+                z_opt=z_opt,
+                y_flat=y_flat,
+                f_g_ineq_h_eq_from_y=f_g_ineq_h_eq_from_y,
+                unravel_y=unravel_y,
+                flat_x_to_dofs=flat_x_to_dofs,
+                verbose=0,
+            )
+            vals, df, _dbg = adjoint_kkt(
+                f_metrics_flat, stationarity_data, y_flat, 0,
+                jac_chunk_size=jac_chunk_size,
+            )
+            return vals, df
+
+        def _infeasible_adjoint(_):
+            def f_g_argmin_g(y_dict, f_g_ineq_h_eq_from_y=f_g_ineq_h_eq_from_y):
+                _f_obj, g_ineq_i, _h_eq, _n_g, _n_h, aux = f_g_ineq_h_eq_from_y(y_dict)
+
+                def g_as_obj(dofs, g_ineq_i=g_ineq_i):
+                    return jnp.reshape(g_ineq_i(dofs), ())
+
+                h_empty = lambda dofs: jnp.zeros(0)
+                g_empty = lambda dofs: jnp.zeros(0)
+                return g_as_obj, g_empty, h_empty, 0, 0, aux
+
+            stationarity_data = stationarity_kkt(
+                constrained=False,
+                x_opt=x_opt,
+                z_opt=jnp.zeros(0, dtype=x_opt.dtype),
+                y_flat=y_flat,
+                f_g_ineq_h_eq_from_y=f_g_argmin_g,
+                unravel_y=unravel_y,
+                flat_x_to_dofs=flat_x_to_dofs,
+                verbose=0,
+            )
+            vals, df, _dbg = adjoint_kkt(
+                f_metrics_flat, stationarity_data, y_flat, 0,
+                jac_chunk_size=jac_chunk_size,
+            )
+            return vals, df
+
+        all_values, dfdy = lax.cond(
+            status_code == 2,
+            _infeasible_adjoint,
+            _constrained_adjoint,
+            None,
+        )
+        debug_info = {}
+    elif kkt_mode in (None, 'auto'):
+        if solver == 'auglag-lbfgs':
+            z_ineq, z_eq = recover_multipliers(
+                x_opt, y_flat, f_g_ineq_h_eq_from_y, unravel_y, flat_x_to_dofs,
+            )
+            z_opt = jnp.concatenate([z_ineq, z_eq])
+
+            def f_g_combined_from_y(y_dict):
+                f_obj_i, g_ineq_i, h_eq_i, n_g_i, n_h_i, aux = f_g_ineq_h_eq_from_y(y_dict)
+                g_combined = lambda dofs: jnp.concatenate([g_ineq_i(dofs), h_eq_i(dofs)])
+                h_empty = lambda dofs: jnp.zeros(0)
+                return f_obj_i, g_combined, h_empty, n_g_i + n_h_i, 0, aux
+
+            f_g_for_kkt = f_g_combined_from_y
+        elif solver in ('ipm', 'slsqp'):
+            z_opt = solve_results.get('fin_z', jnp.zeros(0, dtype=x_opt.dtype))
+            f_g_for_kkt = f_g_ineq_h_eq_from_y
+        else:
+            raise ValueError(f'Unknown solver: {solver}')
+
+        if not constrained_problem:
+            z_opt = jnp.zeros(0, dtype=x_opt.dtype)
+        constrained_kkt = constrained_problem
+
+        stationarity_data = stationarity_kkt(
+            constrained=constrained_kkt,
+            x_opt=x_opt,
+            z_opt=z_opt,
+            y_flat=y_flat,
+            f_g_ineq_h_eq_from_y=f_g_for_kkt,
+            unravel_y=unravel_y,
+            flat_x_to_dofs=flat_x_to_dofs,
+            verbose=verbose,
+        )
+        all_values, dfdy, debug_info = adjoint_kkt(
+            f_metrics_flat, stationarity_data, y_flat, verbose,
+            jac_chunk_size=jac_chunk_size,
+        )
+    else:
+        raise ValueError(f'Unknown kkt_mode: {kkt_mode!r}')
 
     out_dict = {}
     offset = 0
@@ -868,14 +880,13 @@ def _quadcoil_pure_nojit(
         k = metric_K_list[i]
         shape_i = metric_shapes[i]
         val_flat = all_values[offset:offset + k]
-        dfdy_rows = dfdy[offset:offset + k]  # (k, n_y)
+        dfdy_rows = dfdy[offset:offset + k]
         if k == 1 and shape_i == ():
             metric_result_i = val_flat[0]
             dfdy_pytree = unravel_y(dfdy_rows[0])
         else:
             metric_result_i = val_flat.reshape(shape_i)
             dfdy_pytree = vmap(unravel_y)(dfdy_rows)
-            # Leading axis k -> original metric shape.
             dfdy_pytree = tree_util.tree_map(
                 lambda g, s=shape_i: g.reshape(s + g.shape[1:]),
                 dfdy_pytree,
@@ -932,6 +943,252 @@ def _quadcoil_pure_nojit(
             }
         out_dict['winding_surface_dofs'] = {'value': w_val, 'grad': w_grad}
     return out_dict, qp.without_cached_ops(), dofs_opt, solve_results
+
+
+def _quadcoil_pure_nojit(
+    nfp:int,
+    stellsym:bool,
+    plasma_mpol:int,
+    plasma_ntor:int,
+    plasma_dofs,
+    net_poloidal_current_amperes:float,
+    net_toroidal_current_amperes:float=0.,
+    mpol:int=6,
+    ntor:int=4,
+    quadpoints_phi=None,
+    quadpoints_theta=None,
+    phi_init=None,
+    phi_init_with_nescoil=True,
+    phi_unit=None,
+    plasma_stellsym=True,
+    plasma_quadpoints_phi=None,
+    plasma_quadpoints_theta=None,
+    Bnormal_plasma=None,
+    surface_type:str='SurfaceRZFourier',
+    plasma_coil_distance:float=None,
+    winding_phi_interp:int=2,
+    winding_theta_interp:int=2,
+    winding_theta_rule_subsample:int=2,
+    winding_lam_tikhonov=1e-5,
+    winding_surface_mode='self-intersection',
+    winding_theta_mode='arclen',
+    winding_dofs=None,
+    winding_stellsym=True,
+    winding_mpol:int=6,
+    winding_ntor:int=5,
+    winding_quadpoints_phi=None,
+    winding_quadpoints_theta=None,
+    objective_name='f_B',
+    objective_weight=1.,
+    objective_unit=None,
+    constraint_name=(),
+    constraint_type=(),
+    constraint_unit=(),
+    constraint_value=jnp.array([]),
+    metric_name=('f_B', 'f_K'),
+    precond='svd',
+    precond_dims=None,
+    precond_options={
+        'svd_safe_thres': 0.,
+        'ess_alpha': 1.,
+        'ess_p': 2.,
+    },
+    value_only=False,
+    smoothing='approx',
+    smoothing_params={'lse_epsilon': 1e-3},
+    convex:bool=False,
+    export_winding_dofs:bool=False,
+    verbose:int=0,
+    merge_constraints:bool=False,
+    solver:str='auglag-lbfgs',
+    solver_options=None,
+    lbfgs_memory:int=10,
+    maxiter:int=None,
+    maxiter_inner:int=None,
+    bs_chunk_size:int=None,
+    jac_chunk_size:int=None,
+    enable_special:bool=True,
+):
+    r'''The jitted part of quadcoil(): prepare, solve (generic or special), finish.
+    '''
+    # Trace-time classification (static args only).
+    problem_class = None
+    if enable_special:
+        problem_class = classify_problem(
+            objective_name, constraint_name, constraint_type,
+        )
+    # Special detection overrides smoothing / merge_constraints.
+    if problem_class is not None:
+        smoothing = None
+        merge_constraints = False
+
+    state = _quadcoil_prepare_nojit(
+        nfp=nfp, stellsym=stellsym, plasma_mpol=plasma_mpol, plasma_ntor=plasma_ntor,
+        plasma_dofs=plasma_dofs, net_poloidal_current_amperes=net_poloidal_current_amperes,
+        net_toroidal_current_amperes=net_toroidal_current_amperes, mpol=mpol, ntor=ntor,
+        quadpoints_phi=quadpoints_phi, quadpoints_theta=quadpoints_theta,
+        phi_init=phi_init, phi_init_with_nescoil=phi_init_with_nescoil, phi_unit=phi_unit,
+        plasma_stellsym=plasma_stellsym, plasma_quadpoints_phi=plasma_quadpoints_phi,
+        plasma_quadpoints_theta=plasma_quadpoints_theta, Bnormal_plasma=Bnormal_plasma,
+        surface_type=surface_type, plasma_coil_distance=plasma_coil_distance,
+        winding_phi_interp=winding_phi_interp, winding_theta_interp=winding_theta_interp,
+        winding_theta_rule_subsample=winding_theta_rule_subsample,
+        winding_lam_tikhonov=winding_lam_tikhonov, winding_surface_mode=winding_surface_mode,
+        winding_theta_mode=winding_theta_mode, winding_dofs=winding_dofs,
+        winding_stellsym=winding_stellsym, winding_mpol=winding_mpol, winding_ntor=winding_ntor,
+        winding_quadpoints_phi=winding_quadpoints_phi,
+        winding_quadpoints_theta=winding_quadpoints_theta,
+        objective_name=objective_name, objective_weight=objective_weight,
+        objective_unit=objective_unit, constraint_name=constraint_name,
+        constraint_type=constraint_type, constraint_unit=constraint_unit,
+        constraint_value=constraint_value, metric_name=metric_name, precond=precond,
+        precond_dims=precond_dims, precond_options=precond_options, value_only=value_only,
+        smoothing=smoothing, smoothing_params=smoothing_params, convex=convex,
+        export_winding_dofs=export_winding_dofs, verbose=verbose,
+        merge_constraints=merge_constraints, solver=solver, solver_options=solver_options,
+        lbfgs_memory=lbfgs_memory, maxiter=maxiter, maxiter_inner=maxiter_inner,
+        bs_chunk_size=bs_chunk_size, jac_chunk_size=jac_chunk_size,
+    )
+
+    if problem_class == 'qcqp_one':
+        # Use the raw user solver_options (not generic-solver defaults).
+        solve_results = solve_qcqp_one(
+            state['f_precond'],
+            state['g_precond'],
+            state['x_flat_init'],
+            solver_options=state['solver_options'],
+            verbose=state['verbose'],
+        )
+        if state['verbose'] > 0:
+            debug.print(
+                '----- Special solver status -----\n'
+                'problem_class={pc}\n'
+                'status_code={sc}\n'
+                'fin_f={f}\n'
+                'fin_g={g}\n',
+                pc=problem_class,
+                sc=solve_results['status_code'],
+                f=solve_results['fin_f'],
+                g=solve_results['fin_g'],
+            )
+        return _quadcoil_finish_nojit(state, solve_results, kkt_mode='special')
+
+    solver = state['solver']
+    solver_options = state['solver_options']
+    if solver_options is None:
+        solver_options = SOLVER_OPTIONS_DEFAULT_DICT[solver]
+    maxiter = state['maxiter']
+    if maxiter is None:
+        if solver == 'auglag-lbfgs':
+            maxiter = 10000
+        elif solver == 'ipm':
+            maxiter = 100
+        else:
+            maxiter = 500
+    maxiter_inner = state['maxiter_inner']
+    if maxiter_inner is None:
+        maxiter_inner = 500
+
+    constrained = state['constrained']
+    f_precond = state['f_precond']
+    g_precond = state['g_precond']
+    h_precond = state['h_precond']
+    x_flat_init = state['x_flat_init']
+    convex = state['convex']
+    verbose = state['verbose']
+    lbfgs_memory = state['lbfgs_memory']
+    mu_init = state['mu_init']
+    lam_init = state['lam_init']
+
+    if not constrained:
+        if solver == 'auglag-lbfgs':
+            solve_results = solve_unconstrained_auglag_lbfgs(
+                init_params=x_flat_init,
+                fun=f_precond,
+                convex=convex,
+                maxiter=maxiter,
+                solver_options={
+                    'atol': solver_options.get('atol_inner_last', tol_default_last),
+                    'rtol': solver_options.get('rtol_inner_last', tol_default_last),
+                },
+                verbose=verbose,
+                lbfgs_memory=lbfgs_memory,
+            )
+        elif solver == 'ipm':
+            solve_results = solve_unconstrained_ipm(
+                init_params=x_flat_init,
+                fun=f_precond,
+                convex=convex,
+                maxiter=maxiter,
+                solver_options=solver_options,
+                verbose=verbose,
+            )
+        elif solver == 'slsqp':
+            solve_results = solve_unconstrained_slsqp(
+                init_params=x_flat_init,
+                fun=f_precond,
+                convex=convex,
+                maxiter=maxiter,
+                solver_options=solver_options,
+                verbose=verbose,
+                lbfgs_memory=lbfgs_memory,
+            )
+        else:
+            raise ValueError(f"Unknown solver: {solver}")
+    else:
+        if solver == 'auglag-lbfgs':
+            solve_results = solve_constrained_auglag_lbfgs(
+                x_init=x_flat_init,
+                f_obj=f_precond,
+                h_eq=h_precond,
+                g_ineq=g_precond,
+                maxiter=maxiter,
+                maxiter_inner=maxiter_inner,
+                solver_options={**solver_options, 'lam_init': lam_init, 'mu_init': mu_init},
+                verbose=verbose,
+                lbfgs_memory=lbfgs_memory,
+            )
+        elif solver == 'ipm':
+            solve_results = solve_constrained_ipm(
+                x_init=x_flat_init,
+                f_obj=f_precond,
+                h_eq=h_precond,
+                g_ineq=g_precond,
+                convex=convex,
+                maxiter=maxiter,
+                solver_options=solver_options,
+                verbose=verbose,
+            )
+        elif solver == 'slsqp':
+            solve_results = solve_constrained_slsqp(
+                x_init=x_flat_init,
+                f_obj=f_precond,
+                h_eq=h_precond,
+                g_ineq=g_precond,
+                convex=convex,
+                maxiter=maxiter,
+                solver_options=solver_options,
+                verbose=verbose,
+                lbfgs_memory=lbfgs_memory,
+            )
+        else:
+            raise ValueError(f"Unknown solver: {solver}")
+
+    if verbose > 0:
+        debug.print(
+            '----- Solver status summary -----\n'
+            'Final value of objective f: {f}\n'
+            'Total iteration number: {niter}\n'
+            'Solve results:\n'
+            '{solve_results}',
+            f=solve_results['fin_f'],
+            niter=solve_results['niter'],
+            solve_results=solve_results,
+        )
+
+    # Generic path: finish selects KKT form from solver + constrained flag.
+    return _quadcoil_finish_nojit(state, solve_results, kkt_mode='auto')
+
 
 _quadcoil_pure = jit(_quadcoil_pure_nojit, static_argnames=QUADCOIL_STATIC_ARGNAMES)
 
@@ -1053,6 +1310,15 @@ def quadcoil(**kwargs):
         (``'ipm'``, ``'slsqp'``). The KKT adjoint path does not use this flag.
     solver : str, optional, default='auglag-lbfgs'
         (Static) Optimizer backend. One of ``'auglag-lbfgs'``, ``'ipm'``, ``'slsqp'``.
+        Special problem classes (currently ``'qcqp_one'``: one quadratic
+        objective and one scalar quadratic ``'<='`` constraint) are
+        auto-detected inside the jitted path when ``enable_special`` is
+        ``True``. When a special class is detected, ``smoothing`` and
+        ``merge_constraints`` are ignored. Special solvers are not
+        selectable via ``solver=``. For ``'qcqp_one'``, optional
+        ``solver_options`` keys include ``lam_init``, ``lam_grow``,
+        ``lam_max``, ``root_maxiter``, ``root_tol`` (default ``10 * eps``,
+        relative), and ``ctol``.
     solver_options : dict, optional, default=None
         (Traced) Solver-specific options. Uses ``SOLVER_OPTIONS_DEFAULT_DICT[solver]`` when
         ``None``. A partial dict is merged with the defaults inside each solver, so
@@ -1106,8 +1372,15 @@ def quadcoil(**kwargs):
         jitted pieces (solver iterations, quantities, surface ops) are compiled.
         Useful for debugging, profiling, or avoiding long whole-program
         compile times.
+    enable_special : bool, optional, default=True
+        (Static) When ``True``, auto-detect special problem classes inside
+        the jitted path and route them to specialized solvers. When
+        ``False``, skip classification and always use the generic
+        ``solver`` backend. Also applies when calling ``_quadcoil_pure``
+        directly (DESC / ``io.jax``).
     '''
     enable_jitting = kwargs.pop('enable_jitting', True)
+    kwargs.setdefault('enable_special', True)
     quadcoil_impl = _quadcoil_pure if enable_jitting else _quadcoil_pure_nojit
     # Normalize metric_name before JIT: lists are unhashable static args.
     if 'metric_name' in kwargs:
@@ -1145,6 +1418,14 @@ def quadcoil(**kwargs):
             )
         else:
             raise e
+    # Map concrete status_code → human-readable status for special solvers.
+    if 'status_code' in solve_results:
+        code = solve_results['status_code']
+        if not isinstance(code, core.Tracer):
+            solve_results = {
+                **solve_results,
+                'status': QCQP_ONE_STATUS[int(code)],
+            }
     return out_dict, qp, dofs_opt, solve_results
 
 def _precondition_coordinate_by_matrix(hess):

@@ -128,12 +128,14 @@ force_xyz = _Quantity.generate_c2(
     func=_force_xyz,
     compatibility=['<=', '>='],
     desc_unit=_force_desc_unit,
+    convexity_type=None,
 )
 
 force_cyl = _Quantity.generate_c2(
     func=_force_cyl,
     compatibility=['<=', '>='],
     desc_unit=_force_desc_unit,
+    convexity_type=None,
 )
 
 # This is an l-inf norm. We have implemented a template
@@ -142,6 +144,7 @@ f_max_force_cyl = _Quantity.generate_linf_norm(
     func=_force_cyl, 
     aux_argname='max_force_cyl', 
     desc_unit=_force_desc_unit,
+    convexity_type=None,
     auto_stellsym=True,
 )
 
@@ -151,6 +154,7 @@ f_l1_force_cyl = _Quantity.generate_l1_norm(
     func=_force_cyl, 
     aux_argname='l1_force_cyl', 
     desc_unit=_forcel1_desc_unit,
+    convexity_type=None,
     auto_stellsym=True,
 )
 
@@ -160,6 +164,7 @@ f_max_force2_cyl = _Quantity.generate_linf_norm(
     func=_force_cyl, 
     aux_argname='max_force2_cyl', 
     desc_unit=_force2_desc_unit,
+    convexity_type=None,
     square=True,
     auto_stellsym=True,
 )

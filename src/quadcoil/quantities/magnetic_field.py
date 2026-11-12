@@ -100,6 +100,7 @@ winding_surface_B = _Quantity.generate_c2(
     func=_winding_surface_B, 
     compatibility=['<=', '>='], 
     desc_unit=_winding_surface_B_desc_unit,
+    convexity_type='linear',
 )
 
 # This is a linear scalar field. Setting its components would be trivial
@@ -108,6 +109,7 @@ Bnormal = _Quantity.generate_c2(
     func=_Bnormal, 
     compatibility=['<=', '>='], 
     desc_unit=_winding_surface_B_desc_unit,
+    convexity_type='linear',
 )
 
 # This is a quadratic scalar field. Setting its components would be trivial
@@ -116,6 +118,7 @@ Bnormal2 = _Quantity.generate_c2(
     func=_Bnormal2, 
     compatibility=['<='], 
     desc_unit=lambda scales: scales["B"]**2,
+    convexity_type='quadratic',
 )
 
 # This is a positive definite quadratic scalar. 
@@ -123,6 +126,7 @@ f_B = _Quantity.generate_c2(
     func=_f_B, 
     compatibility=['f', '<='], 
     desc_unit=_f_B_desc_unit,
+    convexity_type='quadratic',
 )
 
 # This is a positive definite quadratic scalar. 
@@ -130,13 +134,15 @@ f_B_normalized_by_Bnormal_IG = _Quantity.generate_c2(
     func=_f_B_normalized_by_Bnormal_IG, 
     compatibility=['f', '<='], 
     desc_unit=lambda scales: 1.,
+    convexity_type='quadratic',
 )
 
 # This is an l-infinity norm objective.
 f_max_Bnormal = _Quantity.generate_linf_norm(
     func=_Bnormal, 
     aux_argname='scaled max Bnormal', 
-    desc_unit=_winding_surface_B_desc_unit
+    desc_unit=_winding_surface_B_desc_unit,
+    convexity_type='linear_slack',
 )
 
 # This is an l-infinity norm objective.
@@ -144,5 +150,6 @@ f_max_Bnormal2 = _Quantity.generate_linf_norm(
     func=_Bnormal2, 
     aux_argname='scaled max Bnormal2', 
     desc_unit=lambda scales: scales["B"]**2,
+    convexity_type='quadratic_slack',
     positive_definite=True,
 )
