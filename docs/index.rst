@@ -77,6 +77,7 @@ Publications
 
    self
    math
+   solvers
    tutorial_inputs
    tutorial_outputs
    tutorial_to_simsopt

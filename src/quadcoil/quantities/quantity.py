@@ -531,7 +531,7 @@ class _Quantity:
             desc_unit=desc_unit,
         )
 
-    def generate_l1_norm(func, aux_argname, desc_unit, convexity_type, positive_definite=False, square=False, auto_stellsym=False, da_fn=None):
+    def generate_l1_norm(func, aux_argname, desc_unit, convexity_type, positive_definite=False, auto_stellsym=False, da_fn=None):
         r'''
         Generates the slack constraints for an L-1 
         norm. See documentations for ``_Quantity``.
@@ -560,8 +560,6 @@ class _Quantity:
         positive_definite : bool, optional, default=False
             Whether ``func`` is positive definite. If ``True``, then
             the second constraint is not required.
-        square : bool, optional, default=True
-            When ``True``, generates :math:`\|f\|_1^2` instead. For non-singular Hessians.
         auto_stellsym : bool, optional, default=False
             When ``True``, ignores the second half of all objective values when constructing 
             constraints. Reduces computational cost and improves conditioning.

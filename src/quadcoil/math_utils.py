@@ -160,21 +160,19 @@ def project_arr_cylindrical(
     )
 
 
-def max_lse(x, epsilon, **kwargs):
+def max_lse(x, epsilon):
     logn = jnp.maximum(1.0, jnp.log(x.size))
     epsilon_norm = epsilon/logn
-    approx = epsilon_norm * jnn.logsumexp(a=x/epsilon_norm, **kwargs)
+    approx = epsilon_norm * jnn.logsumexp(a=x/epsilon_norm)
     return approx
 
-def abs_lse(x, epsilon, **kwargs):
-    x_stacked = jnp.stack((x, -x), x.ndim)
-    return max_lse(
-        x_stacked, epsilon, axis=-1, **kwargs
-    )
+def abs_lse(x, epsilon):
+    # Two-element smooth max of (x, -x).  log(2) < 1, so the log(n)
+    # clamp in max_lse would leave the scale at epsilon; use it directly.
+    return epsilon * jnp.logaddexp(x/epsilon, -x/epsilon)
 
-def linf_lse(x, epsilon, **kwargs):
-    abs = abs_lse(x, epsilon, **kwargs)
-    return max_lse(abs, epsilon, **kwargs)
+def linf_lse(x, epsilon):
+    return max_lse(abs_lse(x, epsilon), epsilon)
 
 # Custom lineax routine that removes nans. 
 # Used to make autodiff more robust to floating point error.

@@ -38,30 +38,67 @@ class SpecialClassifyTest(unittest.TestCase):
             'qcqp_one',
         )
 
-    def test_multi_objective_is_none(self):
-        self.assertIsNone(
-            classify_problem(('f_B', 'f_K'), ('f_B',), ('<=',))
+    def test_multi_objective_with_quadratic_is_socp(self):
+        # Multi quadratic/linear objectives + one quadratic constraint → SOCP
+        # (qcqp_one requires a single objective).
+        self.assertEqual(
+            classify_problem(('f_B', 'f_K'), ('f_B',), ('<=',)),
+            'socp',
         )
 
-    def test_multi_constraint_is_none(self):
-        self.assertIsNone(
-            classify_problem('f_K', ('f_B', 'f_Phi'), ('<=', '<='))
+    def test_socp_detected(self):
+        # Quadratic objective + linear + quadratic inequalities → SOCP.
+        self.assertEqual(
+            classify_problem('f_K', ('K_theta', 'f_B'), ('>=', '<=')),
+            'socp',
+        )
+        # Two quadratic inequalities → SOCP (not qcqp_one).
+        self.assertEqual(
+            classify_problem('f_K', ('f_B', 'f_Phi'), ('<=', '<=')),
+            'socp',
+        )
+        # Multi-objective of quadratic/linear terms still SOCP.
+        self.assertEqual(
+            classify_problem(('f_B', 'f_K'), ('K_theta', 'f_B'), ('>=', '<=')),
+            'socp',
         )
 
     def test_non_quadratic_is_none(self):
         self.assertIsNone(
             classify_problem('f_max_Bnormal', ('f_B',), ('<=',))
         )
-        self.assertIsNone(
-            classify_problem('f_K', ('K_theta',), ('<=',))
+
+    def test_qp_detected(self):
+        # Quadratic objective + linear inequality → QP (not qcqp_one).
+        self.assertEqual(
+            classify_problem('f_B', ('K_theta',), ('<=',)),
+            'qp',
+        )
+        self.assertEqual(
+            classify_problem('f_B', ('K_theta',), ('>=',)),
+            'qp',
+        )
+        # Multi-objective of quadratic/linear terms still QP.
+        self.assertEqual(
+            classify_problem(('f_B', 'f_K'), ('K_theta',), ('>=',)),
+            'qp',
         )
 
     def test_wrong_constraint_type_is_none(self):
+        # Single quadratic >= is non-convex → None (also not qcqp_one).
         self.assertIsNone(
             classify_problem('f_K', ('f_B',), ('>=',))
         )
         self.assertIsNone(
             classify_problem('f_K', ('f_B',), ('==',))
+        )
+        # Quadratic >= among linear constraints → None.
+        self.assertIsNone(
+            classify_problem('f_K', ('K_theta', 'f_B'), ('>=', '>='))
+        )
+        # Slack quantities stay on the generic path.
+        self.assertIsNone(
+            classify_problem('f_K', ('f_max_Bnormal',), ('<=',))
         )
 
     def test_no_constraints_is_none(self):

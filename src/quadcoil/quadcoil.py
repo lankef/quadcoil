@@ -21,6 +21,13 @@ from quadcoil.solvers.special import (
     classify_problem,
     solve_qcqp_one,
     QCQP_ONE_STATUS,
+    canonicalize_qp,
+    canonicalize_socp,
+    orthant_cones,
+    solve_conic_ipm,
+    solve_conic_clarabel,
+    SPECIAL_STATUS,
+    CONIC_STATUS,
 )
 
 from quadcoil.wrapper import _parse_objectives, _parse_constraints, _resolve_quadpoints
@@ -124,6 +131,7 @@ QUADCOIL_STATIC_ARGNAMES=[
     'jac_chunk_size',
     # Special convex solvers:
     'enable_special',
+    'special_backend',
 ]
 def _quadcoil_prepare_nojit(
     # Now, the regular arguments.
@@ -613,7 +621,28 @@ def _quadcoil_prepare_nojit(
                 
     # We now flatten x into a jax array so that we can pass it into a solver.
     x_flat_init, unravel_x = flatten_util.ravel_pytree(x_dict)
-    
+
+    # ── Static inequality layout (g_blocks) ──────────────────────────────
+    # One (convexity_type, n_rows) per constraint quantity, in
+    # constraint_name order.  Sizes come from eval_shape of the raw
+    # quantity at dofs_init; with smoothing=None the inequality residual
+    # has the same shape (approx would collapse to a scalar, but the
+    # special path forces smoothing=None).  Python ints → static at trace.
+    if isinstance(constraint_name, str):
+        _cnames_for_blocks = (constraint_name,)
+    elif isinstance(constraint_name, (tuple, list)):
+        _cnames_for_blocks = tuple(constraint_name)
+    else:
+        _cnames_for_blocks = ()
+    g_blocks = []
+    for _cname in _cnames_for_blocks:
+        _qty = get_quantity(_cname)
+        _shp = eval_shape(_qty, qp, dofs_init).shape
+        _n_rows = 1
+        for _d in _shp:
+            _n_rows *= int(_d)
+        g_blocks.append((_qty.convexity_type, _n_rows))
+    g_blocks = tuple(g_blocks)
 
     def flat_x_to_dofs(x, unravel_x=unravel_x, phi_unit=phi_unit):
         d = unravel_x(x)
@@ -693,6 +722,7 @@ def _quadcoil_prepare_nojit(
         'flat_x_to_dofs': flat_x_to_dofs,
         'mu_init': mu_init,
         'lam_init': lam_init,
+        'g_blocks': g_blocks,
     }
 
 
@@ -777,7 +807,8 @@ def _quadcoil_finish_nojit(state, solve_results, *, kkt_mode):
 
     # kkt_mode:
     #   'auto' — generic path: mirror legacy auglag/ipm/slsqp dispatch
-    #   'special' — qcqp_one / future special solvers (lax.cond on status)
+    #   'special' — qcqp_one (lax.cond on status; scalar-g infeasible branch)
+    #   'special_conic' — multi-constraint QP/SOCP (no scalar-g reshape)
     if kkt_mode == 'special':
         status_code = solve_results['status_code']
         z_opt = solve_results.get('fin_z', jnp.zeros(1, dtype=x_opt.dtype))
@@ -833,6 +864,30 @@ def _quadcoil_finish_nojit(state, solve_results, *, kkt_mode):
             None,
         )
         debug_info = {}
+    elif kkt_mode == 'special_conic':
+        # Constrained KKT adjoint only.  When the primal status is not
+        # solved / solved_inaccurate, zero the metric derivatives with
+        # NaN via jnp.where (both branches of lax.cond must have the
+        # same shape — the qcqp_one infeasible branch reshapes g to a
+        # scalar and cannot be traced for m > 1).
+        status_code = solve_results['status_code']
+        z_opt = solve_results['fin_z']
+        stationarity_data = stationarity_kkt(
+            constrained=True,
+            x_opt=x_opt,
+            z_opt=z_opt,
+            y_flat=y_flat,
+            f_g_ineq_h_eq_from_y=f_g_ineq_h_eq_from_y,
+            unravel_y=unravel_y,
+            flat_x_to_dofs=flat_x_to_dofs,
+            verbose=0,
+        )
+        all_values, dfdy, debug_info = adjoint_kkt(
+            f_metrics_flat, stationarity_data, y_flat, 0,
+            jac_chunk_size=jac_chunk_size,
+        )
+        ok = (status_code == 0) | (status_code == 1)
+        dfdy = jnp.where(ok, dfdy, jnp.full_like(dfdy, jnp.nan))
     elif kkt_mode in (None, 'auto'):
         if solver == 'auglag-lbfgs':
             z_ineq, z_eq = recover_multipliers(
@@ -1008,6 +1063,7 @@ def _quadcoil_pure_nojit(
     bs_chunk_size:int=None,
     jac_chunk_size:int=None,
     enable_special:bool=True,
+    special_backend:str='ipm_conic',
 ):
     r'''The jitted part of quadcoil(): prepare, solve (generic or special), finish.
     '''
@@ -1072,6 +1128,111 @@ def _quadcoil_pure_nojit(
                 g=solve_results['fin_g'],
             )
         return _quadcoil_finish_nojit(state, solve_results, kkt_mode='special')
+
+    if problem_class == 'qp':
+        prob = canonicalize_qp(
+            state['f_precond'],
+            state['g_precond'],
+            state['x_flat_init'],
+            h_eq=state['h_precond'] if state['n_h'] > 0 else None,
+        )
+        cones = orthant_cones(prob.G.shape[0])
+        conic_opts = state['solver_options']
+        # Default QP backend is the JAX conic IPM.  'ipm' is kept as an
+        # alias of 'ipm_conic'.  Clarabel is the optional CPU fallback.
+        if special_backend in ('ipm_conic', 'ipm'):
+            solve_results = solve_conic_ipm(
+                prob, cones, opts=conic_opts, verbose=state['verbose'],
+            )
+        elif special_backend == 'clarabel':
+            solve_results = solve_conic_clarabel(
+                prob, cones, opts=conic_opts, verbose=state['verbose'],
+            )
+        else:
+            raise ValueError(
+                f"Unknown special_backend={special_backend!r}; "
+                "expected 'ipm_conic' (alias 'ipm') or 'clarabel'."
+            )
+        if state['verbose'] > 0:
+            debug.print(
+                '----- Special QP solver status -----\n'
+                'backend={be}\n'
+                'status_code={sc}\n'
+                'fin_f={f}\n'
+                'niter={ni}\n',
+                be=special_backend,
+                sc=solve_results['status_code'],
+                f=solve_results['fin_f'],
+                ni=solve_results['niter'],
+            )
+        return _quadcoil_finish_nojit(state, solve_results, kkt_mode='special_conic')
+
+    if problem_class == 'socp':
+        # ── Convex QCQP → SOCP via rotated cones ─────────────────────────
+        # Only scalar quadratic blocks are supported; array-valued
+        # quadratics fall back to the generic path below.
+        g_blocks = state['g_blocks']
+        has_array_quad = any(
+            ctype == 'quadratic' and n_rows != 1
+            for ctype, n_rows in g_blocks
+        )
+        if not has_array_quad:
+            prob, cones, dual_blocks = canonicalize_socp(
+                state['f_precond'],
+                state['g_precond'],
+                state['x_flat_init'],
+                g_blocks,
+                h_eq=state['h_precond'] if state['n_h'] > 0 else None,
+            )
+            conic_opts = state['solver_options']
+            if special_backend in ('ipm_conic', 'ipm'):
+                solve_results = solve_conic_ipm(
+                    prob, cones, opts=conic_opts, verbose=state['verbose'],
+                )
+            elif special_backend == 'clarabel':
+                solve_results = solve_conic_clarabel(
+                    prob, cones, opts=conic_opts, verbose=state['verbose'],
+                )
+            else:
+                raise ValueError(
+                    f"Unknown special_backend={special_backend!r}; "
+                    "expected 'ipm_conic' (alias 'ipm') or 'clarabel'."
+                )
+
+            # Remap cone duals → original g-row multipliers.
+            # Orthant: one-to-one.  SOC: λ = z₀ + z_last.
+            z_conic = solve_results['fin_z']
+            z_parts = []
+            for block in dual_blocks:
+                if block[0] == 'l':
+                    _, start, n_rows = block
+                    z_parts.append(z_conic[start:start + n_rows])
+                else:
+                    _, start, dim = block
+                    z_parts.append(
+                        jnp.array([z_conic[start] + z_conic[start + dim - 1]])
+                    )
+            solve_results = {
+                **solve_results,
+                'fin_z': jnp.concatenate(z_parts) if z_parts else jnp.zeros(0),
+                'fin_g': state['g_precond'](solve_results['fin_x']),
+            }
+            if state['verbose'] > 0:
+                debug.print(
+                    '----- Special SOCP solver status -----\n'
+                    'backend={be}\n'
+                    'status_code={sc}\n'
+                    'fin_f={f}\n'
+                    'niter={ni}\n',
+                    be=special_backend,
+                    sc=solve_results['status_code'],
+                    f=solve_results['fin_f'],
+                    ni=solve_results['niter'],
+                )
+            return _quadcoil_finish_nojit(
+                state, solve_results, kkt_mode='special_conic',
+            )
+        # else: array-valued quadratic → fall through to generic
 
     solver = state['solver']
     solver_options = state['solver_options']
@@ -1378,9 +1539,16 @@ def quadcoil(**kwargs):
         ``False``, skip classification and always use the generic
         ``solver`` backend. Also applies when calling ``_quadcoil_pure``
         directly (DESC / ``io.jax``).
+    special_backend : str, optional, default='ipm_conic'
+        (Static) Backend for the ``'qp'`` and ``'socp'`` special classes.
+        One of ``'ipm_conic'`` (default; dense conic Mehrotra in JAX;
+        alias ``'ipm'``) or ``'clarabel'`` (Clarabel on CPU via
+        ``jax.pure_callback`` / optional FFI).  Ignored for
+        ``'qcqp_one'`` and when ``enable_special`` is ``False``.
     '''
     enable_jitting = kwargs.pop('enable_jitting', True)
     kwargs.setdefault('enable_special', True)
+    kwargs.setdefault('special_backend', 'ipm_conic')
     quadcoil_impl = _quadcoil_pure if enable_jitting else _quadcoil_pure_nojit
     # Normalize metric_name before JIT: lists are unhashable static args.
     if 'metric_name' in kwargs:
@@ -1422,10 +1590,36 @@ def quadcoil(**kwargs):
     if 'status_code' in solve_results:
         code = solve_results['status_code']
         if not isinstance(code, core.Tracer):
-            solve_results = {
-                **solve_results,
-                'status': QCQP_ONE_STATUS[int(code)],
-            }
+            problem_class = None
+            if kwargs.get('enable_special', True):
+                problem_class = classify_problem(
+                    kwargs.get('objective_name', 'f_B'),
+                    kwargs.get('constraint_name', ()),
+                    kwargs.get('constraint_type', ()),
+                )
+            if problem_class is not None:
+                status_table = SPECIAL_STATUS.get(problem_class, CONIC_STATUS)
+                idx = int(code)
+                status_str = (
+                    status_table[idx]
+                    if 0 <= idx < len(status_table)
+                    else f'code_{idx}'
+                )
+                solve_results = {
+                    **solve_results,
+                    'status': status_str,
+                    'problem_class': problem_class,
+                }
+            else:
+                # Generic IPM also returns status_code; map with CONIC_STATUS
+                # integers (0 solved, 4 maxiter, 5 numerical).
+                idx = int(code)
+                status_str = (
+                    CONIC_STATUS[idx]
+                    if 0 <= idx < len(CONIC_STATUS)
+                    else f'code_{idx}'
+                )
+                solve_results = {**solve_results, 'status': status_str}
     return out_dict, qp, dofs_opt, solve_results
 
 def _precondition_coordinate_by_matrix(hess):

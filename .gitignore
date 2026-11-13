@@ -21,4 +21,5 @@ docs/examples/data/vcasing_*.nc
 .claude/
 .cursor/
 graphify-out/
+scratch_*
 

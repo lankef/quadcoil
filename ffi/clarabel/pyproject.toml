@@ -1,0 +1,18 @@
+[build-system]
+requires = [
+    "scikit-build-core>=0.8",
+    "nanobind>=2.0",
+    "jax>=0.4.38",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "quadcoil_clarabel_ffi"
+version = "0.1.0"
+description = "Optional Clarabel XLA FFI backend for QUADCOIL"
+requires-python = ">=3.11"
+dependencies = ["jax>=0.4.38", "numpy"]
+
+[tool.scikit-build]
+wheel.packages = ["src/quadcoil_clarabel_ffi"]
+cmake.build-type = "Release"
